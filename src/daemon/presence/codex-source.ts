@@ -29,15 +29,16 @@
 // applied bound-thread transitions; if any arrived after the read was sent, the baseline response
 // only proves attachment and does NOT overwrite the newer stream state. This is deliberately
 // conservative: a stale idle snapshot can never flip a working seat back to idle.
+import { readRecordedCodexEndpoint } from './endpoint-record.ts';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { basename, join } from 'node:path';
 import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../policy/codex-daemon.ts';
 import { findAgent } from '../../registry/agents.ts';
 import { recordedSeatSession } from '../../registry/resume.ts';
 import { teamIdOf } from '../../registry/teams.ts';
-import { readState } from '../../state.ts';
+import { readState, readStateShared } from '../../state.ts';
 import {
   isPresenceBinding,
   type PresenceEvent,
@@ -48,6 +49,8 @@ import {
   type CodexPresenceOutcome,
 } from './codex-app-server.ts';
 import { presencePaths, stagePresenceRecord } from './spool.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
+import { dialing, socketRuntime } from '../../runtime/bun-socket.ts';
 
 export const CODEX_CONNECT_TIMEOUT_MS = 2_000;
 export const CODEX_RETRY_MS = 5_000;
@@ -121,6 +124,10 @@ export type CodexPresenceSourceState = {
   ignored: number;
   otherThread: number;
   coverage: CodexPresenceCoverage;
+  /** Whether this source still admits frames. False once it closed, stopped on a binding it
+   *  could not confirm, or went terminal; a host retires and restarts a source that stopped
+   *  admitting without a staged `thread/closed` (channel `gone` stays terminal). */
+  admitting: boolean;
 };
 
 export type CodexPresenceSource = {
@@ -205,7 +212,7 @@ type WireHandlers = {
 /** The measured upgrade and frame codec, shared with the repo's thread/read probe. It answers
  *  pings and reports a close or a protocol error once; the source owns every JSON-RPC word. */
 function connectWire(socketPath: string, handlers: WireHandlers): Wire {
-  const socket = createConnection({ path: socketPath });
+  hostedCommit('Bun.connect');
   const secKey = randomBytes(16).toString('base64');
   const expectedAccept = createHash('sha1')
     .update(`${secKey}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
@@ -221,7 +228,7 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
     handlers.onLoss(reason);
   };
 
-  socket.on('connect', () => {
+  const opened = (): void => {
     socket.write(
       [
         'GET /rpc HTTP/1.1',
@@ -234,10 +241,8 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
         '',
       ].join('\r\n'),
     );
-  });
-  socket.on('error', () => lose('transport-error'));
-  socket.on('close', () => lose('transport-disconnected'));
-  socket.on('data', (chunk: Buffer) => {
+  };
+  const read = (chunk: Uint8Array): void => {
     buffer = Buffer.concat([buffer, chunk]);
     if (!upgraded) {
       const headerEnd = buffer.indexOf('\r\n\r\n');
@@ -297,7 +302,14 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
       }
     }
     buffer = buffer.subarray(offset);
+  };
+  const Bun = socketRuntime();
+  const { conn: socket, options, refused } = dialing(socketPath, {
+    open: opened,
+    bytes: read,
+    close: (error) => lose(error === undefined ? 'transport-disconnected' : 'transport-error'),
   });
+  Bun.connect(options).catch(refused);
 
   return {
     write(text: string): void {
@@ -467,7 +479,7 @@ type Internals = {
   timer: ReturnType<typeof setTimeout> | null;
   settle: (() => void) | null;
 
-  state: CodexPresenceSourceState;
+  state: Omit<CodexPresenceSourceState, 'admitting'>;
 };
 
 const ACTIVE = new Set<string>();
@@ -476,6 +488,7 @@ function snapshotOf(input: Internals): CodexPresenceSourceState {
   return {
     ...input.state,
     coverage: { ...input.state.coverage },
+    admitting: !input.closed && input.admissions,
   };
 }
 
@@ -544,7 +557,7 @@ function stopAdmissions(input: Internals, reason: CodexPresenceReason): void {
 function bindingCurrent(input: Internals): boolean {
   let binding: unknown;
   try {
-    binding = readState(input.stateDir).sessions[input.target.session]?.seats[input.target.seat]?.presence_binding;
+    binding = readStateShared(input.stateDir).sessions[input.target.session]?.seats[input.target.seat]?.presence_binding;
   } catch {
     stopAdmissions(input, 'binding-changed');
     return false;
@@ -1059,6 +1072,10 @@ export function codexPresenceTarget(input: {
   session: string;
   seat: { name: string; cli: string };
   endpoint: string | null;
+  /** Take the endpoint from the seat's own `codex_endpoint` record in the same state snapshot the
+   *  binding is read from, never from `endpoint`: a missing or other-binding record is unproven.
+   *  The production daemon sets this, so a relaunch between two reads cannot pair sockets. */
+  endpointFromState?: boolean;
   codexDaemon?: CodexDaemonResolution | 'on' | 'off';
   now?: Date;
 }): CodexTargetRead {
@@ -1119,8 +1136,21 @@ export function codexPresenceTarget(input: {
   if (!isThreadToken(threadId)) {
     return { kind: 'unproven', why: 'the recorded session id is not one thread token' };
   }
-  if (input.endpoint === null || codexSocketPath(input.endpoint) === null) {
+  const endpoint = input.endpointFromState === true
+    ? readRecordedCodexEndpoint(seatState?.codex_endpoint, binding)?.url ?? null
+    : input.endpoint;
+  if (endpoint === null || codexSocketPath(endpoint) === null) {
     return { kind: 'unproven', why: 'no explicit unix app-server endpoint was resolved for this seat' };
+  }
+  // The endpoint was read by the caller, possibly from an earlier state snapshot than the binding
+  // above. When this snapshot records the seat's endpoint, the given one must be that record's
+  // URL under this binding: a relaunch between the two reads must never pair the predecessor's
+  // socket with the successor's binding.
+  if (seatState?.codex_endpoint !== undefined) {
+    const recorded = readRecordedCodexEndpoint(seatState.codex_endpoint, binding);
+    if (recorded === null || recorded.url !== endpoint) {
+      return { kind: 'unproven', why: 'the resolved endpoint belongs to another incarnation of this seat' };
+    }
   }
   return {
     kind: 'target',
@@ -1130,7 +1160,7 @@ export function codexPresenceTarget(input: {
       seat: input.seat.name,
       binding,
       threadId,
-      endpoint: input.endpoint,
+      endpoint,
     },
   };
 }

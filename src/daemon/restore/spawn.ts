@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // Starting one restore child and reading its one result.
 //
 // A child is a second process running the entry beside this module, so a restore pass's
@@ -16,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RestoreSweepResult } from '../../launch/restore-sweep.ts';
 import { discardRestoreInherit, restoreDoorText, writeRestoreDoor } from './token.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 /** The result kinds a child may report. A line naming anything else is not a result. */
 const RESULT_KINDS = new Set(['no-recorded-session', 'lock-held', 'not-running', 'unreadable', 'refused', 'ran']);
@@ -43,6 +45,8 @@ export type SpawnRestoreInput = {
   root: string;
   /** The team file the route was loaded from when it is a `team-file` route. */
   teamFile?: string;
+  /** The session the daemon hosts the route under; the pass refuses another. */
+  session?: string;
   /** The daemon's closing signal: the pass is ended between seat steps and reported as ended. */
   signal?: AbortSignal;
   /** The program entry the child runs. The default is the child entry beside this module; a test
@@ -110,6 +114,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
       home: input.home,
       root: input.root,
       ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+      ...(input.session === undefined ? {} : { session: input.session }),
       daemonPid: process.pid,
     });
   } catch (error) {
@@ -119,6 +124,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
 
   let child: ReturnType<typeof spawn>;
   try {
+    hostedCommit('node:child_process.spawn');
     child = spawn(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.root,
       stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
@@ -235,7 +241,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
   });
 
   child.stdout?.setEncoding('utf8');
-  child.stdout?.on('data', (chunk: string) => {
+  child.stdout?.on('data', (chunk: string) => traceBeatWork('restore child handling (sync)', () => {
     stdoutBuffer += chunk;
     let nl = stdoutBuffer.indexOf('\n');
     while (nl !== -1) {
@@ -266,7 +272,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
       endRunning();
       discardRestoreInherit(input.home, nonce);
     }
-  });
+  }));
 
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {

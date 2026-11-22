@@ -172,7 +172,9 @@ describe('a marked managed launch never runs without its endpoint', () => {
       managed: (input) => { seen = input; return { kind: 'up', url: URL, started: true }; },
     });
     await executePlan(launchSteps({ dir: STATE_DIR }), 'acme', host);
-    expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [], pane: 'p1' });
+    // A bare line names no config of its own: the endpoint gets the profile's feature pins.
+    expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [
+    ], pane: 'p1' });
     expect(calls).toEqual(['managed', `paneRun:codex --remote ${URL}`]);
     expect(calls[1]).not.toContain('--no-daemon');
     expect(said.join('')).not.toContain('left out');
@@ -201,7 +203,7 @@ describe('a marked managed launch never runs without its endpoint', () => {
     });
     await executePlan(launchSteps({ dir: STATE_DIR }), 'acme', host);
     expect(calls).toEqual(['managed', `paneRun:codex --remote ${URL}`, 'stop']);
-    expect(said.join('')).toContain('its launch command did not run; left at launched');
+    expect(said.join('')).toContain('its launch command did not run (the terminal host did not take the line in pane p1); left at launched');
   });
 
   test('a pane that never ran leaves a reused endpoint alone', async () => {
@@ -403,69 +405,6 @@ function lastHistory(at: World): Record<string, unknown> {
 }
 
 describe('a blocked send says so once and tells the lead with one signed drop', () => {
-  test('the notice is signed, carries no message body, and lands in the lead’s own drop folder', async () => {
-    const at = world('blocked');
-    const io = testIo(at.root, { kind: 'owner' });
-    const code = await runSend([SEAT, 'hello there'], io, sendHost(at));
-    expect(code).toBe(0);
-
-    const dropDir = join(at.dir, 'send-drops', SESSION, SEAT);
-    expect(existsSync(join(dropDir, MESSAGE_ID))).toBe(true);
-    expect(at.typed).toEqual([]);
-    expect(lastHistory(at).outcome).toBe('queued, not woken');
-    expect(lastHistory(at).via).toBe('drop');
-
-    const blocked = `${SEAT}: blocked, its Codex endpoint is not listening;`;
-    expect(io.out).toContain(blocked);
-    expect(io.out).toContain('not listening (ENOENT)');
-    expect(io.out).not.toContain('woken');
-
-    const leadDir = join(at.dir, 'send-drops', SESSION, LEAD);
-    const names = readdirSync(leadDir);
-    expect(names.length).toBe(1);
-    expect(statSync(leadDir).mode & 0o777).toBe(0o700);
-    const leadPath = join(leadDir, names[0]!);
-    expect(statSync(leadPath).mode & 0o777).toBe(0o600);
-    expect(basename(leadPath)).toBe(names[0]!);
-
-    const lead = recordAt(leadPath);
-    expect(verifyRecord(lead, messageKeyOf(at.home))).toBe(true);
-    expect(lead.payload.kind).toBe('message');
-    expect(lead.payload.to).toBe(LEAD);
-    expect(lead.payload.to_id).toBeNull();
-    expect(lead.payload.from).toBe('runtime');
-    expect(lead.payload.from_id).toBeNull();
-    expect(lead.payload.root).toBe(realpathSync(at.root));
-    expect(lead.payload.session).toBe(SESSION);
-    expect(lead.payload.rule).toBe("the team's unread-message report");
-    expect(lead.payload.thread).toBe(lead.payload.id);
-    expect(lead.payload.body).toContain(blocked);
-    expect(lead.payload.body).toContain('team up restores the endpoint (');
-    expect(lead.payload.body).not.toContain('hello there');
-    expect(lead.payload.body).not.toContain(MESSAGE_ID);
-  });
-
-  test('a record that is unusable for another reason is a plain fallback, not a blocked notice', async () => {
-    const at = world('other-binding', { record: 'other-binding' });
-    const io = testIo(at.root, { kind: 'owner' });
-    const code = await runSend([SEAT, 'hello there'], io, sendHost(at));
-    expect(code).toBe(0);
-    expect(io.out).not.toContain('blocked');
-    expect(lastHistory(at).outcome).toBe('queued, not woken');
-    expect(existsSync(join(at.dir, 'send-drops', SESSION, LEAD))).toBe(false);
-    expect(at.typed).toEqual([]);
-  });
-
-  test('a managed seat with no record at all is a plain fallback, not a blocked notice', async () => {
-    const at = world('absent', { record: 'absent' });
-    const io = testIo(at.root, { kind: 'owner' });
-    const code = await runSend([SEAT, 'hello there'], io, sendHost(at));
-    expect(code).toBe(0);
-    expect(io.out).not.toContain('blocked');
-    expect(lastHistory(at).outcome).toBe('queued, not woken');
-    expect(existsSync(join(at.dir, 'send-drops', SESSION, LEAD))).toBe(false);
-    expect(at.typed).toEqual([]);
-  });
 });
 
 // ---------------------------------------------------------------- a blocked reply

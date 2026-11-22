@@ -1,3 +1,6 @@
+import { copyFor } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
+import { isStampedPayload } from '../send/record.ts';
 // Machine-daemon route-selection and runtime-adapter integration.
 //
 // Bridges a host-resolved `HostedRoute` (`src/daemon/routes.ts`) and its validated `TeamFile` with
@@ -90,6 +93,7 @@ import { deliveryOrder } from '../settings/resolve.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Dial, RelayReceipt as PackageRelayReceipt, RelayStage } from '../../packages/relay/index.js';
 import { canonicalRoot, type HostedRoute } from './routes.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 export {
   deliverRuntimeRelayRoute,
@@ -315,7 +319,7 @@ export function selectDaemonRelayRoutes(
   const stateDir =
     input.stateDir
     ?? (input.teamFile !== undefined ? dirname(input.teamFile) : join(route.root, '.agents'));
-  const dropDir = join(stateDir, 'send-drops', route.session, seat);
+  const dropDir = seatMailDirIn(stateDir, route.session, seat);
 
   const capabilities = runtimeRelayCapabilities(declaredSeat.cli, declaredSeat.version);
 
@@ -896,12 +900,13 @@ function resolveSocketFrameFor(
   if (input.frame !== undefined) return input.frame;
   if (body === undefined) return undefined;
   const compact = plan.compactDelivery === true;
-  const content = attributedBody(body, from, {
+  // E7b: a stamped record's relayed copy is numbered like every other copy.
+  const content = copyFor(attributedBody(body, from, {
     ...(record === undefined ? {} : { record }),
     home: plan.home,
     root: plan.route.root,
     compact,
-  });
+  }), plan.dropDir, id, record !== undefined && isStampedPayload(record), 'socket');
   const existingIds = existingRecordIdsIn(plan.dropDir);
   return frameFor(
     content,
@@ -928,14 +933,19 @@ export async function deliverDaemonRelayRoute(
     ...options,
   };
 
-  if (target.route === 'socket' && target.socket.trim() === '') {
+  // The Claude adapter §1: an E7b-active root's socket route is refused, read from the receiving
+  // root's floor state at this delivery; a dark root keeps the route as before.
+  const suppressed = target.route === 'socket' && socketSuppressed(plan.route.root, plan.home);
+  if (target.route === 'socket' && (suppressed || target.socket.trim() === '')) {
     const nowFn = mergedOptions.now ?? (() => new Date());
     const startedAt = mergedOptions.startedAt ?? nowFn().getTime();
     const liveRoutesRemain = mergedOptions.liveRoutesRemain ?? true;
-    const probe = await probeDaemonRelayTarget(target, {
-      crossSessionInbound: mergedOptions.crossSessionInbound ?? plan.inbound,
-      id: message.id,
-    });
+    const probe = suppressed
+      ? { status: 'unavailable' as const, route: 'socket' as const, reason: `the cross-session socket is ${SOCKET_OFF_ON_ACTIVE}` }
+      : await probeDaemonRelayTarget(target, {
+        crossSessionInbound: mergedOptions.crossSessionInbound ?? plan.inbound,
+        id: message.id,
+      });
     const at = nowFn();
     const reason =
       probe.status === 'ready'
@@ -1118,8 +1128,13 @@ export async function handleDaemonRelaySend(
     return refuseSend(selection.code, selection.message, { id, seat });
   }
 
-  const { plan } = selection;
-  const routesToWalk = input.routes ?? plan.selectedRoutes;
+  // The Claude adapter §1: on an E7b-active receiving root no socket route is walked, read from
+  // its floor state at this delivery; a dark root walks its routes as before.
+  const socketOff = socketSuppressed(selection.plan.route.root, selection.plan.home);
+  const plan = socketOff && (input.routes ?? selection.plan.selectedRoutes).includes('socket')
+    ? { ...selection.plan, skippedLegs: [...selection.plan.skippedLegs, { leg: 'socket', reason: SOCKET_OFF_ON_ACTIVE } as DaemonRelaySkippedLeg] }
+    : selection.plan;
+  const routesToWalk = (input.routes ?? plan.selectedRoutes).filter((route) => !(socketOff && route === 'socket'));
   if (routesToWalk.length === 0) {
     const skipSummary =
       plan.skippedLegs.length > 0

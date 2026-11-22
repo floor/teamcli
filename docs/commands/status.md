@@ -1,5 +1,14 @@
 # team status
 
+Held sends lead the status notes: `<seat>: <n> held sends — <reasons>`. The same count appears
+in the structured output's `notes`. A model-drift hold also says that its body was not kept and
+the sender must retry; passing that preflight ends its reporting episode. A stored hold leaves
+the count when a verified read or clearance settles it. An unreadable report says `count unknown`.
+
+Recipient model drift appears in notes as `record says X, runs Y, awaiting the lead's confirm`.
+The note compares the running recipient's registry metadata with its live model reading; it
+changes no record. An observed model refused by the entity rule is named as refused too.
+
 Shows the team as it stands: one line per seat with what the session's herdr shows of it, and one
 `difference` for each way the file, the state and the live session disagree, each naming the command
 that repairs it. It changes nothing but the owner's `last_valid` copy of the file it read; a run that
@@ -267,7 +276,9 @@ agent record a send would resolve are read from disk. `--json` rows carry no suc
 the plain table's alone.
 
 Every row ends with the WAKE cell, the delivery class a send measures — `push`, `between-turns`,
-`pull-on-turn` or `none` — marked with `!` when the seat cannot be woken while it is idle. The
+`typed-wake`, `pull-on-turn` or `none` — marked with `!` when the seat cannot be woken while it is
+idle. `typed-wake` is a seat no event adapter reaches whose profile declares a typed wake: a send
+or the idle dispatch types one trigger line into its empty composer, never over a draft. The
 facts that explain the class follow in parentheses: `endpoint, no bound conversation` when a
 managed endpoint is recorded and no conversation is bound to it, `inbox` when a live listener
 stands in the seat's drop folder, and `unread <age>` for the oldest unread drop. `team send`
@@ -280,7 +291,7 @@ watch's unread pass uses is one more `note:` of the plain table:
 `<seat>: its oldest unread drop has waited <age>, past the <n>s unread window; <its delivery class
 in the send's own words>`. The window is the seat's own — the file's `watch.unread_after` when it
 moved the section, else 30 s for a seat a message can wake while it is idle and 60 s for a typed
-or pull-only seat (ADR `zeus-message-path`, D2) — and the words are the class's, so the table, a
+or pull-only seat (ADR `architect-message-path`, D2) — and the words are the class's, so the table, a
 send's console line and the check cannot promise different things. It is a note only: `status`
 never fails for it — `check` does. The expanded `--all` table
 and the `--json` rows carry the same reading as each row's WAKE cell and `seat_wake`, and draw no

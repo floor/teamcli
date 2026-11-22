@@ -121,12 +121,13 @@ The seat has no live agent and a recorded session that ended as a restart:
 
 ```console
 $ team seat claude-keeper ; echo "exit $?"
-  KEY             VALUE        SOURCE     APPLIES
-  model           Claude Opus  team file  restart that resumes
-  effort          max          team file  restart that resumes
-  nickname        agamemnon    team file  at once
-  delivery_order  typed, drop  default    at once
-  human           false        default    at once
+  KEY              VALUE        SOURCE     APPLIES
+  model            Claude Opus  team file  restart that resumes
+  effort           max          team file  restart that resumes
+  nickname         agamemnon    team file  at once
+  delivery_order   typed, drop  default    at once
+  human            false        default    at once
+  desktop_control  true         default    restart that resumes
 
   FIELD         VALUE
   project       beacon
@@ -194,6 +195,12 @@ $ team seat claude-keeper --json ; echo "exit $?"
       "value": false,
       "source": "default",
       "applies": "at-once"
+    },
+    {
+      "key": "desktop_control",
+      "value": true,
+      "source": "default",
+      "applies": "restart-resume"
     }
   ],
   "status": {

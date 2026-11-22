@@ -10,7 +10,8 @@
 // grant of the team whose `up` (or `add`/`remove`) ran last, not a union over teams. A second
 // team that grants reach on the same machine's lobby takes the projection over when it next
 // runs; a machine with one reach-serving team (the live setup) is the setup this serves.
-import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { renameSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { isAbsolute, join } from 'node:path';
 import { lobbyDir } from '../lobby/gate.ts';
 import type { TeamFile } from '../file/types.ts';

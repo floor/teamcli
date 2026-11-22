@@ -4,10 +4,11 @@
 
 import type { Io } from '../io.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
-import { realWatchSources, runWatch, type WatchSources } from '../commands/watch.ts';
+import { activateDeadPaneWatchAsync, realWatchSources, runWatch, type WatchSources } from '../commands/watch.ts';
 import type { WorkPush } from '../watch/dispatch.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import type { HostedRoute } from './routes.ts';
+import { startArrivalWake } from '../watch/arrival-wake.ts';
 
 export type HostedWatchRunInput = {
   route: HostedRoute;
@@ -50,6 +51,7 @@ export function hostedWatchSources(
     ...base,
     pid: pid ?? base.pid,
     hosted: loop,
+    startedBy: 'daemon',
     ownPane: undefined,
     typeText: () => false,
     pressEnter: () => false,
@@ -67,6 +69,7 @@ export function hostedWatchSources(
     stopSeat: undefined,
     removeWorktree: undefined,
     swapSources: undefined,
+    restartSeat: undefined,
     busSubscribe: undefined,
     busPublish: undefined,
     onBusEvent: undefined,
@@ -74,7 +77,9 @@ export function hostedWatchSources(
     // The loop's waits are the host's own: a sleep ends at the next tick at or after its due
     // instant, and a stop ends both at once.
     sleep: (ms) => loop.wait(ms).then(() => undefined),
-    wait: (seconds) => loop.wait(seconds * 1000),
+    // The loop's wait between passes is the one a nudge may end (`HostedLoop.nudge`); every
+    // sleep inside a pass, the typing path's included, runs its full time.
+    wait: (seconds) => loop.wait(seconds * 1000, { between: true }),
     pushWork,
     ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
     ...(presenceChannelReason === undefined ? {} : { presenceChannelReason }),
@@ -98,14 +103,30 @@ export function hostedWatchRun(input: HostedWatchRunInput): (loop: HostedLoop) =
     stdoutIsTTY: false,
     stderrIsTTY: false,
   };
-  return async (loop) => runWatch([], io, hostedWatchSources(
-    input.route,
-    loop,
-    base,
-    input.pushWork,
-    input.pid,
-    input.presenceChannelHealthy,
-    input.presenceChannelReason,
-    input.brokerWork,
-  ));
+  return async (loop) => {
+    const sources = hostedWatchSources(
+      input.route,
+      loop,
+      base,
+      input.pushWork,
+      input.pid,
+      input.presenceChannelHealthy,
+      input.presenceChannelReason,
+      input.brokerWork,
+    );
+    // A dead pane watch is released before the loop, so the hosted watch runs as the active
+    // one. A live pane watch is left recorded and the loop stands by for it. No pane is started.
+    await activateDeadPaneWatchAsync(input.route.root, input.route.session, sources);
+    // A stamped message for a Claude seat no proven channel reaches starts the next pass now
+    // (src/watch/arrival-wake.ts); the pass keeps every typed-key check it always runs.
+    const nudge = loop.nudge;
+    const closeWake = nudge === undefined || base.home === undefined
+      ? null
+      : startArrivalWake({ root: input.route.root, session: input.route.session, home: base.home, nudge: () => nudge.call(loop) });
+    try {
+      return await runWatch([], io, sources);
+    } finally {
+      closeWake?.();
+    }
+  };
 }

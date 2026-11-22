@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, writeSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { fchmodSync, openSync, writeSync } from '../host/guarded-fs.ts';
 import { constants as systemConstants } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { cliWordList, shellQuote } from '../profiles/profile.ts';
@@ -229,7 +230,7 @@ export function grokCommandDenyNotes(
       if (missing.length) out.push(`${prefix}: its recorded launch lacks --deny ${missing.join(', ')}`);
       continue;
     }
-    if (recorded?.start_cwd === undefined || !isAbsolute(recorded.start_cwd)) {
+    if (typeof recorded?.start_cwd !== 'string' || !isAbsolute(recorded.start_cwd)) {
       out.push(`${prefix}: no recorded launch folder with an absolute path to check .cursor/cli.json`);
       continue;
     }

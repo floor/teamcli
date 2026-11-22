@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
 import { upPlan, type Step, type UpSeat } from '../src/launch/plan.ts';
@@ -24,6 +24,7 @@ const SESSION = 'synthetic-session';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
+// This lead explicitly opts into its synthetic lobby; lease and refusal checks keep that start.
 function world() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'channel-config-')));
   dirs.push(base);
@@ -47,7 +48,7 @@ workspace:
   mode: shared
 seats:
 ${['alpha', 'beta', 'plain'].map((name) => `  - name: ${name}
-    role: ${name === 'alpha' ? 'coordinator' : 'worker'}
+    role: ${name === 'alpha' ? 'coordinator' : 'worker'}${name === 'alpha' ? `\n    cwd: ${relative(root, lobby)}` : ''}
     cli: claude-code
     vendor: synthetic
     model: Test
@@ -57,12 +58,12 @@ ${['alpha', 'beta', 'plain'].map((name) => `  - name: ${name}
   upsertTeam(home, teamIdOf(root), { root, project: 'synthetic-project', session: SESSION, lobby,
     roster: ['alpha', 'beta', 'plain'].map((seat, i) => ({ agent: `agt_${String(i + 1).padStart(12, '0')}`, seat, role: 'worker' })) });
   const state = join(root, '.agents/team.state.json');
-  const claim = (epoch: string | null) => {
+  const claim = (epoch: string | null, at = '2026-01-01T00:00:00Z') => {
     writeFileSync(state, JSON.stringify({ format: 1, sessions: { [SESSION]: {
       seats: { alpha: { stage: 'launched', pane: 'pane-alpha' }, beta: { stage: 'launched', pane: 'pane-beta' } },
       worktrees: {}, briefs: epoch === null ? {} : Object.fromEntries(['alpha', 'beta'].map((seat) => [seat, {
         id: '01234567-0000-4000-8000-000000000001', incarnation: 'inc_0123456789ab', epoch,
-        at: '2026-01-01T00:00:00Z', sha256: 'a'.repeat(64), stage: 'ready',
+        at, sha256: 'a'.repeat(64), stage: 'ready',
       }])),
     } } }));
   };
@@ -85,6 +86,11 @@ function prepare(w: World, seat = 'alpha', epoch = FIRST) {
 function entry(w: World, seat = 'alpha') {
   return JSON.parse(readFileSync(w.config(seat), 'utf8')).mcpServers['team-inbox'];
 }
+/** The refuse path writes no pair. These are the planted bytes, read back whole. */
+function plantedBytes(w: World, approval: string, config: string) {
+  expect(readFileSync(w.approval(), 'utf8')).toBe(approval);
+  expect(readFileSync(w.config(), 'utf8')).toBe(config);
+}
 function plan(w: World, epoch = FIRST, seats = ['alpha']): Step[] {
   const planned: UpSeat[] = seats.map((name) => ({ name, cli: 'claude-code',
     launch: `claude ${FLAG}`, cwd: w.lobby, lobby: true, label: name, displayAgent: 'Synthetic',
@@ -93,32 +99,49 @@ function plan(w: World, epoch = FIRST, seats = ['alpha']): Step[] {
     team: w.team, home: w.home, briefEpochs: Object.fromEntries(seats.map((seat) => [seat, epoch])),
     startWatch: false, watchLabel: 'Synthetic watch' });
 }
-function host(w: World, onRun: () => boolean = () => true) {
+function host(w: World, onRun: () => boolean = () => true, pair = true) {
   const calls: string[] = [];
   const patches: Parameters<Host['record']>[] = [];
   const out: string[] = [];
+  const logs: string[] = [];
+  let ran = '';
+  const requirePair = () => {
+    expect(entry(w).args.at(-1)).toBe(FIRST);
+    expect(JSON.parse(readFileSync(w.approval(), 'utf8')).enabledMcpjsonServers).toContain('team-inbox');
+  };
   const fake: Host = {
     startServer: () => true, sessionUp: () => true,
     createWorkspace: (_session, cwd) => {
       calls.push('create');
       expect(cwd).toBe(join(w.lobby, 'alpha'));
-      expect(entry(w).args.at(-1)).toBe(FIRST);
-      expect(JSON.parse(readFileSync(w.approval(), 'utf8')).enabledMcpjsonServers).toContain('team-inbox');
+      if (pair) requirePair();
       return { pane: 'pane-alpha', workspace: 'workspace-alpha' };
     },
-    paneRun: () => {
+    paneRun: (_session, _pane, command) => {
       calls.push('spawn');
-      expect(entry(w).args.at(-1)).toBe(FIRST);
-      expect(JSON.parse(readFileSync(w.approval(), 'utf8')).enabledMcpjsonServers).toContain('team-inbox');
+      ran = command;
+      if (pair) requirePair();
       return onRun();
     },
     registerInbox: () => { calls.push('register'); return null; },
     typeLine: () => false, renameAgent: () => true, closeWorkspace: () => true, stopSession: () => true,
     kill: () => true, agentPanes: () => [], classify: () => 'idle', sleep: async () => {}, now: () => 0,
     allow: () => null, record: (...args) => { patches.push(args); }, running: () => {}, drop: () => {},
-    say: (line) => { out.push(line); }, log: () => {},
+    say: (line) => { out.push(line); }, log: (_who, what) => { logs.push(what); },
   };
-  return { fake, calls, patches, out };
+  return { fake, calls, patches, out, logs, command: () => ran };
+}
+/** A refused channel still creates and launches, once, without the flag. */
+function expectAsideLaunch(h: ReturnType<typeof host>, report: { dropped: readonly string[] }) {
+  expect(report.dropped).toEqual([]);
+  expect(h.calls).toEqual(['create', 'register', 'spawn']);
+  expect(h.command()).toContain('claude');
+  expect(h.command()).not.toContain(FLAG);
+  expect(h.command()).not.toContain('server:team-inbox');
+  expect(h.out.filter((line) => line.includes('its channel was not prepared') && line.includes('Launching without the channel'))).toHaveLength(1);
+  expect(h.logs).toHaveLength(1);
+  expect(h.logs[0]).toContain('its channel was not prepared');
+  expect(h.logs[0]).toContain('Launching without the channel');
 }
 
 describe('launch-scoped channel config', () => {
@@ -295,7 +318,7 @@ describe('launch-scoped channel config', () => {
       expect(lobbyPretrustLine({ ...seat, cwd: join(w.lobby, name), lobby: true }, w.home, { write: true, now: new Date() })).toBeNull();
     }
     const ordinary = w.team.seats.find((one) => one.name === 'plain')!;
-    expect(seatStart(w.team, ordinary, w.root, w.home)).toEqual({ cwd: w.lobby, lobby: true });
+    expect(seatStart(w.team, ordinary, w.root, w.home)).toEqual({ cwd: join(w.lobby, 'plain'), lobby: true });
     expect(existsSync(join(w.home, '.claude.json'))).toBe(false);
   });
 
@@ -303,7 +326,8 @@ describe('launch-scoped channel config', () => {
     const w = world();
     prepare(w).release();
     const oldEpoch = entry(w).args.at(-1) as string;
-    w.claim(NEXT);
+    // A relaunch's claim, written after this old server's process started: never adopted.
+    w.claim(NEXT, '2099-01-01T00:00:00Z');
     const io = testIo(join(w.lobby, 'alpha'), { kind: 'seat', name: 'alpha', pane: 'pane-alpha', session: SESSION });
     const code = await runMcpServe({ seat: 'alpha', session: SESSION, epoch: oldEpoch }, io,
       { lines: (async function* () {})(), write: () => {} }, { home: w.home });
@@ -311,6 +335,7 @@ describe('launch-scoped channel config', () => {
     expect(io.err).toContain('not the seat\'s current launch epoch');
     expect(existsSync(join(w.root, '.agents/send-drops', SESSION, 'alpha/listener.json'))).toBe(false);
   });
+
 });
 
 describe('named project channel approval', () => {
@@ -369,12 +394,11 @@ describe('named project channel approval', () => {
       const w = world();
       settings(w, text);
       writeFileSync(w.config(), '{"keep":"unchanged"}');
-      const h = host(w);
+      const planted = '{"keep":"unchanged"}';
+      const h = host(w, () => true, false);
       const report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
-      expect(report.dropped).toEqual(['alpha']);
-      expect(h.calls).toEqual([]);
-      expect(readFileSync(w.approval(), 'utf8')).toBe(text);
-      expect(readFileSync(w.config(), 'utf8')).toBe('{"keep":"unchanged"}');
+      expectAsideLaunch(h, report);
+      plantedBytes(w, text, planted);
       expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
     });
   }
@@ -444,7 +468,7 @@ describe('named project channel approval', () => {
 
   test('a failed second publication never creates a workspace and leaves only bounded files', async () => {
     const w = world();
-    const h = host(w);
+    const h = host(w, () => true, false);
     const rename = fs.renameSync;
     let rejected = 0;
     const fail = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
@@ -454,8 +478,7 @@ describe('named project channel approval', () => {
     try {
       const report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
       expect(rejected).toBe(1);
-      expect(report.dropped).toEqual(['alpha']);
-      expect(h.calls).toEqual([]);
+      expectAsideLaunch(h, report);
       expect(entry(w).args.at(-1)).toBe(FIRST);
       expect(existsSync(w.approval())).toBe(false);
       expect(readdirSync(join(w.lobby, 'alpha/.claude'))).toEqual([]);
@@ -532,16 +555,25 @@ describe('claim, config, create and spawn ordering', () => {
     expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
   });
 
-  test('claim changes between create and spawn stop the old plan instead of rebinding', async () => {
+  test('claim changes between create and spawn launch without the channel and do not rebind', async () => {
     const w = world();
     const h = host(w);
     const create = h.fake.createWorkspace;
     h.fake.createWorkspace = (...args) => { const made = create(...args); w.claim(NEXT); return made; };
+    let ran = '';
+    const spawn = h.fake.paneRun;
+    h.fake.paneRun = (session, pane, command) => {
+      ran = command;
+      return spawn(session, pane, command);
+    };
     const steps = plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch');
     const report = await executePlan(steps, SESSION, h.fake);
-    expect(report.dropped).toEqual(['alpha']);
-    expect(h.calls).toEqual(['create']);
+    expect(report.dropped).toEqual([]);
+    expect(h.calls).toEqual(['create', 'register', 'spawn']);
     expect(entry(w).args.at(-1)).toBe(FIRST);
+    expect(ran).not.toContain('server:team-inbox');
+    expect(h.out.filter((line) => line.includes('its channel was not prepared'))).toHaveLength(1);
+    expect(h.out.join('')).toContain('channel: off');
   });
 
   test('failed spawn releases only its claim and preserves unrelated files/config', async () => {
@@ -574,15 +606,26 @@ describe('claim, config, create and spawn ordering', () => {
 
   test('config conflict or failed workspace creation never spawns', async () => {
     const w = world();
-    const h = host(w);
+    const h = host(w, () => true, false);
     h.fake.createWorkspace = () => { h.calls.push('create'); return null; };
     let report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
     expect(report.dropped).toEqual(['alpha']);
     expect(h.calls).toEqual(['create']);
-    writeFileSync(w.config(), '{"mcpServers":{"team-inbox":{"command":"other"}}}');
+    const conflict = '{"mcpServers":{"team-inbox":{"command":"other"}}}';
+    writeFileSync(w.config(), conflict);
+    const approval = existsSync(w.approval()) ? readFileSync(w.approval(), 'utf8') : null;
     h.calls.length = 0;
+    h.out.length = 0;
+    h.logs.length = 0;
+    h.fake.createWorkspace = (_session, cwd) => {
+      h.calls.push('create');
+      expect(cwd).toBe(join(w.lobby, 'alpha'));
+      return { pane: 'pane-alpha', workspace: 'workspace-alpha' };
+    };
     report = await executePlan(plan(w).filter((step) => step.do?.do === 'create' || step.do?.do === 'launch'), SESSION, h.fake);
-    expect(report.dropped).toEqual(['alpha']);
-    expect(h.calls).toEqual([]);
+    expect(readFileSync(w.config(), 'utf8')).toBe(conflict);
+    if (approval !== null) expect(readFileSync(w.approval(), 'utf8')).toBe(approval);
+    expect(existsSync(join(w.lobby, 'alpha/.team-channel.lock'))).toBe(false);
+    expectAsideLaunch(h, report);
   });
 });

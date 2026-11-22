@@ -114,7 +114,7 @@ function setup(text: string): void {
   );
 }
 
-/** A live pane watch already carries this route: no watch step, no watch workspace. */
+/** A fresh pane-watch record. These scenes are about a seat's workspace; `up` opens no watch pane. */
 function seedWatch(): void {
   updateState(dir, (file) => {
     const session = (file.sessions[SESSION] ??= emptySession());
@@ -543,6 +543,7 @@ test('a human or granted seat carrying a sweep adds no sweep step', () => {
     session: 'scratch',
     sessionRunning: true,
     watchAlive: true,
+    startWatch: false,
     watchLabel: 'Watch · scratch',
     seats: [
       seatOf('lead', { human: true, sweep: { workspace: SPACE } }),
@@ -554,6 +555,9 @@ test('a human or granted seat carrying a sweep adds no sweep step', () => {
   // seat's panes are left as they are.
   const swept = plan.flatMap((step) => (step.do?.do === 'sweep' ? [step.do] : []));
   expect(swept).toEqual([{ do: 'sweep', seat: 'worker', workspace: NEW_SPACE, cli: 'claude-code' }]);
+  // The daemon is the watch. The plan does not open a workspace for it.
+  expect(plan.some((step) => step.do?.do === 'watch')).toBe(false);
+  expect(JSON.stringify(plan)).not.toContain('Watch · ');
 });
 
 test('a workspace holding the pane this command runs in is left as it is', async () => {
@@ -673,4 +677,67 @@ test('team remove leaves a workspace holding the pane it runs in', async () => {
   expect(closed).toEqual([]);
   expect(`${io.out}${io.err}`).toContain(`worker: its workspace ${SPACE} holds the pane this command runs in; left as it is`);
   expect(seatState()).toBeUndefined();
+});
+
+// A host restart brings back a stopped seat's workspace under its old title with no record
+// naming it. The restore pass offers it to the sweep, which closes it only on readable proof of
+// an empty shell prompt: the leftover has no CLI profile to read its screen by.
+async function restoreWithLeftover(screen: string | undefined, restore = true) {
+  setup(teamText({ worker: 'stopped' }));
+  seedWatch();
+  const made = makeWorld({
+    panes: { [OTHER_PANE]: { workspace: OTHER_SPACE, process: { shell: 500, foreground: [500] }, ...(screen === undefined ? {} : { screen }) } },
+    labels: { [OTHER_SPACE]: WORKER },
+  });
+  const io = testIo(root, { kind: 'owner' });
+  const exit = await runUp([], io, made.sources, restore ? { restore: true, nonInteractive: true } : {});
+  return { made, io, exit };
+}
+
+test('a restore closes a labelled leftover at an empty shell prompt', async () => {
+  const { made, io } = await restoreWithLeftover('~/Code/acme\n❯\n');
+  expect(made.trace.closed, `up said:\n${io.out}\n${io.err}`).toEqual([OTHER_SPACE]);
+  expect(made.trace.runs).toEqual([]);
+});
+
+test('a labelled leftover whose screen cannot be read is left as it is', async () => {
+  const { made, io } = await restoreWithLeftover('');
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain(`not proven to be an empty shell prompt; left as it is`);
+});
+
+test('a labelled leftover holding typed input is left as it is', async () => {
+  const { made, io } = await restoreWithLeftover('~/Code/acme\n❯ git status');
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain(`not proven to be an empty shell prompt; left as it is`);
+});
+
+test('a labelled leftover whose prompt glyph closes typed text is left as it is', async () => {
+  for (const screen of ['~/Code/acme\n❯ echo #', '~/Code/acme\n❯ cat >']) {
+    const { made, io } = await restoreWithLeftover(screen);
+    expect(made.trace.closed, screen).toEqual([]);
+    expect(`${io.out}${io.err}`).toContain('not proven to be an empty shell prompt; left as it is');
+  }
+});
+
+test('a labelled leftover at a continuation prompt is left as it is', async () => {
+  const { made, io } = await restoreWithLeftover('~/Code/acme\n❯ cat <<EOF\n>');
+  expect(made.trace.closed).toEqual([]);
+  expect(`${io.out}${io.err}`).toContain('not proven to be an empty shell prompt; left as it is');
+});
+
+test('a labelled leftover holding another program is left as it is', async () => {
+  setup(teamText({ worker: 'stopped' }));
+  seedWatch();
+  const made = makeWorld({
+    panes: { [OTHER_PANE]: { workspace: OTHER_SPACE, process: { shell: 500, foreground: [500, 501] }, screen: '❯\n' } },
+    labels: { [OTHER_SPACE]: WORKER },
+  });
+  await runUp([], testIo(root, { kind: 'owner' }), made.sources, { restore: true, nonInteractive: true });
+  expect(made.trace.closed).toEqual([]);
+});
+
+test('an ordinary up never offers a labelled leftover', async () => {
+  const { made } = await restoreWithLeftover('~/Code/acme\n❯\n', false);
+  expect(made.trace.closed).toEqual([]);
 });

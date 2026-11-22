@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { saveReadings, saveSpendReadings, type Seen } from '../src/budgets/readings.ts';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runStatus } from '../src/commands/status.ts';
 import type { StatusSources } from '../src/commands/status.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Seat, TeamFile } from '../src/file/types.ts';
@@ -39,6 +40,9 @@ const PULL_ONLY = {
   class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false, listener: false,
   unread: null, oldest_unread_seconds: null,
 };
+/** A seat whose profile declares a typed wake (Codex without a bound queue): its typed wake
+ *  wakes it while it is idle. */
+const TYPED_WAKE = { ...PULL_ONLY, class: 'typed-wake', wakeable: true };
 const codexScreen = (name: string) => readFileSync(new URL(`./fixtures/codex/0.157.0/${name}.txt`, import.meta.url), 'utf8');
 const codexRateLimitSwitch = `Approaching rate limits
 Switch to gpt-6-luna for lower credit usage?
@@ -80,6 +84,10 @@ function built(): Live {
  *  and still carries the approval repair. */
 const REFUSED_WHY = 'the record is signed, but its key is missing';
 
+/** The repair a missing or stale watch names. The daemon carries the watch; a pane `team watch` does not. */
+const WATCH_REPAIR = 'team daemon status, or the lead runs team daemon install';
+const WATCH_HOSTING_REPAIR = 'the machine daemon runs without --watch, so no watch runs for any team: the owner runs team daemon install --watch, naming again every opt-in the unit runs with (such as --presence)';
+
 let dir: string;
 let file: string;
 let live: Live | null;
@@ -117,6 +125,61 @@ async function status(...argv: string[]) {
   // owner, as a terminal run of the command would.
   const io = testIo(dir, { kind: 'owner' });
   const code = await runStatus(['--file', file, ...argv], io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+/** A daemon health whose one route may host this checkout's watch. The root is the canonical
+ *  folder status compares, so a phase of `running` for the session is the hosted watch. */
+function watchHealth(session: string, phase: 'running' | 'stopped'): DaemonHealth {
+  const canonical = realpathSync(dir);
+  return {
+    daemon: 'teamcli',
+    socket: 'socket-status',
+    state: 'running',
+    running: true,
+    pid: 7,
+    uid: null,
+    since: null,
+    startedBy: null,
+    version: '1',
+    gitHead: null,
+    heartbeatAt: NOW.toISOString(),
+    heartbeatSeconds: 1,
+    features: null,
+    stuck: [],
+    roots: [{
+      root: canonical,
+      team: 'acme-web',
+      send: 'serving',
+      bus: 'serving',
+      why: null,
+      watch: {
+        routeId: 'route-acme',
+        root: canonical,
+        team: 'acme-web',
+        session,
+        phase,
+        startedAt: NOW.toISOString(),
+        lastCycleAt: NOW.toISOString(),
+        lastCycleOutcome: 'pass',
+        cycles: 1,
+        failures: 0,
+        effects: 'open',
+        required: true,
+        why: null,
+      },
+    }],
+    probe: { state: 'answered', at: NOW.toISOString() },
+    why: null,
+  };
+}
+
+async function statusHealth(health: DaemonHealth | null, ...argv: string[]) {
+  const io = testIo(dir, { kind: 'owner' });
+  const code = await runStatus(['--file', file, ...argv], io, {
+    ...sources,
+    ...(health === null ? {} : { daemonHealth: async () => health }),
+  });
   return { code, out: io.out, err: io.err };
 }
 
@@ -160,7 +223,7 @@ describe('team status', () => {
     expect(out).toContain('team acme-web, session "acme-web"');
     expect(out).toContain('  SEAT                     STATE                                 MODEL                                   PANE   REACH  WAKE');
     // An unread screen keeps the declared display, marked declared and unread together.
-    expect(out).toMatch(new RegExp(`codex-acme\\s+idle \\(screen not recognised\\), parked\\s+GPT-6 Sol \\(declared, unread\\)\\s+${paneOf(built(), 'codex-acme')}\\s+typed\\s+!pull-on-turn`));
+    expect(out).toMatch(new RegExp(`codex-acme\\s+idle \\(screen not recognised\\), parked\\s+GPT-6 Sol \\(declared, unread\\)\\s+${paneOf(built(), 'codex-acme')}\\s+typed\\s+typed-wake`));
     expect(out).toMatch(new RegExp(`claude-coordinator-acme\\s+working\\s+Claude Opus 5\\.5\\s+${paneOf(built(), 'claude-coordinator-acme')}\\s+typed\\s+!pull-on-turn`));
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
     expect(out).not.toMatch(/grok-acme\s+stopped/);
@@ -171,7 +234,7 @@ describe('team status', () => {
     expect(code).toBe(0);
   });
 
-  test('an unwakeable seat is flagged, with its live inbox and its oldest unread drop', async () => {
+  test('the wake cell carries its live inbox and its oldest unread drop', async () => {
     // The seat's own inbox, as a running server and a waiting send leave it: a listener whose
     // process is this one, and one unsigned drop five minutes old. The home holds the receipts;
     // without one the reading would call no message unread.
@@ -184,7 +247,9 @@ describe('team status', () => {
       pid: process.pid, ts: NOW.toISOString(),
     })).toBe(true);
     const drop = '019a0000-4444-7555-8666-777788889999';
-    writeFileSync(join(inbox, drop), 'hello\n');
+    // A record this home's key does not vouch for: unread mail. A plain-text drop an earlier build
+    // wrote is not mail at all, and is counted apart (below).
+    writeFileSync(join(inbox, drop), `${JSON.stringify({ body: 'hello' })}\n`);
     writeFileSync(
       join(inbox, `${drop}.pending`),
       `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 5 * 60_000).toISOString() })}\n`,
@@ -195,16 +260,23 @@ describe('team status', () => {
     expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
     // The class is the same word, flagged; the notes say what the class cannot: the inbox will
     // serve the drop on the seat's next turn, and it has been waiting five minutes.
-    expect(io.out).toMatch(new RegExp(`codex-acme\\s+idle \\(screen not recognised\\), parked\\s+GPT-6 Sol \\(declared, unread\\)\\s+${paneOf(built(), 'codex-acme')}\\s+typed\\s+!pull-on-turn \\(inbox, unread 5m\\)`));
+    expect(io.out).toMatch(new RegExp(`codex-acme\\s+idle \\(screen not recognised\\), parked\\s+GPT-6 Sol \\(declared, unread\\)\\s+${paneOf(built(), 'codex-acme')}\\s+typed\\s+typed-wake \\(inbox, unread 5m\\)`));
     expect(io.out).toMatch(new RegExp(`${paneOf(built(), 'claude-coordinator-acme')}\\s+typed\\s+!pull-on-turn\\n`));
 
     const jsonIo = testIo(dir, { kind: 'owner' });
     expect(await runStatus(['--file', file, '--json'], jsonIo, { ...sources, home })).toBe(1);
     const row = JSON.parse(jsonIo.out).rows.find((one: { name: string }) => one.name === 'codex-acme');
     expect(row.seat_wake).toEqual({
-      class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false,
+      class: 'typed-wake', wakeable: true, conversation: false, endpoint: false,
       listener: true, unread: 1, oldest_unread_seconds: 300,
     });
+
+    // An old plain-text drop is never served: it does not ring the unread count, and is said apart.
+    writeFileSync(join(inbox, '019a0000-4444-7555-8666-77778888aaaa'), 'an old raw drop\n');
+    const legacyIo = testIo(dir, { kind: 'owner' });
+    expect(await runStatus(['--file', file, '--json'], legacyIo, { ...sources, home })).toBe(1);
+    const legacyRow = JSON.parse(legacyIo.out).rows.find((one: { name: string }) => one.name === 'codex-acme');
+    expect(legacyRow.seat_wake).toMatchObject({ unread: 1, legacy_unsigned: 1 });
   });
 
   test('the note a stalled not-woken drop adds leads with the send\'s own outcome words', async () => {
@@ -222,14 +294,16 @@ describe('team status', () => {
       pid: process.pid, ts: NOW.toISOString(),
     })).toBe(true);
     const drop = '019a0000-4444-7555-8666-777788889aaa';
-    writeFileSync(join(inbox, drop), 'hello\n');
+    // A record this home's key does not vouch for: unread mail. A plain-text drop an earlier build
+    // wrote is not mail at all, and is counted apart (below).
+    writeFileSync(join(inbox, drop), `${JSON.stringify({ body: 'hello' })}\n`);
     writeFileSync(
       join(inbox, `${drop}.pending`),
       `${JSON.stringify({ id: drop, from: 'lead', ts: new Date(NOW.getTime() - 11 * 60_000).toISOString() })}\n`,
     );
     const io = testIo(dir, { kind: 'owner' });
     expect(await runStatus(['--file', file], io, { ...sources, home })).toBe(1);
-    expect(io.out).toContain('note: codex-acme: queued, not woken — 1 unread; its oldest unread drop has waited 11m, past the 60s unread window; the watch\'s typed retry has not delivered for it; codex-acme reads it at its next turn, and nothing here gives it one (pull-only)');
+    expect(io.out).toContain('note: codex-acme: queued, not woken — 1 unread; its oldest unread drop has waited 11m, past the 60s unread window; no typed wake has delivered it yet; a busy or drafted composer keeps it in the bus inbox');
   });
 
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
@@ -613,11 +687,11 @@ describe('team status', () => {
     updateState(join(dir, '.agents'), (state) => {
       (state.sessions['acme-web'] ?? emptySession()).watch = { pid: 1, heartbeat: '2026-10-03T14:00:00Z' };
     });
-    expect((await status()).out).toContain('the watch\'s last pass was 10 minutes ago\n  repair: team watch --session acme-web');
+    expect((await status()).out).toContain(`the watch's last pass was 10 minutes ago\n  repair: ${WATCH_REPAIR}`);
     updateState(join(dir, '.agents'), (state) => {
       delete state.sessions['acme-web']?.watch;
     });
-    expect((await status()).out).toContain('no watch has run for this session');
+    expect((await status()).out).toContain(`no watch has run for this session\n  repair: ${WATCH_REPAIR}`);
   });
 
   test('a protected checkout off its branch', async () => {
@@ -652,7 +726,50 @@ describe('team status', () => {
   test('--session reads another session, with its own state', async () => {
     const { out } = await status('--session', 'sandbox');
     expect(out).toContain('session "sandbox"');
-    expect(out).toContain('no watch has run for this session\n  repair: team watch --session sandbox');
+    expect(out).toContain(`no watch has run for this session\n  repair: ${WATCH_REPAIR}`);
+  });
+
+  test('a daemon hosting this session\'s watch is the watch; down or another session is not', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      delete state.sessions['acme-web']?.watch;
+    });
+    const missing = `difference: no watch has run for this session\n  repair: ${WATCH_REPAIR}\n  who: the team's lead\n`;
+    // Phase running for this session, and no pane-watch record: the gap is not real.
+    const hosted = await statusHealth(watchHealth('acme-web', 'running'));
+    expect(hosted.out, hosted.err).not.toContain('no watch has run');
+    expect(hosted.code, hosted.out).toBe(0);
+    // The probe is absent: the daemon is down, and the difference names the daemon repair.
+    const down = await statusHealth(null);
+    expect(down.out).toContain(missing);
+    expect(down.code).toBe(1);
+    // A running watch for a different session is not this session's watch.
+    const other = await statusHealth(watchHealth('other', 'running'));
+    expect(other.out).toContain(missing);
+    expect(other.code).toBe(1);
+  });
+
+  test('a running daemon that hosts no watch names its --watch as the repair', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      delete state.sessions['acme-web']?.watch;
+    });
+    // The daemon records it was started without --watch, so a plain reinstall would not bring a
+    // watch back.
+    const health = watchHealth('acme-web', 'running');
+    const watchless: DaemonHealth = {
+      ...health,
+      features: { broker: 'absent', watch: 'off' },
+      roots: health.roots.map(({ watch: _watch, ...entry }) => entry),
+    };
+    const reading = await statusHealth(watchless);
+    expect(reading.out).toContain(`difference: no watch has run for this session\n  repair: ${WATCH_HOSTING_REPAIR}\n`);
+    expect(reading.out).toContain('team daemon install --watch');
+    expect(reading.code).toBe(1);
+    // A stale pane-watch record left by an earlier daemon names the same repair.
+    updateState(join(dir, '.agents'), (state) => {
+      (state.sessions['acme-web'] ?? emptySession()).watch = { pid: 1, heartbeat: '2026-10-03T14:00:00Z' };
+    });
+    const stale = await statusHealth(watchless);
+    expect(stale.out).toContain(`the watch's last pass was 10 minutes ago\n  repair: ${WATCH_HOSTING_REPAIR}`);
   });
 
   test('a broken file: status falls back to the last valid copy and says so first', async () => {
@@ -899,7 +1016,7 @@ describe('team status', () => {
     // the table's STATE and SOURCE columns — and no `blind` key here: every row reads a word.
     expect(doc.rows).toEqual([
       { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', seat_wake: PULL_ONLY, model: 'Claude Opus 5.5', pane: paneOf(built(), 'claude-coordinator-acme') },
-      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', seat_wake: PULL_ONLY, model: 'GPT-6 Sol (declared, unread)', pane: paneOf(built(), 'codex-acme') },
+      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', seat_wake: TYPED_WAKE, model: 'GPT-6 Sol (declared, unread)', pane: paneOf(built(), 'codex-acme') },
       { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', seat_wake: PULL_ONLY, model: 'DeepSeek V4.1 Flash (declared, unread)', pane: paneOf(built(), 'deepseek-acme') },
       { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', seat_wake: PULL_ONLY, model: 'DeepSeek V4.1 Flash (declared, unread)', pane: paneOf(built(), 'deepseek-acme-2') },
     ]);
@@ -972,7 +1089,7 @@ describe('team status', () => {
     expect(missingWatch.code).toBe(1);
     const restart1 = missingWatch.out.indexOf('difference: deepseek-acme is in the file and is not running\n  repair: team restart deepseek-acme\n');
     const restart2 = missingWatch.out.indexOf('difference: deepseek-acme-2 is in the file and is not running\n  repair: team restart deepseek-acme-2\n');
-    const watch = missingWatch.out.indexOf('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
+    const watch = missingWatch.out.indexOf(`difference: no watch has run for this session\n  repair: ${WATCH_REPAIR}\n`);
     expect(restart1).toBeGreaterThanOrEqual(0);
     expect(restart2).toBeGreaterThanOrEqual(0);
     // The differences keep the order they were created in: the watch's, made after them, stays after them.
@@ -991,7 +1108,7 @@ describe('team status', () => {
     expect(refused.out).toContain('repair: team restart deepseek-acme (after: the live file is what the commands read)');
     expect(refused.out).toContain('repair: team restart deepseek-acme-2 (after: the live file is what the commands read)');
     expect(refused.out.indexOf('difference: deepseek-acme is in the file and is not running')).toBeGreaterThan(approve);
-    expect(refused.out).toContain('difference: no watch has run for this session\n  repair: team watch --session acme-web\n');
+    expect(refused.out).toContain(`difference: no watch has run for this session\n  repair: ${WATCH_REPAIR}\n`);
   });
 
   test('B: whose repair: each repair string that names an owner command asserted exactly', async () => {
@@ -1349,7 +1466,7 @@ describe('a pane that no longer holds the process team launched', () => {
       state: 'missing',
       seat_state: 'done',
       seat_state_source: 'process',
-      seat_wake: PULL_ONLY,
+      seat_wake: TYPED_WAKE,
       model: 'GPT-6 Sol',
       pane: 'w2:p1',
     });
@@ -1404,7 +1521,7 @@ describe('a pane that no longer holds the process team launched', () => {
       state: 'restored, not launched by team',
       seat_state: 'unknown',
       seat_state_source: 'none',
-      seat_wake: PULL_ONLY,
+      seat_wake: TYPED_WAKE,
       blind: true,
       model: '-',
       pane: 'w2:p1',

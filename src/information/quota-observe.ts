@@ -12,6 +12,7 @@ import { readScreen, statusRow } from '../watch/screen.ts';
 import type { CostObservation, QuotaObservation, QuotaWindow } from './quota.ts';
 import { PANE_UNREAD, USAGE_UNANSWERED } from './quota.ts';
 import { realKey, type MachineUsage, type UsageView } from './usage.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 export type QuotaLive = {
   observations: QuotaObservation[];
@@ -256,9 +257,13 @@ export function statusQuota(cli: string, screen: string | null, target: SeatTarg
     // The classifier's reset carries its own preposition — `at 11:00`, `in 47h31m` — so it is
     // printed as it stands; the owner's wall phrases read a time and keep the `at` the earlier
     // writer used. The text follows "resets ", never a second preposition.
-    const resetText = kind.kind === 'rate limit'
-      ? kind.reset === null ? null : kind.reset.kind === 'at' ? `at ${kind.reset.value}` : `in ${kind.reset.value}`
-      : phrase.reset === null ? null : `at ${phrase.reset.replace(/^at\s+/i, '')}`;
+    // A profile wall keeps the reset it parsed. A limit sentence the profile did not claim
+    // still prints one (`until 2026-11-08 16:33`); a null classification must not drop it.
+    const classified = kind.kind === 'rate limit' && kind.reset !== null
+      ? kind.reset.kind === 'at' ? `at ${kind.reset.value}` : `in ${kind.reset.value}`
+      : null;
+    const printed = phrase.reset === null ? null : `at ${phrase.reset.replace(/^at\s+/i, '')}`;
+    const resetText = classified ?? printed;
     found.push({
       account: target.account,
       ...(target.pool ? { pool: target.pool } : {}),
@@ -343,6 +348,7 @@ export function parseUsageOutput(text: string, now: number): QuotaObservation[] 
 function runUsageCommand(cli: string): string | null {
   if (cli !== 'agy' && cli !== 'antigravity') return null;
   try {
+    hostedCommit('node:child_process.execFileSync');
     return execFileSync('agy', ['--print', '/usage'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 });
   } catch {
     return null;

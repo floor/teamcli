@@ -100,13 +100,14 @@ describe('Grok launch and captured screens', () => {
     expect(readScreen('grok', current('exit-typed')).kind).toBe('unsent');
   });
 
-  test('a one-row text reads back exactly; the 52-character watch line wraps and never does', () => {
+  test('a one-row text reads back exactly; a wrapped line reads back past the box side it is drawn with', () => {
     expect(boxHoldsText('grok', 'RULES_RECEIVED', fixture('unsent'))).toBe(true);
     expect(boxHoldsText('grok', 'RULES_RECEIVED!', fixture('unsent'))).toBe(false);
-    // The text the watch types for a nudge is 52 characters: the pane wraps it into a second
-    // box row drawn with the left border kept (`  │   team.log`), and a continuation row is
-    // never read as the text's own — the nudge is refused, and the watch falls back.
-    expect(boxHoldsText('grok', 'Team watch: reports are waiting in .agents/team.log', fixture('unsent-wrap'))).toBe(false);
+    // The 52-character watch line wraps into a second box row drawn with the left border kept
+    // (`  │   team.log`). The border is the box's frame: the row reads back as the text's own
+    // (measured on 1.0.77, 2026-11-12, up to 2000 bytes), and one character off still does not.
+    expect(boxHoldsText('grok', 'Team watch: reports are waiting in .agents/team.log', fixture('unsent-wrap'))).toBe(true);
+    expect(boxHoldsText('grok', 'Team watch: reports are waiting in .agents/team.lag', fixture('unsent-wrap'))).toBe(false);
     // A line that fits one box row reads back whole.
     const line = 'a short watch line';
     expect(readScreen('grok', boxed(line)).kind).toBe('unsent');

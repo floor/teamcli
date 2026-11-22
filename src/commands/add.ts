@@ -1,12 +1,12 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
-import { describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from '../commands/doctor.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
@@ -15,10 +15,12 @@ import { ADD_DELEGATE_EDIT, delegateGate, logDelegated } from '../delegate.ts';
 import { devModeExpiryNote, devModeFileApproval, devModeMark, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
+import { pathInsideRoot } from '../charter/body.ts';
+import { leadsOwnTeamAdmits, orchestratorSeatStaysOwner } from '../leads-authority.ts';
 import { maybeAutoOrder, realAutoOrderSources } from '../launch/auto-order.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, type RulesOrigin, withRulesProblem } from '../launch/rules.ts';
 import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { sidebarPolicy } from '../settings/sidebar-policy.ts';
@@ -28,6 +30,7 @@ import { copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
 import { setSeatStopped } from '../file/stopped-mark.ts';
 import { findRoot, launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -44,16 +47,18 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, launchKind, type Host } from '../launch/execute.ts';
-import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { codexEndpointPreflight, launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { formatPlan, registryLaunches, upPlan, type UpSeat } from '../launch/plan.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
+import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -68,14 +73,15 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { emptySession, mintSeatId, readState, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
+import { emptySession, mintSeatId, readState, carriedStartFolderProblem, keptStartFolder, recordedStartFolder, retireCarriedStartFolder, updateState, withLock, worktreeOf, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
-import { placedStartFolders, seatStart, type SeatStart } from '../worktree/place.ts';
+import { placedStartFolders, seatCwdRefusal, seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
-import { channelLobbyFolder } from '../mcp/launch-config.ts';
+import { channelLaunchFallback, channelLobbyFolder } from '../mcp/launch-config.ts';
+import { withoutChannel } from '../mcp/channel.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
@@ -116,6 +122,7 @@ const realLaunch: Launch = {
     registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
+    preflight: (endpoint) => codexEndpointPreflight(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
@@ -199,6 +206,61 @@ type BuildRefusal = { error: string; id: string; repair?: string };
 export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
 
+function resolvedPath(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The flagged file's real path. A file that is not there yet uses its parent's real path plus
+ *  its own name. A symlink is followed. Null when the path cannot be resolved. */
+function flaggedFileReal(cwd: string, file: string): string | null {
+  const aimed = resolve(cwd, file);
+  const own = resolvedPath(aimed);
+  if (own !== null) return own;
+  const parent = resolvedPath(dirname(aimed));
+  if (parent === null) return null;
+  return join(parent, basename(aimed));
+}
+
+/** The placed lead or operator of the team at `cwd`, and whether these flags stay inside it.
+ *  The flagged file is not read. Null when this caller is not that lead or operator.
+ *  The caller is placed in the team's own session: `walkCaller` answers unplaced for every
+ *  real seat, so it cannot be the admission. The standing is the pane that session records. */
+function ownTeamFlagBounds(
+  io: Io,
+  sources: AddSources,
+  file: string | undefined,
+  session: string | undefined,
+): { fileInside: boolean; sessionOwn: boolean } | null {
+  const named = readTeamConfig(io.cwd, { home: sources.home });
+  if (!named.ok) return null;
+  // Another session cannot use this team's lead exception. A file is compared by the same
+  // real path as before; proving it outside needs no caller placement or file-content read.
+  if (session !== undefined && session !== named.team.session) return null;
+  const rootReal = resolvedPath(named.root);
+  if (rootReal === null) return null;
+  const real = file === undefined ? null : flaggedFileReal(io.cwd, file);
+  const fileInside = file === undefined || (real !== null && pathInsideRoot(rootReal, real));
+  if (!fileInside) return null;
+  const dir = dirname(named.path);
+  const caller = callerOf(io, named.team.session);
+  if (leadsOwnTeamAdmits({
+    caller,
+    team: named.team,
+    teamFile: named.team,
+    at: standingOf(dir, named.team.session, caller),
+    home: sources.home,
+    root: named.root,
+    command: 'add',
+    now: sources.now(),
+    dir,
+  }) === null) return null;
+  return { fileInside, sessionOwn: true };
+}
+
 export async function runAdd(argv: string[], io: Io, sources: AddSources = realSources): Promise<number> {
   // `--json` is read off the raw argv before the parser: an invocation the parser refuses still
   // owes the `team.error` document rather than the plain usage line.
@@ -253,35 +315,6 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (!wantsJson) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
   }
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
-  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat after
-  // every validation gate below has passed, so a command that would fail locally never opens an
-  // owner card or prompts Touch ID; `--approval <id>` and a signed charter still admit here.
-  // The root it records and admits is the one the record's readers resolve: a checkout's root, or
-  // the plain folder itself (the registry record is keyed by that folder). The step's own
-  // findRoot alone refused every team whose folder is not a repository.
-  const approvalRefused = (): number => {
-    // exit: add.approval-refused
-    return 1;
-  };
-  const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
-  const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
-    ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : args.flags.has('request') && args.values.approval !== undefined
-      ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
-      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot });
-  if (seatStep.kind === 'refused') return approvalRefused();
-  const seatApproved = seatStep.kind === 'admitted';
-  const requesting = args.flags.has('request') && !seatApproved;
-  // No create-grant admits a run with no terminal: the record matches the caller's own registry
-  // record, and a caller outside herdr has none. This sentence is answered before any file is
-  // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
-  // send every reader to the owner.
-  const detached = clientRun !== null || seatApproved || requesting ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
-  if (detached !== undefined) {
-    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
-    // exit: add.detached
-    return 1;
-  }
   const temporary = args.flags.has('temporary');
   const dry = args.flags.has('dry-run');
   if (temporary ? args.rest.length > 0 : args.rest.length !== 1) {
@@ -306,16 +339,51 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // its `last_valid` in that project's state. The one place every command whose `--file` is the owner's
   // decides it is `fileOwnerRefusal` (caller.ts).
   //
+  // A placed lead or operator of this team is the exception, and only for a path that stays
+  // inside this team's own root, or a `--session` that names this team's own session. An outside
+  // path, a symlink that leaves the root, or a path that cannot be resolved is still the owner's
+  // sentence, and it is decided before the flagged file is read. Any other session is another team.
+  //
   // A `delegates` section hands these owner-only flags to the gate as well: a non-owner aiming
   // either is still refused before the flagged file or the flag's session is read — never the
   // walk's sentence but the gate's verdict, which names the flag for the approved delegate and
   // the caller for anyone else. The eligibility that asks is the default live file's alone, so
   // the flagged file is not read at all; with no `delegates` section there, today's refusal
   // stands, byte for byte.
-  const walked = args.values.session !== undefined ? walkCaller(io) : undefined;
-  const fileFlag = fileOwnerRefusal(io, args.values.file);
-  const flagRefusal = fileFlag
-    ?? (walked !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
+  const ownerFlagRefused = (file: boolean, message: string): number => {
+    refuse(io, json, 'add', { id: file ? 'add.file-owner' : 'add.session-owner', message, repair: null });
+    // exit: add.file-owner
+    // exit: add.session-owner
+    return 1;
+  };
+  const overrideOwnerRefused = (): number => {
+    refuse(io, json, 'add', {
+      id: 'add.override-owner',
+      message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
+      repair: null,
+    });
+    // exit: add.override-owner
+    return 1;
+  };
+  const flagWalk = args.values.file !== undefined || args.values.session !== undefined ? walkCaller(io) : undefined;
+  // A no-terminal owner keeps the detached sentence, which is asked after the owner-seat door.
+  // Every other non-owner is the owner-only sentence, decided before that door places anyone.
+  const flagIsDetached = flagWalk !== undefined && detachedRefusal(flagWalk) !== undefined;
+  let fileFlag = flagIsDetached ? undefined : fileOwnerRefusal(io, args.values.file);
+  let sessionFlag = flagWalk !== undefined && !flagIsDetached && args.values.session !== undefined && !isOwner(flagWalk) ? sessionOwnerRefusal(flagWalk) : undefined;
+  if (fileFlag !== undefined || sessionFlag !== undefined) {
+    const bounds = ownTeamFlagBounds(io, sources, args.values.file, args.values.session);
+    if (bounds !== null) {
+      const fileOutside = args.values.file !== undefined && !bounds.fileInside;
+      if (fileOutside) sessionFlag = undefined;
+      else if (args.values.session !== undefined && !bounds.sessionOwn) fileFlag = undefined;
+      else {
+        fileFlag = undefined;
+        sessionFlag = undefined;
+      }
+    }
+  }
+  const flagRefusal = fileFlag ?? sessionFlag;
   if (flagRefusal !== undefined) {
     const named = readTeamConfig(io.cwd, { home: sources.home });
     if (named.ok && named.team.delegates) {
@@ -330,17 +398,87 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       });
       if (flagged.kind === 'refused') return delegateRefused(io, json, flagged);
     }
-    refuse(io, json, 'add', {
-      id: fileFlag !== undefined ? 'add.file-owner' : 'add.session-owner',
-      message: flagRefusal,
-      repair: null,
-    });
-    // exit: add.file-owner
-    // exit: add.session-owner
-    return 1;
+    return ownerFlagRefused(fileFlag !== undefined, flagRefusal);
+  }
+  // `--model` and `--effort` on a declared seat are the owner's too. A request still carries them
+  // to the owner seat; every other non-owner is refused before that door can admit the run.
+  if (!temporary && clientRun === null && !args.flags.has('request') && (args.values.model !== undefined || args.values.effort !== undefined)) {
+    const walked = flagWalk ?? walkCaller(io);
+    if (!isOwner(walked) && detachedRefusal(walked) === undefined) {
+      return overrideOwnerRefused();
+    }
   }
 
-  const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
+  // The owner-seat door (src/client/owner-action-step.ts) runs after the owner-only flags above.
+  // `--request` asks the owner seat after every validation gate below has passed, so a command
+  // that would fail locally never opens an owner card or prompts Touch ID; `--approval <id>` and
+  // a signed charter still admit here. The root it records and admits is the one the record's
+  // readers resolve: a checkout's root, or the plain folder itself (the registry record is keyed
+  // by that folder). The step's own findRoot alone refused every team whose folder is not a repository.
+  const approvalRefused = (): number => {
+    // exit: add.approval-refused
+    return 1;
+  };
+  // Resolve the addressed team only after owner-only flag preflight, before any owner-seat door.
+  const bindingHome = sources.home ?? homedir();
+  const targetBinding = args.values.file !== undefined || clientRun !== null
+    ? { kind: 'unbound' as const }
+    : addressedTeam(bindingHome, io.cwd, args.rest[0] ?? '', io);
+  const launchedForTarget = args.values.file !== undefined || clientRun !== null || targetBinding.kind !== 'unbound'
+    ? undefined
+    : launchedTeamFile(io, sources.home);
+  const launchedRead = launchedForTarget === undefined
+    ? undefined
+    : readLaunchedTeam(launchedForTarget, { home: sources.home });
+  const targetKnown = targetBinding.kind !== 'ambiguous' && targetBinding.kind !== 'unreadable';
+  const seatRoot = clientRun !== null
+    ? io.cwd
+    : targetBinding.kind === 'bound'
+      ? targetBinding.team.root
+      : args.values.file !== undefined
+        ? charterTargetOf(io.cwd, args.values.file)
+        : launchedRead?.ok === true
+          ? launchedRead.root
+          : findRoot(io.cwd) ?? resolve(io.cwd);
+  const seatStep = !targetKnown
+    ? { kind: 'none' as const }
+    : clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
+    ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
+    : args.flags.has('request') && args.values.approval !== undefined
+      ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--request asks the owner seat and --approval runs an answered request: pass one', repair: null }), { kind: 'refused' as const })
+      : ownerSeatStep('add', 'team-add', argv, { request: false, approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, { ...sources, root: seatRoot }, [seatRoot]);
+  if (seatStep.kind === 'refused') return approvalRefused();
+  // `--request` files a card later. A charter that covers this folder does not run the add in
+  // this same invocation when the caller asked for the card.
+  const seatApproved = seatStep.kind === 'admitted' && !args.flags.has('request');
+  const requesting = args.flags.has('request') && !seatApproved;
+  // No create-grant admits a run with no terminal: the record matches the caller's own registry
+  // record, and a caller outside herdr has none. This sentence is answered before any file is
+  // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
+  // send every reader to the owner. An owner-only flag above has already answered for every
+  // other non-owner.
+  const detached = clientRun !== null || seatApproved || requesting ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  if (detached !== undefined) {
+    refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
+    // exit: add.detached
+    return 1;
+  }
+  // Admission does not hand a caller without a terminal the owner's file or session flags.
+  // Those checks were deferred only to preserve the unapproved caller's detached sentence.
+  if (flagIsDetached && flagWalk !== undefined) {
+    const detachedFileFlag = fileOwnerRefusal(io, args.values.file);
+    const detachedSessionFlag = args.values.session !== undefined ? sessionOwnerRefusal(flagWalk) : undefined;
+    const detachedFlagRefusal = detachedFileFlag ?? detachedSessionFlag;
+    if (detachedFlagRefusal !== undefined) {
+      return ownerFlagRefused(detachedFileFlag !== undefined, detachedFlagRefusal);
+    }
+  }
+
+  // The same target the owner-seat door was asked for. A `--file` names its file. Otherwise
+  // the pane's team is that root and roster. None leaves the launched pointer, then the cwd's
+  // longest registered root, and a shared seat name outside every root is refused rather than picked.
+  const binding = targetBinding;
+  const launched = launchedForTarget;
   const readOptions = {
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.
@@ -349,12 +487,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team rename` wrote into the registry's record is
   // started under the name the record gives it, never missed over the file the session launched
-  // from. A `--file` names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+  // from. A cwd inside a registered root does not consult that pointer.
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, readOptions)
+        : launched !== undefined
+          ? readLaunchedTeam(launched, readOptions)
+          : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     if (json) {
       const id = loaded.errors.some((problem) => problem.message.startsWith('not inside a git repository'))
@@ -444,7 +586,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, io, sources)) || (mayChange.kind !== 'ok'
     && !leadSeat
     && readEntityCreateGrants(sources.home).length > 0
-    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: root }));
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
   // the gate is never asked. A refused verdict takes the ordinary refusal's place; a passed one
@@ -494,8 +636,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     : null;
   let liftAudit: (() => void) | null = null;
   if (mayRun !== null) {
+    const asked = args.rest[0] ?? '';
+    const declared = team.seats.some((seat) => seat.name === asked);
+    // A name the live file does not declare, and not a `--like` copy, is putting a seat back.
+    // That is owner-reserved. A declared seat and a `--like` copy stay the development check.
+    const gate = !temporary && !declared && args.values.like === undefined ? 'restore-seat' : 'caller';
     const lift = devModeOwnerLift(io, {
       command: 'add',
+      gate,
       refusal: mayRun,
       home: sources.home,
       team,
@@ -526,6 +674,30 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       // exit: add.caller
       return 1;
     }
+  }
+  // The orchestrator seat stays the owner's only when the default rule is what admitted the run.
+  // A passed delegate, a grant, a client run and the owner keep the start they had before this limit.
+  const admittedByLeads = seatStep.kind === 'admitted' && seatStep.admission.via === 'leads';
+  const byDefaultRule = delegatePane === null && clientRun === null && !isOwner(caller)
+    && !(createGranted && !admittedByLeads)
+    && leadsOwnTeamAdmits({
+      caller,
+      team,
+      teamFile: team,
+      at: standingOf(dir, session, caller),
+      home: sources.home,
+      root,
+      command: 'add',
+      now: sources.now(),
+    }) !== null;
+  if (!temporary && orchestratorSeatStaysOwner(team, args.rest[0] ?? '') && byDefaultRule) {
+    refuse(io, json, 'add', {
+      id: 'add.coordinator',
+      message: `only the owner changes the orchestrator's seat; this call is ${describeCaller(caller)}`,
+      repair: null,
+    });
+    // exit: add.coordinator
+    return 1;
   }
   if (session === 'default') {
     refuse(io, json, 'add', { id: 'add.default-session', message: 'session can\'t be "default", herdr\'s own session', repair: null });
@@ -591,6 +763,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
+  // Carried start folders that do not read stop the run here, before anything is launched.
+  const carriedProblem = carriedStartFolderProblem(recorded, session, dir);
+  if (carriedProblem !== null) {
+    refuse(io, json, 'add', { id: 'add.carried-start', message: carriedProblem, repair: null });
+    return 1; // exit: add.carried-start
+  }
 
   const original = loaded.text ?? readTeamText(path, { home: sources.home ?? homedir() });
   // The place the refusals below name: the file this run read, or the registry's record when that
@@ -723,13 +901,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun && !seatApproved && !requesting) {
-    refuse(io, json, 'add', {
-      id: 'add.override-owner',
-      message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
-      repair: null,
-    });
-    // exit: add.override-owner
-    return 1;
+    return overrideOwnerRefused();
   }
   const resolvedModel = args.values.model !== undefined
     ? resolveModelOverride(profile, args.values.model, built.seat.version)
@@ -821,6 +993,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (json) jsonNotes.push(`team add: ${derived.warning}`);
     else out.stderr(`team add: ${plainText(derived.warning)}\n`);
   }
+  const cwdRefusal = seatCwdRefusal(built.seat, recorded.worktrees, root);
+  if (cwdRefusal !== null) {
+    refuse(io, json, 'add', { id: 'add.cwd', message: cwdRefusal, repair: null });
+    // exit: add.cwd
+    return 1;
+  }
   const recordedTree = worktreeOf(recorded, built.name);
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
@@ -844,7 +1022,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     repair || (held?.launched !== undefined && verdict !== 'same')
       ? undefined
       : unnamedIn(built.name, recorded.seats, agents);
-  const resumeCwd = recorded.seats[built.name]?.start_cwd;
+  const resumeCwd = recordedStartFolder(recorded.seats[built.name]);
   const line = !stray
     ? launchLineFinding(prepared.team, built.seat, root, {
         onPath: (binary) => sources.doctor.onPath(binary),
@@ -952,6 +1130,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
           root,
           session,
           sessionRunning: live === 'running',
+          ...(planned.launcher !== undefined ? { launcherDiscovery: loadTeamLaunchers(root) } : {}),
           seats: [{
             ...planned,
             launchProblem,
@@ -1015,6 +1194,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const wouldLaunch = planned.stage === undefined || !planned.pane || (planned.stage === 'launched' && !planned.agentLive);
   const seatForPlan = {
     ...planned,
+    ...(built.seat.channelOff === true ? { channelOff: true as const } : {}),
     ...(recordedTree === undefined ? {} : { worktree: recordedTree.path }),
     ...(launchProblem && wouldLaunch
       ? { launchProblem, ...(launchProblemDetail ? { launchProblemDetail } : {}) }
@@ -1048,7 +1228,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
   }
   const trustCwd = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
-  const trustSeat = { ...seatForPlan, cwd: trustCwd };
+  const trustSeat = { ...seatForPlan, cwd: trustCwd,
+    ...(channelLaunchFallback(runTeam, built.seat, root) === undefined ? {} : { channelOff: true as const }) };
   // A CLI with no captured trust record is refused before the file is edited. A dry
   // run writes nothing and still shows that line. A CLI with a record is written
   // below, once the lobby exists.
@@ -1057,7 +1238,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (line) return refusePretrust(io, json, built.name, line, dry);
   }
   if (requesting) {
-    const askedStep = ownerSeatStep('add', 'team-add', argv, { request: true, approval: undefined, dry, json, reason: args.values.reason }, io, { ...sources, root });
+    const askedStep = ownerSeatStep('add', 'team-add', argv, { request: true, approval: undefined, dry, json, reason: args.values.reason }, io, { ...sources, root }, [root]);
     if (askedStep.kind === 'requested') {
       // exit: add.approval-requested
       return 0;
@@ -1073,6 +1254,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       seats: [seatForPlan],
       startFolders: placedStartFolders(prepared.team.seats, recorded),
       team: prepared.team,
+      ...(seatForPlan.launcher !== undefined ? { launcherDiscovery: loadTeamLaunchers(root) } : {}),
       watchAlive: true,
       teamFile: launchTeamFile(loaded),
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
@@ -1133,7 +1315,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     {
       const trustPath = verifiedLobby && seatForPlan.lobby ? verifiedLobby : seatForPlan.cwd;
       const line = lobbyPretrustLine(
-        { ...seatForPlan, cwd: trustPath },
+        { ...trustSeat, cwd: trustPath },
         sources.home,
         { write: true, now: sources.now() },
       );
@@ -1148,7 +1330,21 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (delegatePane !== null) logDelegated(dir, delegatePane, 'add', sources.now());
     if (built.edited !== original) {
       const written = withLock(dir, () => {
-        const where = { home: sources.home ?? homedir(), command: 'add' };
+        const where = {
+          // A seat added from another's lines carries its words filled: they are written back as words.
+          home: sources.home ?? homedir(), command: 'add', now: sources.now, keepWords: true,
+          audit: {
+            caller,
+            rule: io.general !== undefined ? `general-grant:${io.general.grantId}`
+              : clientRun !== null ? `client-grant:${clientRun.grant.grantId}`
+              : seatApproved && seatStep.kind === 'admitted' ? seatStep.admission.via
+                : delegatePane !== null ? 'delegate:add'
+                  : liftAudit !== null ? 'dev-mode:record'
+                    : createGranted ? 'standing-create-grant'
+                      : ownerRun ? 'owner-only' : 'owner-or-leads',
+            ...(clientRun !== null ? { client: clientRun.grant.clientId } : io.general !== undefined ? { client: io.general.clientId } : {}),
+          },
+        };
         if (readTeamText(path, where) !== original) return { kind: 'changed' as const };
         const wrote = writeTeamText(path, built.edited, where);
         return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };
@@ -1231,11 +1427,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // launch only if the plan runs the seat's line, and a refusal before that puts this back.
     const priorBinding = readState(dir).sessions[session]?.seats[planSeat.name]?.presence_binding;
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, ...(prepared.team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: prepared.team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: prepared.team.project, root, home: sources.home });
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, desktopControl: seatDesktopControl({ team: prepared.team, seat: planSeat.name, home: sources.home ?? null, root }), ...(prepared.team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: prepared.team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: prepared.team.project, root, home: sources.home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], startFolders: placedStartFolders(prepared.team.seats, recorded), watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], ...(planSeat.launcher !== undefined ? { launcherDiscovery: loadTeamLaunchers(root) } : {}), startFolders: placedStartFolders(prepared.team.seats, recorded), watchAlive: true, teamFile: launchTeamFile(loaded), cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, team: prepared.team, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }), ...(sources.launch.secretStore === undefined ? {} : { secretStore: sources.launch.secretStore }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false, launched: false };
@@ -1443,7 +1639,12 @@ function temporarySeat(
   return {
     name,
     edited: current,
-    seat: { ...like, name, label: name, cwd: worktree?.path ?? like.cwd, stopped: false },
+    // A temporary seat is not declared and starts without this team's channel.
+    seat: {
+      ...like, name, label: name, cwd: worktree?.path ?? like.cwd, stopped: false,
+      channelOff: true,
+      launch: like.cli === 'claude-code' ? withoutChannel(like.launch) : like.launch,
+    },
     temporary: {
       like: like.name,
       until: values.until ?? '',
@@ -1484,7 +1685,14 @@ function seatPlan(
     name: seat.name,
     cli: seat.cli,
     launch: seat.launch,
+    // A seat that names a launcher starts from it, as on `team up` and `team restart`.
+    ...(seat.launcher !== undefined ? { launcher: seat.launcher } : {}),
+    ...(seat.launcher !== undefined && seat.role !== undefined ? { role: seat.role } : {}),
+    ...(seat.launcher !== undefined && seat.access !== undefined ? { access: seat.access } : {}),
+    ...(seat.launcher !== undefined && seat.vendor !== undefined ? { vendor: seat.vendor } : {}),
+    ...(seat.launcher !== undefined && seat.account !== undefined ? { account: seat.account } : {}),
     cwd: start.cwd,
+    ...(seat.cwdDefaulted === true ? { cwdDefaulted: true as const } : {}),
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
     model: seat.model,
@@ -1498,6 +1706,7 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root, undefined, origin, home),
+    ...withRulesProblem(inheritedRulesProblem(team, root, home)),
     sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
@@ -1626,6 +1835,7 @@ function hostOf(input: {
       : {
           managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+          ...(launch.codexEndpoint!.preflight === undefined ? {} : { codexEndpointProblem: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.preflight!(endpoint) }),
         }),
     ...(launch.registerInbox
       ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
@@ -1660,6 +1870,8 @@ function hostOf(input: {
         status: () => launch.agentStatus?.(session, pane) ?? null,
         type: (value) => launch.typeText?.(session, pane, value) ?? false,
         enter: () => launch.pressEnter?.(session, pane) ?? false,
+        leadPane: (input.team.orchestrator !== '' && file.seat === input.team.orchestrator)
+          || (input.team.operator !== '' && file.seat === input.team.operator),
         ...(launch.sendKey
           ? { key: (name: string) => launch.sendKey!(session, pane, name) }
           : {}),
@@ -1709,6 +1921,8 @@ function hostOf(input: {
     agentList: launch.agents,
     workspacePanes: launch.workspacePanes ? (session, workspace) => launch.workspacePanes!(session, workspace) : undefined,
     classify: (_name, pane, cli) => launchKind(readScreen(cli, launch.paneText(session, pane) ?? undefined).kind),
+    // The one dialog a launch answers itself (src/launch/channel-dialog.ts).
+    channelDialogKey: (_name, pane) => launch.pressEnter?.(session, pane) ?? false,
     paneText: (_name, pane) => launch.paneText(session, pane),
     foreground: (_name, pane) => launch.foreground(session, pane),
     shellBack: (_name, pane) => launch.shellBack?.(session, pane) ?? null,
@@ -1750,14 +1964,15 @@ function hostOf(input: {
         const last_active = patch.stage === 'ready'
           ? input.now().toISOString()
           : (prior.last_active ?? retained?.last_active);
-        let start_cwd = patch.start_cwd ?? prior.start_cwd;
-        if (!start_cwd && patch.createdWorkspace) {
-          if (input.inLobby) {
-            if (input.verifiedLobby) start_cwd = input.verifiedLobby;
-          } else {
-            start_cwd = input.startCwd;
-          }
-        }
+        // A workspace this write made records the folder it was made in (the launch names it);
+        // failing that, the verified lobby for a lobby seat or the planned folder. Otherwise the
+        // folder the seat already ran in stands. Kept absolute, against the team root.
+        const fresh = patch.createdWorkspace
+          ? (patch.start_cwd ?? (input.inLobby ? (input.verifiedLobby ?? undefined) : input.startCwd))
+          : patch.start_cwd;
+        const start_cwd = keptStartFolder(input.root, fresh, prior.start_cwd !== undefined ? prior.start_cwd : current.retained_start_cwd?.[name]);
+        // The record holds its folder again: a folder a relaunch carried for it is retired here.
+        if (start_cwd !== undefined) retireCarriedStartFolder(current, name);
         // `waiting: null` removes the field alone; anything else written replaces it.
         // `effort: null` is a launch that set no word: the stored word goes with it.
         const { waiting: written, effort: patchedEffort, ...rest } = patch;
@@ -1772,7 +1987,7 @@ function hostOf(input: {
           ...(launch_line ? { launch_line } : {}),
           ...(last_active ? { last_active } : {}),
           ...(temporary && isTarget ? { temporary } : {}),
-          ...(start_cwd ? { start_cwd } : {}),
+          ...(start_cwd !== undefined ? { start_cwd } : {}),
         };
         if (written === null) delete seatState.waiting;
         else if (written) seatState.waiting = written;

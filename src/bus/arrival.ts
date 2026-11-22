@@ -22,6 +22,7 @@ import {
 import { messageKeyState } from '../store/keys.ts';
 import type { EventAppendInput } from './log.ts';
 import { readSealedRelative } from './relative-read.ts';
+import { seatMailDirIn, seatMailParts, type MailTree } from '../queue/mail-tree.ts';
 
 /** One seat folder or record name: the names this pass and the bus's nudge both admit. */
 export const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
@@ -56,8 +57,8 @@ export function folderUnderRoot(dir: string, root: string, ...parts: string[]): 
   }
 }
 
-export function dropFolderIsReal(root: string, session: string, seat: string): boolean {
-  return folderUnderRoot(join(root, '.agents', 'send-drops', session, seat), root, '.agents', 'send-drops', session, seat);
+export function dropFolderIsReal(root: string, session: string, seat: string, tree: MailTree = 'legacy'): boolean {
+  return folderUnderRoot(seatMailDirIn(join(root, '.agents'), session, seat, tree), root, ...seatMailParts(session, seat, tree));
 }
 
 export function mailboxFolderIsReal(root: string, seat: string): boolean {
@@ -128,9 +129,10 @@ export function checkedDropRelative(
   claim: ArrivalClaim,
   scope: ArrivalScope,
   key: KeyObject,
+  tree: MailTree = 'legacy',
 ): ArrivalRead {
   return dropFromSealed(
-    readSealedRelative(root, ['.agents', 'send-drops', session, seat], name),
+    readSealedRelative(root, seatMailParts(session, seat, tree), name),
     claim,
     scope,
     key,
@@ -242,5 +244,9 @@ export function verifiedArrival(claim: ArrivalClaim, scope: ArrivalScope, home: 
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
   const checked = checkedDropRelative(scope.root, claim.session, claim.seat, claim.record_id, claim, scope, key.key);
-  return checked.ok ? checked.event : null;
+  if (checked.ok) return checked.event;
+  // E7b revision 3: a stamped record arrives in the seat's stamped folder (src/queue/mail-tree.ts).
+  if (checked.missing !== true) return null;
+  const stamped = checkedDropRelative(scope.root, claim.session, claim.seat, claim.record_id, claim, scope, key.key, 'stamped');
+  return stamped.ok ? stamped.event : null;
 }

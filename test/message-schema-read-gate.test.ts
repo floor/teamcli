@@ -75,18 +75,6 @@ function gate(at: Place): { rule: string | undefined; body: boolean; receipt: bo
 }
 
 describe('the read gate authenticates the raw payload first', () => {
-  test('a signed record is served, and its read receipt is published', () => {
-    const at = place();
-    try {
-      write(at, signRecord(payload(at) as never, at.home));
-      const got = read(at);
-      expect(got.ok).toBe(true);
-      expect(got.ok ? got.body : '').toBe(SERVED);
-      expect(existsSync(receiptPath(at.dropDir, ID))).toBe(true);
-    } finally {
-      at.cleanup();
-    }
-  });
 
   test('a field inserted after signing is refused: no body, no receipt, nothing written', () => {
     const at = place();

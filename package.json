@@ -1,6 +1,6 @@
 {
   "name": "team",
-  "version": "0.5.19",
+  "version": "0.5.22",
   "description": "Ship with a team that never sleeps. Specialized agents, from any lab.",
   "keywords": [
     "ai-agents",
@@ -37,7 +37,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=22"
+    "bun": ">=1.4"
   },
   "repository": {
     "type": "git",
@@ -46,21 +46,23 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:fast": "bun scripts/test-fast.ts",
     "e2e": "bun scripts/e2e.ts",
     "build": "bun scripts/build.ts",
     "pack": "bun scripts/pack.ts",
+    "test:scale": "TEAM_SCALE_TESTS=1 bun test ./test/bus-cold-read-slice.test.ts ./test/presence-cold-scan-independent.test.ts ./test/mcp-channel-server.test.ts",
     "conformance": "bun scripts/conformance.ts --impl \"node dist/cli.js conformance-adapter\"",
     "coverage": "bun scripts/coverage.ts",
     "coverage:check": "bun scripts/coverage.ts --check",
     "schema:check": "bun scripts/schema.ts",
     "contract": "bun scripts/contract.ts",
     "contract:check": "bun scripts/contract.ts --check",
-    "exit-codes:check": "bun scripts/exit-codes.ts --check",
+    "exit-codes:check": "bun scripts/contract.ts --check",
     "readme:check": "bun scripts/check-readmes.ts",
     "brief": "bun scripts/brief.ts",
     "brief:check": "bun scripts/brief.ts --check",
     "public-names:check": "bun scripts/check-public-names.ts",
-    "ci": "bun run typecheck && bun test && bun run build && node dist/cli.js --version && bun run conformance && bun run schema:check && bun run contract:check && bun run coverage:check && bun run brief:check && bun run public-names:check && bun run exit-codes:check && bun run readme:check",
+    "ci": "bun run typecheck && bun scripts/ci-test-files.ts && bun run build && node dist/cli.js --version && bun run conformance && bun run schema:check && bun run contract:check && bun run coverage:check && bun run brief:check && bun run public-names:check && bun run readme:check",
     "ci:shard": "bun scripts/ci-shard-tests.ts --run",
     "ci:shard:check": "bun scripts/ci-shard-tests.ts --check"
   },

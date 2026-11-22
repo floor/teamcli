@@ -3,7 +3,7 @@
 // Key creation is not a signature. A cancelled sign writes nothing.
 
 import { verify as cryptoVerify } from 'node:crypto';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -25,10 +25,12 @@ import {
   defaultCharterBody,
   defaultProjectRoots,
   parseDuration,
+  signedRoots,
   type CharterBody,
   type CharterLifetimes,
 } from '../charter/body.ts';
 import { readCharter, writeCharter, type CharterRead } from '../charter/store.ts';
+import { ownerMachinePinned } from '../client/owner-pin-path.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { OWNER_PAGE_RP_ID } from '../security/owner-page.ts';
 
@@ -37,8 +39,9 @@ export const USAGE = `Usage: team setup --signer <touch-id|passkey> [--roots <di
 Signs the owner charter once. --signer touch-id (or mac) creates the owner seat's
 Secure Enclave key when there is none, then asks for Touch ID on the charter.
 --signer passkey (or iphone) checks one signature over that same charter and
-records the passkey; it does not create a Mac key. Roots default to the project
-directories under the home (or ~/Code). Durations are 15m, 30d, 7d, or never.
+records the passkey; it does not create a Mac key. Roots default to the projects
+root each entity names on this machine (team config set <entity>.root <folder>);
+with none named and no --roots, nothing is signed. Durations are 15m, 30d, 7d, or never.
 --edit re-signs. A cancelled sign writes nothing.
 
 Exits 0 when the charter is signed, 1 when the owner does not sign, 2 when the invocation is invalid.
@@ -78,6 +81,12 @@ async function setupOutcome(argv: string[], rawIo: Io, options: SetupOptions): P
     return outcome;
   };
   if (args.error !== undefined || args.rest.length > 0) return fail(args.error ?? `unexpected "${args.rest[0]}"\n${USAGE}`, 'invocation');
+  // A machine whose owner seat is pinned holds no owner signer: no key is made here and no passkey
+  // is recorded here, since neither could be confirmed by the owner on this machine. It keeps no
+  // charter of its own either: a charter is standing consent signed for one machine's folders, and
+  // carrying one here would be a second signing flow. Every owner-only action on such a machine
+  // runs on the owner's signed answer to its own request, carried as a file.
+  if (ownerMachinePinned(home)) return fail("this machine's owner seat is pinned from another machine, and it keeps no charter of its own; an owner-only action here runs on the owner's answer to its own request: run it with --request, carry the request with team approvals export, sign it with team approvals sign on the machine that holds the owner's signers, record the answer here with team approvals answer, then run it with --approval <id>; nothing was written");
   const choice = signerChoice(args.values.signer);
   if (choice === null) return fail('--signer is touch-id (or mac) or passkey (or iphone); the owner chooses in this step, and this run does not sign', 'invocation');
 
@@ -88,7 +97,19 @@ async function setupOutcome(argv: string[], rawIo: Io, options: SetupOptions): P
 
   const existing = readCharter(home, store);
   if (args.flags.has('edit') && existing.kind === 'invalid') return fail(`${existing.why}; nothing was written`);
-  const roots = parsedRoots ?? (existing.kind === 'ok' ? existing.charter.body.roots : defaultProjectRoots(home));
+  // The owner's own roots, then the roots the charter already signed, then the projects root each
+  // entity names on this machine: a machine that names none is refused, never given a guess.
+  // Every root is signed as it is on disk (`signedRoots`): a link cannot widen the scope later.
+  let roots: string[];
+  if (parsedRoots !== undefined || existing.kind === 'ok') {
+    const named = signedRoots(parsedRoots ?? (existing.kind === 'ok' ? existing.charter.body.roots : []), home);
+    if (!named.ok) return fail(named.why);
+    roots = named.roots;
+  } else {
+    const defaults = defaultProjectRoots(home);
+    if (!defaults.ok) return fail(defaults.why);
+    roots = defaults.roots;
+  }
   const body = charterBody(existing, roots, lifetimes);
   const statement = charterStatement(body);
   let createdSeat = false;

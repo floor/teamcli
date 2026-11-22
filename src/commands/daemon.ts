@@ -20,11 +20,13 @@
 // machine with no broker handler never falls back to the old per-clone broker.
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
+import { ownerRequestDoor } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { serveChoresChild } from '../daemon/chores/child.ts';
 import { spawnMailboxChild } from '../daemon/mailbox/spawn.ts';
@@ -40,6 +42,7 @@ import {
 import { daemonHealth } from '../daemon/health.ts';
 import { choresPhrase, failureAge, firstPassPhrases } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
+import { daemonReaperAtStart, type ReaperRecord } from '../orphan-reaper.ts';
 import { DAEMON_LABEL, daemonLabel } from '../daemon/paths.ts';
 import { recordInstalledProgram } from '../daemon/runtime-entry.ts';
 import {
@@ -50,7 +53,8 @@ import {
 import { loadTeamFile } from '../file/load.ts';
 import { projectionOf } from '../reach/projection.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
-import { runningRegistryRoots } from '../daemon/registry-roots.ts';
+import { registryHosting, runningRegistryRoots, type SkippedRegistryTeam } from '../daemon/registry-roots.ts';
+import { plainLine } from '../launch/plain.ts';
 import { canonicalRoot, routeId, routeOf } from '../daemon/routes.ts';
 import {
   systemServiceManager,
@@ -75,10 +79,10 @@ import { pidAlive } from '../state.ts';
 import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
-       team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+       team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
+       team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon restart [--dry-run] [--json]
-       team daemon uninstall [--home <folder>] [--json]
+       team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
        team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
@@ -88,6 +92,9 @@ and bus endpoints in the same process, so no second or third daemon process runs
 \`run --presence\` additionally hosts each checkout's presence pipeline: the spool ingester, the
 activity reconciler, the publisher and the per-seat health answer. Without the flag the daemon
 does not read presence at all.
+\`run --send-server\` additionally starts the warm send host: a supervised child that runs a seat's
+plain \`send\`, \`reply\` and \`ack\` lines with its modules already loaded, and hands every other
+line back to the client, which runs it as before.
 \`run --watch\` additionally hosts one watch per checkout on the daemon's existing heartbeat.
 Without the flag no checkout's watch is hosted, and the daemon reads no pane for one.
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
@@ -99,6 +106,15 @@ watch, named by the route id its record already carries. One request is written,
 consumes it on its next heartbeat, and only that route's loop is ended and restarted; no
 process is killed. A route that is not hosted, not required, standing down or stopped is
 refused, and the result names why.
+
+install, restart, uninstall and fault-watch are the owner's. For install and uninstall,
+--request records the verb's plan for the owner seat to answer: the home the unit is for and,
+for an install, every checkout it hosts, each as its real path, and the hosting opt-ins
+(--reason <text> is the short reason the card shows). --approval <request-id> runs that plan once
+the owner has answered: the answer is checked when the command starts and spent once, just
+before the daemon is changed. On a machine whose owner seat is pinned from another machine this
+is the only way, and the request is carried with team approvals export; restart and fault-watch
+take no request there yet.
 
 The daemon reads no credential store; the broker feature is not hosted in this build.
 
@@ -132,6 +148,8 @@ export type DaemonCommandSources = {
   heartbeatMs?: number;
   /** Injected for tests: never the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /** Injected for tests: the credential store an owner-seat answer is confirmed against. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   /** Injected for tests: how long `fault-watch` waits for the daemon's result. */
   faultWaitMs?: number;
   /** Injected for tests: the interval between result reads. */
@@ -152,6 +170,9 @@ export type DaemonCommandSources = {
   retireShuttle?: (label: string) => { ok: true } | { ok: false; why: string };
   /** Injected for tests: the runtime-home migration step of an install. */
   runtimeMigration?: (home: string, roots: readonly string[], dryRun: boolean) => RuntimeMigrationReport;
+  /** Injected for tests: the reaper `run` records at its start (src/orphan-reaper.ts); null
+   *  records none. Absent: read from this process's parent and the service manager's word. */
+  reaper?: ReaperRecord | null;
 };
 
 /** What a status reader answers: the reminders that read, and the entries the parser refused as
@@ -171,7 +192,19 @@ type Parsed = {
   dryRun: boolean;
   presence: boolean;
   watch: boolean;
+  sendServer: boolean;
+  noSendServer: boolean;
+  /** `--no-presence` / `--no-watch`: an install drops that opt-in from the installed unit. */
+  noPresence: boolean;
+  noWatch: boolean;
   startedBy: string | undefined;
+  /** The first of `--home`, `--root`, `--route`, `--reason` given a value that starts with `-`. */
+  optionLike: string | null;
+  /** `--request`: record the verb for the owner seat to answer. */
+  request: boolean;
+  /** `--approval <id>`: run the verb on the owner's signed answer to that request. */
+  approval: string | undefined;
+  reason: string | undefined;
   extra: string | undefined;
   /** The one-use token a chores child is started with. Internal: never a user's option. */
   inherited: string | undefined;
@@ -179,7 +212,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited'], ['json', 'dry-run', 'presence', 'watch']);
+  const args = readArgs(argv, ['home', 'root', 'started-by', 'route', 'inherited', 'approval', 'reason'], ['json', 'dry-run', 'presence', 'watch', 'send-server', 'no-presence', 'no-watch', 'no-send-server', 'request']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`. `chores` is the daemon's own child
@@ -218,11 +251,39 @@ function parse(argv: string[]): Parsed {
     dryRun: args.flags.has('dry-run'),
     presence: args.flags.has('presence'),
     watch: args.flags.has('watch'),
+    sendServer: args.flags.has('send-server'),
+    noSendServer: args.flags.has('no-send-server'),
+    noPresence: args.flags.has('no-presence'),
+    noWatch: args.flags.has('no-watch'),
     startedBy: args.values['started-by'],
+    optionLike: optionLikeValue(argv),
+    request: args.flags.has('request'),
+    approval: args.values['approval'],
+    reason: args.values['reason'],
     extra: args.rest[1],
     inherited: args.values['inherited'],
     error: args.error ?? null,
   };
+}
+
+/**
+ * The first folder, route or reason option whose value starts with `-`. Such a value reads as an
+ * option to anyone reading the line, so it is refused before anything is bound or run: what the
+ * owner is asked to answer is never a line that reads two ways.
+ */
+function optionLikeValue(argv: readonly string[]): string | null {
+  for (let index = 0; index < argv.length; index++) {
+    const word = argv[index] as string;
+    for (const name of ['home', 'root', 'route', 'reason']) {
+      if (word === `--${name}`) {
+        const value = argv[index + 1];
+        if (value !== undefined && value.startsWith('-')) return name;
+      } else if (word.startsWith(`--${name}=`) && word.slice(name.length + 3).startsWith('-')) {
+        return name;
+      }
+    }
+  }
+  return null;
 }
 
 function verbProblem(parsed: Parsed): string | null {
@@ -235,6 +296,13 @@ function verbProblem(parsed: Parsed): string | null {
   if (parsed.verb === 'run' && parsed.route !== undefined) return '--route belongs to fault-watch';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
+  if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.sendServer) return '--send-server belongs to run or install';
+  if (parsed.verb !== 'install' && parsed.noSendServer) return '--no-send-server belongs to install';
+  if (parsed.sendServer && parsed.noSendServer) return '--send-server and --no-send-server cannot both be given';
+  if (parsed.verb !== 'install' && parsed.noPresence) return '--no-presence belongs to install';
+  if (parsed.verb !== 'install' && parsed.noWatch) return '--no-watch belongs to install';
+  if (parsed.presence && parsed.noPresence) return '--presence and --no-presence cannot both be given';
+  if (parsed.watch && parsed.noWatch) return '--watch and --no-watch cannot both be given';
   if (parsed.verb === 'chores') {
     // The daemon's own child verb: it runs only from a one-use token, and every option a user
     // verb takes is refused rather than quietly ignored.
@@ -245,10 +313,24 @@ function verbProblem(parsed: Parsed): string | null {
     if (parsed.roots.length > 0) return 'chores takes no --root';
     if (parsed.startedBy !== undefined) return 'chores takes no --started-by';
     if (parsed.route !== undefined) return 'chores takes no --route';
-    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch) return 'chores takes no flags';
+    if (parsed.json || parsed.dryRun || parsed.presence || parsed.watch || parsed.request) return 'chores takes no flags';
+    if (parsed.approval !== undefined || parsed.reason !== undefined) return 'chores takes no --approval or --reason';
     return null;
   }
   if (parsed.inherited !== undefined) return '--inherited belongs to the daemon\'s own child';
+  if (parsed.optionLike !== null) return `--${parsed.optionLike} takes a value, not an option: a value that starts with "-" is refused`;
+  // The owner-seat door opens for install and uninstall only: restart and fault-watch stay the
+  // owner's, a general grant's or a dev-mode lead's.
+  const answered = parsed.verb === 'install' || parsed.verb === 'uninstall';
+  if (!answered && parsed.request) return '--request belongs to install or uninstall';
+  if (!answered && parsed.approval !== undefined) return '--approval belongs to install or uninstall';
+  if (parsed.request && parsed.approval !== undefined) return '--request asks the owner seat and --approval runs an answered request: pass one';
+  if (parsed.reason !== undefined && !parsed.request) return '--reason goes with --request';
+  // The installed unit names no checkout: it hosts the teams registered for this account. An
+  // owner-seat install binds what the unit runs, so it takes no --root that would read as more.
+  if ((parsed.request || parsed.approval !== undefined) && parsed.verb === 'install' && parsed.roots.length > 0) {
+    return 'an owner-seat install takes no --root: the installed unit hosts the teams registered for this account, not the checkouts a line names';
+  }
   if (parsed.verb !== 'install' && parsed.verb !== 'uninstall' && parsed.home !== undefined) {
     return '--home belongs to install or uninstall';
   }
@@ -302,7 +384,7 @@ function rootsOf(
   // explicit --root above is the manual path and is not rewritten into this list.
   if (verb === 'run' && parsed.startedBy === 'service-manager') {
     try {
-      return { roots: runningRegistryRoots(readTeams(home)).map((one) => one.root), fromRegistry: true };
+      return { roots: runningRegistryRoots(readTeams(home), home).map((one) => one.root), fromRegistry: true };
     } catch (error) {
       return {
         problem: error instanceof Error ? error.message : 'the team registry could not be read',
@@ -371,6 +453,138 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
  * `run` is not this gate: a no-terminal start by the service manager is `runAllowed`'s separate
  * answer, and no dev-mode setting admits a seat or a pane to it.
  */
+/**
+ * The owner-seat door of install and uninstall (`ownerRequestDoor`): `--request` records the
+ * verb's execution plan (`daemonPlan`), and `--approval <id>` admits the run on the owner's
+ * signed answer to exactly that plan. The answer is checked here with nothing claimed; `spend`
+ * claims it once, just before the daemon is changed, so a run refused before that keeps it. A dry
+ * run never spends. The plan the answer was checked against is the one the run executes: nothing
+ * is resolved again after the gate. No charter, no rule and no lead admits the daemon this way.
+ */
+type DaemonGate = { kind: 'allowed'; spend: () => boolean; plan: DaemonPlan | null } | { kind: 'requested' } | { kind: 'refused' };
+
+function daemonGate(io: Io, argv: readonly string[], sources: DaemonCommandSources, parsed: Parsed): DaemonGate {
+  if (!parsed.request && parsed.approval === undefined) {
+    return ownerAllows(io, sources, parsed.json, parsed.verb) ? { kind: 'allowed', spend: () => true, plan: null } : { kind: 'refused' };
+  }
+  const home = sources.home ?? homedir();
+  const plan = daemonPlan(io, parsed, home, (targetHome) => installedOptIns(managerOf(sources), targetHome));
+  if ('why' in plan) {
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.approval-refused', message: `${plan.why}; nothing was recorded or run`, repair: null });
+    return { kind: 'refused' };
+  }
+  const door = (dry: boolean) => ownerRequestDoor(
+    'daemon',
+    'team-daemon',
+    argv,
+    { request: parsed.request, approval: parsed.approval, dry, json: parsed.json, ...(parsed.reason === undefined ? {} : { reason: parsed.reason }) },
+    io,
+    { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
+    { root: plan.targetHome, team: 'daemon', head: null, words: plan.words },
+  );
+  const step = door(true);
+  if (step.kind === 'requested') return { kind: 'requested' };
+  if (step.kind !== 'admitted') return { kind: 'refused' };
+  return { kind: 'allowed', spend: () => parsed.dryRun || door(false).kind === 'admitted', plan };
+}
+
+/**
+ * One install or uninstall, as it will run: the home the unit is for (the `--home` folder, or this
+ * home, as its real path) and, for an install, its hosting opt-ins. The installed unit names no
+ * checkout — the daemon it starts hosts the teams registered for this account, read at each start
+ * and heartbeat — so the plan binds the registered checkouts as they are when the request is made,
+ * for the owner to read and as the install's own list; a registry that changed since admits
+ * nothing. A folder that does not resolve refuses the plan. `--dry-run` is not bound: a dry run
+ * spends nothing.
+ */
+type DaemonPlan = {
+  targetHome: string;
+  realTargetHome: string | null;
+  roots: string[] | null;
+  words: string[];
+  /** For an install: the opt-ins the unit will run with, the explicit flags over the installed
+   *  unit's own. Bound into `words`, so an answer to one effective install never runs another. */
+  optIns?: OptIns;
+};
+
+type OptIns = { presence: boolean; watch: boolean; sendServer: boolean };
+
+/** The opt-ins the unit installed for `targetHome` runs with; none when it cannot be read. */
+function installedOptIns(manager: ServiceManager | null, targetHome: string): OptIns {
+  let words: readonly string[] = [];
+  try {
+    words = manager?.unit(targetHome)?.programArguments ?? [];
+  } catch {
+    // An unreadable unit keeps nothing: the install writes the opt-ins it names.
+  }
+  return { presence: words.includes('--presence'), watch: words.includes('--watch'), sendServer: words.includes('--send-server') };
+}
+
+/** An install keeps the opt-ins the installed unit already runs with and adds the ones it names;
+ *  only `--no-presence` / `--no-watch` drop one. */
+function effectiveOptIns(parsed: Parsed, installed: OptIns): OptIns {
+  return {
+    presence: parsed.presence || (!parsed.noPresence && installed.presence),
+    watch: parsed.watch || (!parsed.noWatch && installed.watch),
+    sendServer: parsed.sendServer || (!parsed.noSendServer && installed.sendServer),
+  };
+}
+
+function managerOf(sources: DaemonCommandSources): ServiceManager | null {
+  return sources.service !== undefined
+    ? sources.service
+    : systemServiceManager(sources.accountHome !== undefined ? { accountHome: sources.accountHome } : {});
+}
+
+function daemonPlan(io: Io, parsed: Parsed, home: string, installedFor?: (targetHome: string) => OptIns): DaemonPlan | { why: string } {
+  let targetHome: string;
+  let realTargetHome: string | null = null;
+  if (parsed.home !== undefined) {
+    const checked = homeTargetProblem(parsed.home, io.cwd);
+    if (!checked.ok) return { why: checked.why };
+    targetHome = checked.realTarget;
+    realTargetHome = checked.realTarget;
+  } else {
+    try {
+      targetHome = realpathSync(home);
+    } catch {
+      return { why: 'this home cannot be resolved' };
+    }
+  }
+  const words: string[] = [parsed.verb ?? '', `home=${targetHome}`];
+  let roots: string[] | null = null;
+  if (parsed.verb === 'install') {
+    let registered: string[];
+    try {
+      registered = runningRegistryRoots(readTeams(targetHome), targetHome).map((one) => one.root);
+    } catch (error) {
+      return { why: error instanceof Error ? error.message : 'the team registry could not be read' };
+    }
+    roots = [];
+    for (const root of registered) {
+      try {
+        roots.push(realpathSync(root));
+      } catch {
+        return { why: `the registered checkout ${root} cannot be resolved` };
+      }
+    }
+    for (const root of roots) words.push(`registered=${root}`);
+    if (parsed.presence) words.push('presence');
+    if (parsed.watch) words.push('watch');
+    if (parsed.noPresence) words.push('no-presence');
+    if (parsed.noWatch) words.push('no-watch');
+    if (parsed.sendServer) words.push('send-server');
+    if (parsed.noSendServer) words.push('no-send-server');
+    // What the unit will run with, read from the installed unit now: an answer to this plan
+    // admits only this effective install, and a unit whose opt-ins changed since admits nothing.
+    const optIns = effectiveOptIns(parsed, installedFor === undefined ? { presence: false, watch: false, sendServer: false } : installedFor(targetHome));
+    words.push(`effective-presence=${optIns.presence ? 'on' : 'off'}`, `effective-watch=${optIns.watch ? 'on' : 'off'}`);
+    if (optIns.sendServer) words.push('effective-send-server=on');
+    return { targetHome, realTargetHome, roots, words, optIns };
+  }
+  return { targetHome, realTargetHome, roots, words };
+}
+
 function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb: string | undefined): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
@@ -392,6 +606,7 @@ function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean, verb:
   const message = `only the owner, a general grant naming daemon, or a lead in development mode installs, restarts or removes the machine daemon; this call is ${describeCaller(caller)}`;
   const lift = devModeOwnerLiftAtCwd(io, {
     command: 'daemon',
+    gate: verb ?? 'daemon',
     refusal: message,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     ...(sources.now !== undefined ? { now: sources.now() } : {}),
@@ -811,7 +1026,10 @@ const INSTALL_STEPS: readonly string[] = [
   'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
   'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
   'if it still cannot start, the previous unit is put back and its daemon started again',
-  'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
+  // While retirement is held the install removes no shuttle unit, and the plan says so.
+  SHUTTLE_RETIREMENT_HELD
+    ? 'the shuttle units are left as they are: their retirement is held until the mailbox router can route an ask'
+    : 'once the mailbox router has reported a heartbeat, the shuttle units are stopped and removed',
   'once the new daemon answers, the kit folders still standing in the lobby move into the runtime home, each held while a loaded unit names it',
 ];
 
@@ -857,6 +1075,7 @@ function installAgain(roots: readonly string[], parsed: Parsed): string {
   for (const root of roots) parts.push('--root', shellQuote(root));
   if (parsed.presence) parts.push('--presence');
   if (parsed.watch) parts.push('--watch');
+  if (parsed.sendServer) parts.push('--send-server');
   return parts.join(' ');
 }
 
@@ -1033,9 +1252,63 @@ const RESTART_STEPS: readonly string[] = [
   'nothing is written: the definition, its checkouts and its opt-ins stay the last install\'s',
 ];
 
+/** What an install says when the service manager stops this user's services at logout. */
+const STOPS_AT_LOGOUT = 'the system\'s service manager stops this daemon when this user\'s last login session ends; it keeps running after logout only once the owner lets this user\'s services run without a login session (a setting of the system, which this install does not change)';
+
 /** The command that writes and starts a unit when a restart leaves no daemon: an install is the
  *  whole recovery, and naming each checkout keeps the rerun's hosted set the owner's choice. */
 const RESTART_REPAIR = 'run `team daemon install --root <folder>` with each checkout to host';
+
+/** The retained runtime entry a run line names (`<copy>/dist/cli.js`), or null. */
+function copyEntryOf(words: readonly string[] | null | undefined): string | null {
+  return words?.find((word) => /\/daemon-runtime\/[0-9a-f]{64}\//.test(word)) ?? null;
+}
+
+/**
+ * Whether the installed unit runs an older copy than the installed program would make now, and
+ * if so the refresh: the same program an install would write, with the unit's own `--presence`
+ * and `--watch` and this run's roots. `current` when the copy is the installed program's (or
+ * nothing can be compared: the plain restart runs), `refreshed` when an install replaced it,
+ * `failed` when that install failed (it has already said why).
+ */
+function refreshStaleCopy(
+  manager: ServiceManager,
+  io: Io,
+  parsed: Parsed,
+  home: string,
+  sources: DaemonCommandSources,
+): 'current' | 'refreshed' | 'failed' {
+  const words = manager.unit(home)?.programArguments ?? null;
+  const running = copyEntryOf(words);
+  const program = localProgram(sources);
+  if (words === null || running === null || program === null) return 'current';
+  const named = rootsOf({ ...parsed, roots: [] }, io, home, 'install');
+  if ('problem' in named) return 'current';
+  const fullProgram: ServiceProgram = {
+    ...program,
+    roots: named.roots,
+    ...(words.includes('--presence') ? { presence: true } : {}),
+    ...(words.includes('--watch') ? { watch: true } : {}),
+    ...(words.includes('--send-server') ? { sendServer: true } : {}),
+    ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
+  };
+  let planned: string | null;
+  try {
+    planned = copyEntryOf(manager.plan(home, fullProgram).program);
+  } catch {
+    return 'current';
+  }
+  if (planned === null || planned === running) return 'current';
+  const installed = manager.install(home, fullProgram);
+  if (installed.ok) return 'refreshed';
+  appendDaemonLog(home, `restart: refreshing the runtime copy failed: ${installed.detail ?? installed.why}`, sources.now?.() ?? new Date());
+  refuse(io, parsed.json, 'daemon', {
+    id: 'daemon.restart-refresh-failed',
+    message: `the installed program changed and its runtime copy could not be refreshed: ${installed.why}`,
+    repair: RESTART_REPAIR,
+  });
+  return 'failed';
+}
 
 /**
  * `team daemon restart`: stops the daemon the service manager holds under the installed unit and
@@ -1069,7 +1342,20 @@ async function restartInstalled(
     // exit: daemon.restart-dry-run
     return 0;
   }
-  const restarted = manager.restart(home);
+  // A restart reloads the installed unit, and that unit runs the retained copy an install made.
+  // When the installed program has changed since (a new build), reloading the same unit runs the
+  // old copy: the new code never reaches the daemon (seen 2026-11-12: a day of builds that a
+  // restart never loaded). The restart then refreshes the copy as an install does, with the
+  // installed unit's own opt-ins (`--presence`, `--watch`) and roots, and reports that it did.
+  const refreshed = refreshStaleCopy(manager, io, parsed, home, sources);
+  if (refreshed === 'failed') {
+    // exit: daemon.restart-refresh-failed
+    return 1;
+  }
+  const restarted = refreshed === 'refreshed'
+    ? { ok: true as const, unitPath: manager.unitPath(home), undo: () => manager.restart(home) }
+    : manager.restart(home);
+  if (refreshed === 'refreshed' && !parsed.json) io.stdout('team daemon: the installed program changed since the last install; its runtime copy was refreshed\n');
   if (!restarted.ok) {
     appendDaemonLog(home, `restart: ${restarted.detail ?? restarted.why}`, sources.now?.() ?? new Date());
     if (restarted.reason === 'not-installed') {
@@ -1092,9 +1378,31 @@ async function restartInstalled(
     return 1;
   }
   // A load the manager accepted is registration, not proof that a program runs: the restarted
-  // daemon must answer before this restart is called one. A restart keeps the short confirmation
-  // an install used before the cold-start window: the unit it loads is one that has run before.
-  if ((await daemonAnswers(home, sources)).answered) {
+  // daemon must answer before this restart is called one. It gets the same cold-start window an
+  // install gives: a daemon hosting several checkouts on a loaded machine answers 10 to 30 s
+  // after its load (measured 2026-11-12: the restarted daemon answered about 10 s in, after the
+  // short window had stopped it and called the machine empty). A daemon still alive and silent
+  // at the end of the window is reported as starting, never stopped.
+  const answer = await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS, manager });
+  if (!answer.answered && answer.starting) {
+    appendDaemonLog(home, 'restart: the restarted daemon is alive and has not answered yet; left starting', sources.now?.() ?? new Date());
+    if (parsed.json) {
+      writeJson(io, 'team.daemon-restart', {
+        format: 1,
+        command: 'restart',
+        dry_run: false,
+        restarted: true,
+        starting: true,
+        unit_path: restarted.unitPath,
+        ...(refreshed === 'refreshed' ? { refreshed: true } : {}),
+      });
+    } else {
+      io.stdout('team daemon: restarted; the daemon is alive and still starting (it has not answered yet); `team daemon status` shows when it does\n');
+    }
+    // exit: daemon.restart-starting
+    return 0;
+  }
+  if (answer.answered) {
     if (parsed.json) {
       writeJson(io, 'team.daemon-restart', {
         format: 1,
@@ -1102,6 +1410,7 @@ async function restartInstalled(
         dry_run: false,
         restarted: true,
         unit_path: restarted.unitPath,
+        ...(refreshed === 'refreshed' ? { refreshed: true } : {}),
       });
     } else {
       io.stdout('team daemon: restarted; the system\'s service manager runs the installed unit again\n');
@@ -1111,7 +1420,7 @@ async function restartInstalled(
   }
   appendDaemonLog(home, 'restart: the restarted daemon did not answer the health probe', sources.now?.() ?? new Date());
   const undone = restarted.undo();
-  if (undone.ok && (await daemonAnswers(home, sources)).answered) {
+  if (undone.ok && (await daemonAnswers(home, sources, { waits: COLD_START_WAIT_MS })).answered) {
     refuse(io, parsed.json, 'daemon', {
       id: 'daemon.restart-rolled-back',
       message: 'the restarted daemon did not answer the health probe; the installed unit was started again and its daemon answers',
@@ -1253,6 +1562,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     const health = await daemonHealth(home, {
       ...(sources.now !== undefined ? { now: sources.now } : {}),
     });
+    let skippedTeams: SkippedRegistryTeam[] = [];
+    let registryError: string | undefined;
+    try { skippedTeams = registryHosting(readTeams(home), home).skipped; }
+    catch { registryError = 'the team registry cannot be read; skipped teams are unknown'; }
     if (parsed.json) {
       const reminders = remindersForStatus(sources.reminders ?? configuredReminders(home), home, sources.now);
       writeJson(io, 'team.daemon-status', {
@@ -1260,9 +1573,12 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         daemon: health,
         reminders: reminders.reminders,
         ...(reminders.error === null ? {} : { remindersError: reminders.error }),
+        ...(skippedTeams.length === 0 ? {} : { skippedTeams }),
+        ...(registryError === undefined ? {} : { registryError }),
       });
     } else {
-      io.stdout(`${statusLine(health)}\n`);
+      const skipped = skippedTeams.map((team) => `skipped team ${plainLine(team.team)} (${plainLine(team.session)}): ${plainLine(team.why)}`);
+      io.stdout(`${[statusLine(health), ...skipped, ...(registryError === undefined ? [] : [registryError])].join('; ')}\n`);
     }
     // exit: daemon.status
     return 0;
@@ -1305,12 +1621,19 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
           for (const problem of read.problems ?? []) log(problem);
           return read.specs;
         };
+    // The process a closed pane's orphans are handed to besides pid 1, recorded once at the
+    // start so every `team` command that closes a workspace can end its own orphans there.
+    const reaper = sources.reaper !== undefined ? sources.reaper : daemonReaperAtStart(startedBy);
     const started = await (sources.start ?? startMachineDaemon)({
       home,
       roots,
+      ...(reaper === null ? {} : { reaper }),
+      // The folder this process answers for its temporary files: the send endpoint looks for a
+      // Claude Code seat's session socket under it, and `team doctor` compares it with the seats'.
+      tempDir: tmpdir(),
       ...(fromRegistry ? {
         rootsFromRegistry: true,
-        runningRoots: () => runningRegistryRoots(readTeams(home)).map((one) => one.root),
+        runningRoots: () => runningRegistryRoots(readTeams(home), home).map((one) => one.root),
       } : {}),
       startedBy,
       reminders: reminderReader,
@@ -1334,6 +1657,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         // malformed or earlier-incarnation record stays null and the seat is reported unproven;
         // no home folder is consulted and no shared endpoint is guessed in its place.
         presenceCodexEndpoint: (route, stateDir, seat) => currentCodexEndpoint(stateDir, route.session, seat),
+        // The same record, read in the target's own state snapshot with the binding it names.
+        presenceCodexEndpointFromState: true,
       } : {}),
       // One hosted watch per route on the same heartbeat. Its outbound effects stay behind the
       // shared authority verifier and the direct sender, and no presence pipeline is implied: a
@@ -1368,6 +1693,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     io.stdout(
       `team daemon: running (pid ${String(process.pid)}); socket ${machine.socketPath}; ${rootsSummary(machine.roots).join('; ')}; broker not hosted\n`,
     );
+    // `--send-server`: the warm send host, a supervised child (src/host/supervise.ts).
+    const sendServer = parsed.sendServer
+      ? (await import('../host/supervise.ts')).superviseSendServer({
+          home,
+          log: (line) => appendDaemonLog(home, line, sources.now?.() ?? new Date()),
+        })
+      : null;
     let disarm = (): void => {};
     if (fatalWhy === null) {
       await new Promise<void>((settle) => {
@@ -1378,6 +1710,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       io.stderr(`team daemon: ${fatalWhy}\n`);
     }
     disarm();
+    await sendServer?.stop();
     await machine.close();
     appendDaemonLog(home, 'daemon stopped', sources.now?.() ?? new Date());
     if (fatalWhy !== null) {
@@ -1395,11 +1728,19 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // admissions widen the gate through `ownerAllows`: the owner's dev-mode lift admits a placed
   // orchestrator, and install and restart also admit a verified general grant
   // whose ops name `daemon`. status returned above, and run has its own gate.
-  if (!ownerAllows(io, sources, parsed.json, parsed.verb)) {
+  const gate = daemonGate(io, argv, sources, parsed);
+  if (gate.kind === 'requested') {
+    // exit: daemon.approval-requested
+    return 0;
+  }
+  if (gate.kind === 'refused') {
     // exit: daemon.not-owner
     // exit: daemon.grant-refused
+    // exit: daemon.approval-refused
     return 1;
   }
+  const spent = (): boolean => gate.spend();
+  const answeredPlan = gate.plan;
 
   if (parsed.verb === 'fault-watch') {
     return await faultWatch(parsed, io, sources, home);
@@ -1423,9 +1764,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return await restartInstalled(manager, io, parsed, home, sources);
   }
 
-  let targetHome = home;
-  let realTargetHome: string | null = null;
-  if (parsed.home !== undefined) {
+  let targetHome = answeredPlan === null ? home : answeredPlan.targetHome;
+  let realTargetHome: string | null = answeredPlan === null ? null : answeredPlan.realTargetHome;
+  if (answeredPlan === null && parsed.home !== undefined) {
     const checkedHome = homeTargetProblem(parsed.home, io.cwd);
     if (!checkedHome.ok) {
       return usageRefused(io, parsed, checkedHome.why);
@@ -1452,6 +1793,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   if (parsed.verb === 'uninstall') {
+    // exit: daemon.approval-refused
+    if (!spent()) return 1;
     const removed = manager.uninstall(targetHome);
     if (!removed.ok) {
       appendDaemonLog(targetHome, `uninstall: ${removed.detail ?? removed.why}`, sources.now?.() ?? new Date());
@@ -1476,7 +1819,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
 
   // install
-  const named = rootsOf(parsed, io, targetHome, 'install');
+  // An answered install's list is the registered checkouts its plan read and the answer bound;
+  // the unit itself names none (it hosts the teams registered for this account at each start).
+  const named = answeredPlan?.roots != null ? { roots: answeredPlan.roots } : rootsOf(parsed, io, targetHome, 'install');
   if ('problem' in named) {
     refuse(io, parsed.json, 'daemon', { id: 'daemon.no-root', message: named.problem, repair: null });
     // exit: daemon.no-root
@@ -1492,14 +1837,39 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.entry-missing
     return 1;
   }
+  // An install keeps the opt-ins the installed unit already runs with, and adds the ones it
+  // names; only `--no-presence` / `--no-watch` drop one. A plain install that dropped them
+  // silently stopped presence hosting for three hours (2026-11-12) and every team's watch, and
+  // with it every confined seat's relayed send, for the rest of a day (2026-11-17).
+  // An answered request runs the opt-ins its plan bound (checked against the unit at the gate);
+  // every other install reads them from the unit now.
+  const unitOptIns = installedOptIns(manager, targetHome);
+  const { presence, watch, sendServer } = answeredPlan?.optIns ?? effectiveOptIns(parsed, unitOptIns);
+  const kept = [
+    !parsed.presence && presence && unitOptIns.presence ? '--presence' : null,
+    !parsed.watch && watch && unitOptIns.watch ? '--watch' : null,
+    !parsed.sendServer && sendServer && unitOptIns.sendServer ? '--send-server' : null,
+  ].filter((word) => word !== null);
+  if (kept.length > 0) {
+    io.stderr(`team daemon: kept ${kept.join(' and ')} from the installed unit (drop with ${kept.map((word) => word.replace('--', '--no-')).join(' or ')})\n`);
+  }
+  const dropped = [
+    !presence && unitOptIns.presence ? '--presence' : null,
+    !watch && unitOptIns.watch ? '--watch' : null,
+    !sendServer && unitOptIns.sendServer ? '--send-server' : null,
+  ].filter((word) => word !== null);
+  if (dropped.length > 0) {
+    io.stderr(`team daemon: dropped ${dropped.join(' and ')} from the installed unit, as asked\n`);
+  }
   const fullProgram: ServiceProgram = {
     ...program,
     roots: named.roots,
     // The installed unit is the service-managed run lifecycle; the flags an owner gives here are
     // written into its run command, so presence and watch hosting survive login restarts. A plain
     // install writes no flag and starts exactly the daemon it did before.
-    ...(parsed.presence ? { presence: true } : {}),
-    ...(parsed.watch ? { watch: true } : {}),
+    ...(presence ? { presence: true } : {}),
+    ...(watch ? { watch: true } : {}),
+    ...(sendServer ? { sendServer: true } : {}),
     // The general grant and client key that admitted this install (io.general) are the door's
     // for this run and are never written into the unit: the service-started run is admitted by
     // its own `--started-by service-manager`, and a definition that named a key or a grant would
@@ -1543,6 +1913,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // exit: daemon.dry-run
     return 0;
   }
+  // exit: daemon.approval-refused
+  if (!spent()) return 1;
   const installed = manager.install(targetHome, fullProgram);
   if (!installed.ok) {
     return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, targetHome, sources, manager);
@@ -1601,6 +1973,13 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   // still names stays where it is. A failed or rolled-back install above never reaches
   // this line, so the old daemon and the old folders stay a consistent pair.
   const migration = runRuntimeMigrationStep(targetHome, named.roots, false, manager, sources);
+  // A daemon the service manager stops at logout is not the machine daemon a headless machine
+  // needs: the owner reaching it over a remote shell would lose it at every disconnect. The
+  // install never changes that setting itself, so it says so — in neutral words here, with the
+  // adapter's own account in the log.
+  if (installed.stopsAtLogout !== undefined) {
+    appendDaemonLog(targetHome, `install: ${installed.stopsAtLogout.detail}`, sources.now?.() ?? new Date());
+  }
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
       format: 1,
@@ -1615,6 +1994,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       // The removal is never silent: a structured run says it in a field, a plain run below in
       // a sentence.
       ...(installed.droppedAuthorization === true ? { dropped_authorization: true } : {}),
+      ...(installed.stopsAtLogout !== undefined ? { stops_at_logout: true } : {}),
       runtime_migration: migration,
     });
   } else {
@@ -1623,6 +2003,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     );
     if (installed.droppedAuthorization === true) {
       io.stdout('team daemon: the earlier unit named a client key or a general grant; this unit was rewritten without either\n');
+    }
+    if (installed.stopsAtLogout !== undefined) {
+      io.stdout(`team daemon: ${STOPS_AT_LOGOUT}\n`);
     }
     for (const line of runtimeMigrationLines(migration)) io.stdout(`team daemon: ${line}\n`);
   }

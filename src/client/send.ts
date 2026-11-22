@@ -14,6 +14,9 @@
 // client invocation with no delivery callback (the tests that exercise the record alone) writes
 // the drop and stops.
 
+import { withSignedIdentity } from '../comms/identity.ts';
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +24,7 @@ import { logLine } from '../log.ts';
 import type { Args } from '../args.ts';
 import type { Io } from '../io.ts';
 import type { SendHost } from '../commands/send.ts';
-import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
+import { ensureRecord, signRecord, stampedPayload, type RecordPayload } from '../send/record.ts';
 import { claimClientRequest } from './replay.ts';
 import { sendWithBundle } from './bundles.ts';
 import { clientPaneGuard } from './pane-guard.ts';
@@ -37,6 +40,7 @@ import {
   type ClientGrantRecord,
 } from './records.ts';
 import { verifyClientRequest, type ClientRequest } from './verify.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 /** The seat a client grant addresses when the team file's `clients:` names none: the grant's
  *  signed seat is the one it addresses, checked against that list at every use. */
@@ -74,7 +78,7 @@ export type ClientSendDelivery = (sent: {
 }) => Promise<void>;
 
 /**
- * Resolves `orchestrator@floor` to the entity coordinator the grant signs. The address is
+ * Resolves `orchestrator@<entity>` to the entity coordinator the grant signs. The address is
  * compared to the one admitted form, never parsed into a broader destination; the registry read
  * must still return the same coordinator team and registered agent id that the signed grant
  * names. Anything else is refused here.
@@ -112,7 +116,7 @@ export function resolveClientTarget(
       teamId: coordinator.teamId,
       teamRoot: coordinator.teamRoot,
       session: coordinator.session,
-      dropDir: join(coordinator.teamRoot, '.agents', 'send-drops', coordinator.session, coordinator.recipientSeat),
+      dropDir: seatDropDir(coordinator.teamRoot, coordinator.session, coordinator.recipientSeat),
     },
   };
 }
@@ -133,7 +137,8 @@ export function writeClientDrop(input: {
   rule?: string;
 }): { ok: true; path: string; id: string; recipientId: string; record: RecordPayload } | { ok: false; why: string } {
   const id = input.id ?? randomUUID();
-  const payload: RecordPayload = {
+  // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
+  const payload: RecordPayload = withSignedIdentity(stampedPayload({
     kind: 'message',
     id,
     to: input.target.recipientSeat,
@@ -147,14 +152,18 @@ export function writeClientDrop(input: {
     rule: input.rule ?? CLIENT_RULE,
     thread: id,
     from_client: { client_id: input.grant.clientId, grant_id: input.grant.grantId },
-  };
+  }, input.home), input.home);
   let signed;
   try {
     signed = signRecord(payload, input.home);
   } catch {
     return { ok: false, why: 'the drop could not be signed with the checkout message key' };
   }
-  const written = ensureRecord(input.target.dropDir, signed);
+  const record = signed;
+  const { value: written } = appendDeliverySync({ dropDir: input.target.dropDir, record }, () => {
+    const result = ensureRecord(input.target.dropDir, record);
+    return { ok: result.ok, value: result };
+  }, { home: input.home, log: queueLog(input.target.dropDir) });
   if (!written.ok) return { ok: false, why: written.reason };
   return { ok: true, path: written.path, id, recipientId: input.target.recipientId, record: payload };
 }

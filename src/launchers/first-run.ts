@@ -13,12 +13,11 @@ export type FirstRunVerdict =
  *  repo documents; the other three are the survey, telemetry, and tips prompts. */
 export const FIRST_RUN_CLASSES: readonly FirstRunClass[] = ['survey', 'telemetry', 'tips', 'feature-settings'];
 
-/** Codex's documented own-server launch. The profile's feature pin exists so seats
- *  that share one background server do not meet "incompatible feature settings".
- *  This minute does not attach to that shared server: the seat starts its own. */
+/** Codex's measured own-server launch through 0.167.0. The seat starts its own
+ *  app-server without a feature override, avoiding the shared server's settings dialog. */
 const CODEX_OWN_SERVER = {
   from: '0.157.0',
-  to: '0.161.0',
+  to: '0.167.0',
   mechanism: "the seat's own app-server (--listen), not a shared server (--remote)",
 } as const;
 

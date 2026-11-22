@@ -1,3 +1,10 @@
+import { takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
+import { recordStampAt } from './record.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+import { exposeBody, exposurePointer } from '../queue/exposure.ts';
+import { recordDeliveredBody, RUNTIME_WAKE_MAX } from './readable-wake.ts';
+import { typedWakeMaxFor } from './readable-wake.ts';
 import { refuseTyping } from './no-pane-messaging.ts';
 // The `team send` delivery daemon (`<storeDir>/send/daemon.sock` and `daemon.lock`).
 //
@@ -9,25 +16,12 @@ import { refuseTyping } from './no-pane-messaging.ts';
 // durable copy through the relay package under `<storeDir>/drops/<session>/<seat>/<id>`, and
 // appends `0600` JSONL records to `<storeDir>/messages.jsonl`.
 import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
-import { connect } from 'node:net';
+import { closeSync, constants, existsSync, lstatSync, readFileSync } from 'node:fs';
+import { chmodSync, fchmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { stage as relayStage } from '../../packages/relay/index.js';
+import { relayStage } from './relay-stage.ts';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -50,10 +44,11 @@ import { classify, readScreen } from '../watch/screen.ts';
 import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliver.ts';
+import { tokenUnavailable } from '../quota/token-fallback.ts';
 import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
-import { attributedBody } from './sender-claim.ts';
+import { attributedBody, renderedIdentity } from './sender-claim.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from './frame.ts';
 import { releaseWake, reserveWake, wakePath } from './wake-marker.ts';
@@ -61,6 +56,7 @@ import {
   declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketEligible, socketHeldReason,
   socketSkipReason,
 } from './inbound.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -109,7 +105,10 @@ export const realDaemonHost: DaemonHost = {
   agents: async (session) =>
     (await agentListAsync(session, HOST_READ))?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane })) ?? null,
   processInfo: (session, pane) => paneProcessesAsync(pane, session, HOST_READ),
-  socketsDir: join(tmpdir(), 'cc-socks'),
+  // Read when a send looks, not at module load (the send host's per-request temp folder).
+  get socketsDir() { return join(tmpdir(), 'cc-socks'); },
+  // A fixture that assigns a folder replaces the reading with that plain value.
+  set socketsDir(value: string) { Object.defineProperty(this, 'socketsDir', { value, writable: true, enumerable: true, configurable: true }); },
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
     // No pane messaging: the send endpoint never types (src/send/no-pane-messaging.ts).
@@ -158,9 +157,6 @@ export type DaemonSendRequest = {
   from_id?: string | null;
   /** The sender's one-line subject (`--subject`): a display field, never the summary. */
   subject?: string;
-  /** The `message-display` header's sender name, as the caller resolved it (the seat's nickname,
-   *  or its seat name). Absent, the daemon reads the team file's nickname, then the seat name. */
-  name?: string;
   /** The verified admission rule. The daemon does not read one out of the body. */
   rule?: string;
   /** The receiving team's `message-display` template as the caller read it; absent, the daemon
@@ -419,39 +415,46 @@ function acquireDaemonLock(
 }
 
 /** Probes `<socketPath>` with `{ v: 1, op: 'ping' }`. Resolves `true` when a live daemon answers `pong`. */
-export function probeDaemonSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
+export async function probeDaemonSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
+  return (await probeDaemonSocketReading(socketPath, timeoutMs)) === 'answered';
+}
+
+/** The same probe, saying how it ended: answered; refused (no socket, a connection error, a
+ *  close or a reply that is no pong: the endpoint said no); or timed out (no word at all within
+ *  the bound, which an endpoint sharing a busy event loop cannot be blamed for on its own). */
+export function probeDaemonSocketReading(socketPath: string, timeoutMs = 400): Promise<'answered' | 'refused' | 'timeout'> {
   return new Promise((resolve) => {
     if (heldAt(socketPath) !== 'socket') {
-      resolve(false);
+      resolve('refused');
       return;
     }
-    const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;
-    const finish = (ok: boolean): void => {
+    const finish = (how: 'answered' | 'refused' | 'timeout'): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      resolve(ok);
+      resolve(how);
     };
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    socket.on('error', () => finish(false));
-    socket.on('connect', () => {
-      socket.write(`${JSON.stringify({ v: 1, op: 'ping' })}\n`);
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, {
+      open: (conn) => conn.write(`${JSON.stringify({ v: 1, op: 'ping' })}\n`),
+      text: (chunk) => {
+        buffer += chunk;
+        const nl = buffer.indexOf('\n');
+        if (nl === -1) return;
+        try {
+          const parsed = JSON.parse(buffer.slice(0, nl)) as { ok?: unknown; pong?: unknown };
+          finish(parsed.ok === true && parsed.pong === true ? 'answered' : 'refused');
+        } catch {
+          finish('refused');
+        }
+      },
+      close: () => finish('refused'),
     });
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const nl = buffer.indexOf('\n');
-      if (nl === -1) return;
-      try {
-        const parsed = JSON.parse(buffer.slice(0, nl)) as { ok?: unknown; pong?: unknown };
-        finish(parsed.ok === true && parsed.pong === true);
-      } catch {
-        finish(false);
-      }
-    });
-    socket.on('close', () => finish(false));
+    const timer = setTimeout(() => finish('timeout'), timeoutMs);
+    Bun.connect(options).catch(refused);
   });
 }
 
@@ -466,7 +469,7 @@ export function requestDaemon(
       resolve(null);
       return;
     }
-    const socket = connect({ path: socketPath });
+    hostedCommit('Bun.connect');
     let buffer = '';
     let settled = false;
     const finish = (response: DaemonResponse | null): void => {
@@ -476,23 +479,24 @@ export function requestDaemon(
       socket.destroy();
       resolve(response);
     };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, {
+      open: (conn) => conn.write(`${JSON.stringify(request)}\n`),
+      text: (chunk) => {
+        buffer += chunk;
+        const nl = buffer.indexOf('\n');
+        if (nl === -1) return;
+        try {
+          const parsed = JSON.parse(buffer.slice(0, nl)) as DaemonResponse;
+          finish(parsed);
+        } catch {
+          finish(null);
+        }
+      },
+      close: () => finish(null),
+    });
     const timer = setTimeout(() => finish(null), timeoutMs);
-    socket.on('error', () => finish(null));
-    socket.on('connect', () => {
-      socket.write(`${JSON.stringify(request)}\n`);
-    });
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      const nl = buffer.indexOf('\n');
-      if (nl === -1) return;
-      try {
-        const parsed = JSON.parse(buffer.slice(0, nl)) as DaemonResponse;
-        finish(parsed);
-      } catch {
-        finish(null);
-      }
-    });
-    socket.on('close', () => finish(null));
+    Bun.connect(options).catch(refused);
   });
 }
 
@@ -739,6 +743,24 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
     // through 0.5.8 it refused every seat but the orchestrator, so with the daemon up no builder
     // or reviewer could send at all, whatever the rules admitted).
     const sender = typeof request.from === 'string' ? request.from : '';
+    // The team this endpoint was started for may be older than the record: a seat added while
+    // the daemon runs is not in it. When the sender or the recipient is not found, the team is
+    // read again from its record once, and the fresh copy answers this request and the next.
+    const knows = (team: TeamFile): boolean =>
+      (sender === 'owner' || sender === team.orchestrator || team.seats.some((s) => s.name === sender))
+      && team.seats.some((s) => s.name === seatName);
+    // A recipient the copy holds as stopped may have been started since (`team add` clears the
+    // mark in the record), and refusing it on the old copy would keep it unreachable until a
+    // daemon restart (the Gemini tester, 2026-11-12): that copy is read again too.
+    const staleStop = input.team.seats.some((s) => s.name === seatName && s.stopped === true);
+    if (!knows(input.team) || staleStop) {
+      try {
+        const fresh = readTeamConfig(input.root, { home: host.home });
+        if (fresh.ok && fresh.team.session === input.team.session && fresh.team.project === input.team.project) {
+          input.team = fresh.team;
+        }
+      } catch { /* keep the team the endpoint has */ }
+    }
     if (sender !== 'owner' && sender !== input.team.orchestrator && !input.team.seats.some((s) => s.name === sender)) {
       return Promise.resolve({
         v: 1,
@@ -812,11 +834,13 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       if (trigger === null || trigger.trim().length === 0) {
         return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is empty; nothing was typed`));
       }
-      if (/[\u0000-\u001f\u007f]/.test(trigger)) {
+      if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(trigger)) {
         return Promise.resolve(refuseTyped(`${seatName}: the typed wake line carries a control character; one line is typed, nothing else`));
       }
-      if (trigger.length > TRIGGER_MAX) {
-        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is past the measured ${String(TRIGGER_MAX)} characters; nothing was typed`));
+      // The seat's CLI's own measured limit (a profile's `typed_wake_max`; 200 when it names none).
+      const typedMax = Math.max(TRIGGER_MAX, typedWakeMaxFor(configured.cli));
+      if (Buffer.byteLength(trigger, 'utf8') > typedMax) {
+        return Promise.resolve(refuseTyped(`${seatName}: the typed wake line is past the measured ${String(typedMax)} bytes; nothing was typed`));
       }
       if ((profileFor(configured.cli)?.typedWake ?? null) === null) {
         return Promise.resolve(refuseTyped(`${seatName} runs ${configured.cli}: its profile declares no typed wake; nothing was typed`));
@@ -843,6 +867,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
       if (!dropLadder.ok) {
         return Promise.resolve(refuseTyped(`${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`));
       }
+      hostedCommit('relay stage');
       return relayStage(
         { dir: dropLadder.leaf, name: handoffId },
         { id: handoffId, record: request.body },
@@ -964,6 +989,7 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: the drop file could not be written (${dropLadder.reason}); nothing was typed`,
       });
     }
+    hostedCommit('relay stage');
     return relayStage(
       { dir: dropLadder.leaf, name: queuedId },
       { id: queuedId, record: request.body },
@@ -1090,6 +1116,10 @@ export async function stopSendDaemon(project: string, root: string, home = homed
 function dialogKind(cli: string, screen: string | null): string | null {
   if (screen === null) return null;
   const kind = classify(cli, screen.split('\n')).kind;
+  // History is the screen reader's decision, which quotaOutOf reports. A limit line above a
+  // readable prompt is not a wall when every window on the status row shows quota left. A
+  // rate-limit reading stands: a positive row with no current prompt does not clear it.
+  if (kind === 'rate limit' && quotaOutOf(cli, screen) === null) return null;
   return DIALOG.has(kind) ? kind : null;
 }
 
@@ -1187,7 +1217,7 @@ async function nativeHoldOf(
  *  receiving chain's; the caller's sender name, or the team file's nickname, or the seat name.
  *  The summary is the body's first content line, and the id never enters it. */
 function displayOf(
-  request: Pick<DaemonSendRequest, 'from' | 'name' | 'template' | 'subject'>,
+  request: Pick<DaemonSendRequest, 'from' | 'from_id' | 'template' | 'subject'>,
   team: TeamFile,
   root: string,
   host: DaemonHost,
@@ -1196,11 +1226,12 @@ function displayOf(
   const template = request.template
     ?? messageDisplayInForce({ home: host.home, root, team, now: host.now() });
   const declared = team.seats.find((seat) => seat.name === request.from);
-  // The caller's own name when it read one, else the name the seat goes by — its written label's
-  // persona when the nickname field could hold it, else the record's nickname
-  // (src/file/sections/seats.ts:seatNicknames) — the same answer the launch and the message
-  // header read.
-  const name = request.name ?? (declared === undefined ? null : seatNickname(team.seats, declared)) ?? request.from;
+  // The sender's one identity name, read by its registry id (src/comms/identity.ts); with no id,
+  // the name the seat this daemon's own team declares goes by, else the seat name. No caller
+  // hands a name in.
+  const name = request.from_id !== undefined && request.from_id !== null
+    ? renderedIdentity(request.from, { fromId: request.from_id, home: host.home }).name
+    : (declared === undefined ? null : seatNickname(team.seats, declared)) ?? request.from;
   const header = renderMessageDisplay(template, {
     name,
     seat: request.from,
@@ -1288,8 +1319,7 @@ async function executeQueuedSend(
     }
     // The socket frame opens with the compact sender header, then the signed record's body; a
     // person-pane seat gets neither a reply line nor a read hint.
-    const display = displayOf(request, team, root, host, body);
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.name, configured.human === true, request.rule ?? '');
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, request.from_id ?? null, configured.human === true, request.rule ?? '');
   }
 
   const found = await findSeatAgent(host, team.session, seatName);
@@ -1338,18 +1368,22 @@ async function executeQueuedSend(
   // The quota preflight runs before the drop file is staged: a walled screen takes no drop and
   // no key, because a stored copy would only be retried into a dead turn. Only a positive read
   // refuses — an unreadable pane keeps the delivery-time caution below — and the host's
-  // `working` word does not cancel a wall the screen proves. Nothing is written: no history
-  // line, no pending record; the sender's refusal is the caller's to make.
+  // `working` word does not cancel a wall the screen proves. A limit line above a readable
+  // prompt is not that wall when every window on the status row shows quota left. A missing
+  // prompt, or any window with none left, keeps the wall. Nothing
+  // is written on a wall that still holds: no history line, no pending record; the sender's
+  // refusal is the caller's to make.
   const wallText = await hostPaneText(host, team.session, pane);
   const wall = quotaOutOf(configured.cli, wallText);
-  if (wall !== null) {
+  const marked = wall === null ? tokenUnavailable(dir, seatName) : null;
+  if (wall !== null || marked !== null) {
     return {
       v: 1,
       ok: false,
       id: msgId,
       seat: seatName,
       outcome: 'refused',
-      detail: `${seatName}: ${quotaOutDetail(configured, wall)}`,
+      detail: `${seatName}: ${wall !== null ? quotaOutDetail(configured, wall) : marked ?? ''}`,
     };
   }
 
@@ -1376,6 +1410,7 @@ async function executeQueuedSend(
   // The copy is the relay package's durable write: whole bytes, 0600 in a 0700 folder, published
   // by an exclusive link, so a holder already at the name is never replaced. The ladder above
   // stays this command's path policy; admission, history and the typed leg all stay here.
+  hostedCommit('relay stage');
   const staged = await relayStage(
     { dir: stateDropDir, name: msgId },
     { id: msgId, record: body },
@@ -1558,7 +1593,7 @@ async function executeQueuedSend(
       break;
     }
 
-    const projectDropDir = join(dir, 'send-drops', team.session, seatName);
+    const projectDropDir = seatMailDirIn(dir, team.session, seatName);
     const hasVerifiedReceipt = (): boolean => {
       const context = { to: seatName, root, session: team.session };
       const binding = claimBindingIn(root, team.session, seatName, msgId);
@@ -1740,8 +1775,9 @@ async function executeSocketSend(
   alive: (pid: number) => boolean,
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: Pick<HistoryEntry, 'spec' | 'resolved' | 'from_team'>,
-  /** The sender's display name for the compact header; empty uses the record's own claim. */
-  senderName = '',
+  /** The sender's registry id, when the request carries one: the header names the sender from
+   *  it (src/comms/identity.ts), never from a name the caller hands in. */
+  fromId: string | null = null,
   /** True for a person-pane seat: no reply line and no read hint. */
   personPane = false,
   /** The verified admission rule, when the caller has one. Empty leaves the header without a rule. */
@@ -1765,6 +1801,18 @@ async function executeSocketSend(
     seat: seatName,
     ...(receiver?.launch !== undefined ? { launch: receiver.launch } : {}),
   });
+  // The Claude adapter §1: a waited send on an E7b-active root rides no socket; a stamped send
+  // waits on its settlement in the caller instead (it never dials the daemon).
+  if (socketSuppressed(root, host.home)) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: the socket is ${SOCKET_OFF_ON_ACTIVE}; nothing was sent`,
+    };
+  }
   if (!SOCKET_SEND || !socketEligible(receiver?.inbound, inbound)) {
     const why = SOCKET_SEND ? socketSkipReason(receiver?.inbound, inbound) : 'this build does not carry it';
     return {
@@ -1796,21 +1844,39 @@ async function executeSocketSend(
   // No caller attestation exists yet: the frame names the claim the daemon was asked to deliver
   // for and marks it attributed, so the receiving seat never reads the displayed name as proof.
   // The mark is its own line; the display header and the body follow in their usual order.
-  const dropDir = join(dir, 'send-drops', team.session, seatName);
+  const dropDir = seatMailDirIn(dir, team.session, seatName);
   const existingIds = existingRecordIdsIn(dropDir);
   const compact = receiver?.compactDelivery === true;
-  const content = attributedBody(body, from, {
+  let content = attributedBody(body, from, {
     home: host.home,
     root,
-    displayName: senderName === '' ? null : senderName === 'owner' ? 'the owner' : senderName,
+    fromId,
     ...(rule === '' ? {} : { rule }),
-    compact,
+    at: host.now(),
+    compact: false,
   });
   const reply = personPane
     ? null
     : compact
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
+  const fits = Buffer.byteLength(content, 'utf8') <= RUNTIME_WAKE_MAX;
+  // rfc-event-comms §3 (E6): the body rides only when this leg holds the message's exposure claim.
+  const socketExposure = fits ? exposeBody({ dropDir, root, session: team.session, seat: seatName, msgId }, 'socket', host.home) : null;
+  const pointerOnly = socketExposure?.kind === 'pointer';
+  const bodyIncluded = fits && !pointerOnly;
+  if (!fits) content = `${content.split('\n')[0]}\n\nBody too long for this wake; read it with: team drops --read.`;
+  else if (pointerOnly) content = `${content.split('\n')[0]}\n\n${exposurePointer(msgId, null)}`;
+  // E7b: a stamped record's copy carries its delivery number, taken durably before the frame.
+  if (bodyIncluded && recordStampAt(dropDir, msgId) !== false) {
+    const n = takeCopyNumber(dropDir, msgId, 'socket');
+    if (n === null) {
+      return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'refused', detail: `${seatName}: the delivery history could not be written; nothing was sent` };
+    }
+    content = wrapCopy(content, msgId, n);
+  }
+  // The reader line rides with the body too: a seat handed the whole body still needs the id
+  // to answer it on its thread.
   const frame = frameFor(content, msgId, reply);
   if (frame.length > FRAME_LIMIT) {
     return {
@@ -1915,6 +1981,11 @@ async function executeSocketSend(
     }
     const listener = opened.listener;
     try {
+      // The Claude adapter §1, at the dial itself: the floor may have been activated while this
+      // send waited for the seat lock or set up its reply listener.
+      if (socketSuppressed(root, host.home)) {
+        return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'refused', detail: `${seatName}: the socket is ${SOCKET_OFF_ON_ACTIVE}; nothing was sent` };
+      }
       const taken = await host.deliver(socketPath, frame);
       if (!taken.ok) {
         appendHistory(team.project, root, host.home, {
@@ -1929,6 +2000,11 @@ async function executeSocketSend(
           via: 'socket',
         });
         return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail: taken.reason };
+      }
+      if (bodyIncluded) {
+        const delivered = { dropDir, id: msgId, root, session: team.session, seat: seatName, home: host.home, via: 'socket' };
+        if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
+        else recordDeliveredBody(delivered);
       }
       logLine(dir, 'send', who, `${seatName}: sent on the socket (${String(frame.length)} characters)`, host.now());
       const outcome = await listener.wait(timeoutS * 1000);

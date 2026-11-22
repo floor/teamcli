@@ -11,7 +11,10 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { grantsDir } from '../src/grant.ts';
 import { grantedFolderPretrust, type PretrustSeat } from '../src/launch/pretrust.ts';
 import type { Terminal } from '../src/launch/terminal.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { registerAgent, readAgents } from '../src/registry/agents.ts';
+import { registeredRootOf, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { selfRunner } from '../src/mcp/register.ts';
+import { CHANNEL_FLAG } from '../src/mcp/channel.ts';
 import { readState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
@@ -108,6 +111,27 @@ function project(sb: ReturnType<typeof makeSandbox>, name: string, trust: (root:
   return root;
 }
 
+/** Keep default channels enabled in a registered world with owned starts before pretrust. */
+function prepareGrantStarts(sb: ReturnType<typeof makeSandbox>, root: string): void {
+  const session = 'beacon-v1';
+  mkdirSync(sb.lobby, { recursive: true, mode: 0o700 });
+  mkdirSync(join(sb.lobby, 'builder-1'), { mode: 0o700 });
+  const lead = readAgents(sb.home).find((agent) => agent.reach.seat === 'orchestrator')!;
+  upsertTeam(sb.home, teamIdOf(root), {
+    root, project: session, session, lobby: sb.lobby, lobbies: { [session]: sb.lobby },
+    roster: [
+      { agent: lead.id, seat: 'orchestrator', role: 'orchestrator', leads: true },
+      { agent: 'agt_111111111111', seat: 'builder-1', role: 'builder' },
+    ],
+  });
+  const runner = selfRunner();
+  writeFileSync(join(root, '.mcp.json'), JSON.stringify({ mcpServers: {
+    'team-inbox': { command: runner.command, args: [runner.entry, 'mcp', 'serve', '--seat', 'orchestrator', '--session', session], env: {} },
+  } }), { mode: 0o600 });
+  mkdirSync(join(root, '.claude'), { mode: 0o700 });
+  writeFileSync(join(root, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['team-inbox'] }), { mode: 0o600 });
+}
+
 /** The CLI's own record, as the dialog reads it. */
 function claudeTrusts(home: string, folder: string): boolean {
   const file = join(home, '.claude.json');
@@ -122,7 +146,9 @@ function dialogHost(home: string) {
   let n = 0;
   let session: 'absent' | 'running' = 'absent';
   const panes = new Map<string, { cwd: string; agent: boolean }>();
+  const launches: string[] = [];
   const host = {
+    launches,
     closed: 0,
     sessionState: () => session,
     startServer() {
@@ -136,9 +162,9 @@ function dialogHost(home: string) {
       panes.set(pane, { cwd, agent: false });
       return { pane, workspace: `ws-${n}` };
     },
-    paneRun(_session: string, pane: string) {
+    paneRun(_session: string, pane: string, command: string) {
       const known = panes.get(pane);
-      if (known) known.agent = true;
+      if (known) { known.agent = true; launches.push(command); }
       return true;
     },
     spawnWatch: () => 4242,
@@ -195,6 +221,8 @@ describe('create-grant folder pretrust on up', () => {
     try {
       writeGrant(sb.home, registerSeat(sb.home), ['~/Code/beacon']);
       const root = project(sb, 'v1', (r) => [sb.lobby, r]);
+      prepareGrantStarts(sb, root);
+      expect(registeredRootOf(sb.home, 'builder-1', 'beacon-v1')).toMatchObject({ ok: true, root });
       const host = dialogHost(sb.home);
       const keys = terminal();
       const io = testIo(root, grantedSeat);
@@ -208,6 +236,8 @@ describe('create-grant folder pretrust on up', () => {
       const seats = readState(join(root, '.agents')).sessions['beacon-v1']?.seats ?? {};
       expect(seats.orchestrator?.stage).toBe('ready');
       expect(seats['builder-1']?.stage).toBe('ready');
+      expect(host.launches).toHaveLength(2);
+      expect(host.launches.every((command) => command.includes(CHANNEL_FLAG))).toBe(true);
     } finally {
       rmSync(sb.base, { recursive: true, force: true });
     }

@@ -10,19 +10,19 @@
 // own wake, so one answer never silently swallows unread work. The receipt is the seat's, never the
 // original sender's.
 //
-// The newest message is found through the recipient folder's unread index (`src/send/unread-hint.ts`),
-// never by walking the session's transport tree: one small file names the sender's newest few
-// staged records, and this sweep reads and verifies them newest first until one is a delivery the
-// rule counts. The index is a hint — an entry that does not verify, is not this seat's from this
-// sender, is already read or was delivered after the send settles nothing, the next entry is
-// tried, and when none holds nothing is marked. None of it falls back to a scan.
-import { join } from 'node:path';
+// The newest message is found from the seat's own folder: the records with no read or replied
+// receipt beside them, read and verified as `team messages` reads them, newest first, until one is
+// a delivery the rule counts. A record that does not verify, is not this seat's from this sender,
+// is already read or was delivered after the send settles nothing, and when none holds nothing
+// is marked. Only the seat's own folder is listed, never the session's transport tree.
+import { readdirSync } from 'node:fs';
 import { recordDir, samePath } from '../commands/messages.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readHistory, type HistoryEntry } from './history.ts';
 import { publishRecordRead } from './read-receipt.ts';
-import { recordAuthOfSealed, isReadOrCleared, readRecord, sealedOfRecord } from './record.ts';
-import { readUnreadHint } from './unread-hint.ts';
+import { carrierLegOf, recordAuthOfSealed, isReadOrCleared, readRecord, readVerifiedReceipt, receiptFile, sealedOfRecord, RECORD_STEM, type RecordPayload } from './record.ts';
+import { stampedListing } from '../queue/mail-tree.ts';
+import { liveRecordPath } from './drop-folder.ts';
 
 /** The legs whose delivery is evidence enough to answer: a frame the receiver's session took, a
  *  push its channel carried, or its own native handoff. A typed wake is that leg's own act and a
@@ -57,14 +57,36 @@ export type AnsweredBySendOutcome =
 
 /** The first history line each message id has: the sender's own walk, which names the leg that
  *  carried it. Later lines about the same message are retries and promotions, not deliveries. */
-function firstLinesOf(project: string, root: string, home: string): Map<string, HistoryEntry> | null {
-  const read = readHistory(project, root, home);
+function firstLinesOf(project: string, root: string, home: string, ids: ReadonlySet<string>): Map<string, HistoryEntry> | null {
+  // Only the hinted ids are looked up, so only their lines are parsed; each id's first line is
+  // the same one a full read finds.
+  const read = readHistory(project, root, home, ids);
   if (!read.ok) return null;
   const lines = new Map<string, HistoryEntry>();
   for (const entry of read.entries) {
     if (!lines.has(entry.id)) lines.set(entry.id, entry);
   }
   return lines;
+}
+
+/** The record names in the seat's folder and its stamped twin with no read or replied receipt
+ *  file beside them. Only names are listed; a folder that cannot be listed names nothing. */
+function waitingIds(dropDir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return [];
+  }
+  const stamped = stampedListing(dropDir);
+  const ids: string[] = [];
+  for (const folder of [names, stamped !== null && stamped !== 'unreadable' ? stamped.names : []]) {
+    const all = new Set(folder);
+    for (const name of folder) {
+      if (RECORD_STEM.test(name) && !all.has(`${name}.read.json`) && !all.has(`${name}.replied.json`)) ids.push(name);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -78,41 +100,52 @@ export function markAnsweredBySend(input: AnsweredBySendInput): AnsweredBySendOu
   const state = messageKeyState(home);
   if (state.kind !== 'key') return { kind: 'unavailable', reason: 'key' };
   const dropDir = recordDir(root, session, seat);
-  // The one index read: the sender's newest staged records, or nothing. No tree is listed.
-  const hints = readUnreadHint(dropDir, sender);
-  if (hints.length === 0) return { kind: 'none' };
-  const lines = firstLinesOf(project, root, home);
-  if (lines === null) return { kind: 'unavailable', reason: 'history' };
+  const context = { to: seat, root, session, ...(lead === undefined ? {} : { lead }) };
   const sentAt = Date.parse(at);
   if (Number.isNaN(sentAt)) return { kind: 'none' };
-  // Each entry the index names, newest first, read and authenticated as `team messages` reads it.
-  // The first that holds is the newest delivered-unread message this send answers; anything that
-  // does not hold is passed over, and when nothing holds the send settles nothing rather than
-  // searching the tree.
-  const context = { to: seat, root, session, ...(lead === undefined ? {} : { lead }) };
-  for (const hint of hints) {
-    const read = readRecord(join(dropDir, hint.id), hint.id);
+  // Every record still waiting here from this sender, read and authenticated as `team messages`
+  // reads it, newest first (an equal instant keeps the greater id first).
+  const waiting: RecordPayload[] = [];
+  for (const id of waitingIds(dropDir)) {
+    const read = readRecord(liveRecordPath(dropDir, id), id);
     if (!read.ok || read.record === null) continue;
-    const sealed = sealedOfRecord(read.record);
-    const auth = recordAuthOfSealed(sealed, state.key);
+    const auth = recordAuthOfSealed(sealedOfRecord(read.record), state.key);
     if (auth.kind !== 'ok') continue;
     const payload = auth.value.payload;
-    if (payload.id !== hint.id || payload.to !== seat || payload.session !== session) continue;
+    if (payload.id !== id || payload.to !== seat || payload.session !== session) continue;
     if (!samePath(payload.root, root)) continue;
     if (payload.from !== sender) continue;
     // A registry id that disagrees names another agent under the same seat name; without one on
     // either side the name is all the evidence there is.
     if (senderId !== null && payload.from_id !== null && payload.from_id !== senderId) continue;
-    const line = lines.get(payload.id);
-    if (line === undefined || line.via === undefined || !DELIVERED_VIAS.includes(line.via)) continue;
-    // The delivery is the first history line's instant: a message delivered after this send is
-    // not answered by it. An equal instant is not later — the frame was already there.
-    const deliveredAt = Date.parse(line.ts);
-    if (Number.isNaN(deliveredAt) || deliveredAt > sentAt) continue;
     if (Number.isNaN(Date.parse(payload.at))) continue;
-    // The index may still name a message that is already read or that a lead cleared — a clear
-    // that was lost, or another reader that won after this hint was written. It is not this
-    // send's to settle: the clearance is the lead's, never the seat's own read.
+    waiting.push(payload);
+  }
+  if (waiting.length === 0) return { kind: 'none' };
+  waiting.sort((a, b) => (Date.parse(b.at) - Date.parse(a.at)) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  const lines = firstLinesOf(project, root, home, new Set(waiting.map((payload) => payload.id)));
+  if (lines === null) return { kind: 'unavailable', reason: 'history' };
+  // The first that holds is the newest delivered-unread message this send answers; anything that
+  // does not hold is passed over, and when nothing holds the send settles nothing.
+  for (const payload of waiting) {
+    // The delivery instant. A carrier's own signed delivered receipt, written at hand-over and
+    // naming an eligible leg (socket, channel, native), is preferred: a `--wait` send writes its
+    // history line only when the wait ends, so that line's time can be later than the hand-over
+    // and than this send. Transport acceptance by that leg, never a read. A record without such a
+    // receipt keeps the first history line's instant and its leg. A message delivered after this
+    // send is not answered by it; an equal instant is not later — the frame was already there.
+    const carried = readVerifiedReceipt(receiptFile(dropDir, payload.id, 'delivered'), payload.id, 'delivered', context, state.key);
+    const carriedLeg = carried === null ? null : carrierLegOf(carried.payload.read_by);
+    let deliveredAt = Number.NaN;
+    if (carried !== null && carriedLeg !== null && DELIVERED_VIAS.includes(carriedLeg)) {
+      deliveredAt = Date.parse(carried.payload.at);
+    } else {
+      const line = lines.get(payload.id);
+      if (line !== undefined && line.via !== undefined && DELIVERED_VIAS.includes(line.via)) deliveredAt = Date.parse(line.ts);
+    }
+    if (Number.isNaN(deliveredAt) || deliveredAt > sentAt) continue;
+    // A message a lead cleared, or one read under a receipt the listing did not show, is not
+    // this send's to settle: the clearance is the lead's, never the seat's own read.
     if (isReadOrCleared(dropDir, payload.id, context, state.key)) continue;
     const outcome = publishRecordRead({
       dropDir,

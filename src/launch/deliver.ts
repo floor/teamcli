@@ -1,6 +1,6 @@
 import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 import { reportedLiveAgent } from './agent.ts';
-import { herdrUnreliable, profileFor } from '../profiles/index.ts';
+import { clearPresses, herdrUnreliable, profileFor } from '../profiles/index.ts';
 import type { RulesFileWrite } from './rules-file.ts';
 import {
   classifyComposer, listedPlaceholderEquals, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
@@ -45,6 +45,8 @@ export type Refusal = {
    *  `stayed`: the key was sent and the screen did not come back idle. */
   cleared?: 'yes' | 'undelivered' | 'stayed';
   detail?: 'not-written' | 'changed' | { at: 'folder' | 'place'; what: string };
+  /** The seat is the team's lead. The report tells nobody to type in that pane. */
+  leadPane?: boolean;
 };
 
 export interface Delivery {
@@ -66,6 +68,8 @@ export interface Delivery {
    *  typed line, then every Enter — for the caller that needs it (`answer`): a refusal sends
    *  nothing, and the caller says why in its own words. */
   beforeInput?(action: 'type' | 'enter'): boolean;
+  /** The seat is the team's lead. A stopped delivery's report does not tell the owner to type there. */
+  leadPane?: boolean;
   /** Why a delivery stopped, when the caller wants the detail for its report. */
   report?(why: Refusal): void;
 }
@@ -77,7 +81,8 @@ export function keyName(key: string): string {
   if (key === 'ctrl+c') return 'Ctrl-C';
   if (key === 'ctrl+u') return 'Ctrl+U';
   if (key === 'escape') return 'Esc';
-  return 'Backspace';
+  // A backspace deletes one character: `team` presses it once per character it clears.
+  return 'Backspace until empty';
 }
 
 /** The refusal for a rules file that could not be written: nothing was typed, nothing sent, and
@@ -107,8 +112,8 @@ function continues(text: string, pos: number, row: string, kind: 'word' | 'hard'
  *  `holdsBox` has always made: the first line after the prompt and every continuation row at the
  *  box's own column — no more rows, no fewer, none changed. A continuation row that does not
  *  start at that column is not the text's own row, and a blank row never is: the delivery is
- *  one line, and a row break may stand for at most one space, never a newline — a blank row
- *  belongs to no text this version types.
+ *  one line, and a row break may stand for at most one space, an explicit newline matches exactly one row boundary; a blank row
+ *  is accepted only when the expected text contains that newline.
  *  Only the one space a row break itself may stand for is normalised, and inside a row every
  *  character must match, runs of spaces included. Trailing spaces and tabs after the text's last
  *  row are not observable in a box — a pane may not paint the end of a row — so they are not
@@ -117,7 +122,7 @@ function readsBack(text: string, box: Box): { row: string | null; short: boolean
   const pad = ' '.repeat(box.indent);
   const rows: string[] = [];
   for (const row of box.rows) {
-    if (row === '') return { row, short: false };
+    if (row === '') { rows.push(''); continue; }
     if (!row.startsWith(pad)) return { row, short: false };
     rows.push(row.slice(pad.length));
   }
@@ -129,6 +134,12 @@ function readsBack(text: string, box: Box): { row: string | null; short: boolean
     if (i === 0) {
       if (!text.startsWith(row)) return { row, short: false };
       at = row.length;
+      continue;
+    }
+    if (text[at] === '\n') {
+      at += 1;
+      if (!text.startsWith(row, at)) return { row, short: false };
+      at += row.length;
       continue;
     }
     if (row === '') return { row, short: false };
@@ -151,7 +162,7 @@ function withoutListedPlaceholders(cli: string, box: Box): Box {
 }
 
 function holdsBox(text: string, box: Box, cli?: string): boolean {
-  const read = readsBack(text, cli === undefined ? box : withoutListedPlaceholders(cli, box));
+  const read = readsBack(text, cli === undefined || text.includes('\n') ? box : withoutListedPlaceholders(cli, box));
   return read.row === null && !read.short;
 }
 
@@ -270,7 +281,7 @@ function stoppedOn(cli: string, stop: Stop, screen: string | undefined, line: st
  *  Only an unsent composer on an idle CLI that is still the pane's foreground: a key into a
  *  dialog, a turn, or a shell would answer something this run did not type. No key on the
  *  delivery leaves the refusal as it is. */
-async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<Refusal> {
+async function clearTypedLine(cli: string, why: Refusal, io: Delivery, line: string): Promise<Refusal> {
   const key = why.clearKey ?? null;
   if (key === null || !io.key) return why;
   const names = profileFor(cli)?.processNames ?? [];
@@ -284,7 +295,7 @@ async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<
   };
   const resting = () => io.status() === 'idle' || io.status() === 'done' || wordless();
   if (readScreen(cli, io.screen()).kind !== 'unsent' || !resting() || !live()) return why;
-  if (!io.key(key)) return { ...why, cleared: 'undelivered' };
+  if (!clearPresses(key, line).every((k) => io.key!(k))) return { ...why, cleared: 'undelivered' };
   const after = await settleScreen('unsent', () => readScreen(cli, io.screen()).kind, io);
   if (after === 'idle' && resting() && live()) return { ...why, cleared: 'yes' };
   return { ...why, cleared: 'stayed', kind: after };
@@ -303,8 +314,11 @@ function clearAdvice(why: Refusal, box = 'its box'): string {
   return why.clearKey ? `clear ${box} (${keyName(why.clearKey)})` : `clear ${box}`;
 }
 
-/** What the owner does next, per reading. */
+/** What the owner does next, per reading. A lead's pane is never that: the lead asks its parent. */
+const LEAD_ASKS = 'the lead asks its parent orchestrator (team send)';
+
 function nextStep(why: Refusal): string {
+  if (why.leadPane === true) return LEAD_ASKS;
   switch (why.stop) {
     case 'leftover':
       return `press Enter in its pane to send what is there, or ${clearAdvice(why)}, then run up again`;
@@ -363,7 +377,9 @@ export function refusalReport(why: Refusal): string {
         + `check the seat's launch line — the wrapper it starts through, or the command itself — then run up again`;
     case 'working':
       return why.typed
-        ? `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: run up again when it is idle (up sends the line it finds there), or press Enter in its pane once the turn ends`
+        ? why.leadPane === true
+          ? `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: ${LEAD_ASKS}`
+          : `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: run up again when it is idle (up sends the line it finds there), or press Enter in its pane once the turn ends`
         : `rules not confirmed: the seat is working; run up again when it is idle`;
     case 'screen':
       return `rules not typed: ${reading(why, 0)}; ${nextStep(why)}`;
@@ -433,7 +449,10 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     return herdrUnreliable(cli) && (status === null || status === 'unknown');
   };
   const free = () => ['idle', 'done'].includes(io.status() ?? '') || wordless();
-  const report = (why: Refusal): false => { io.report?.(why); return false; };
+  const report = (why: Refusal): false => {
+    io.report?.(io.leadPane === true ? { ...why, leadPane: true } : why);
+    return false;
+  };
   // No pane messaging: the rules line is never typed; the rules file is written and the seat
   // reads it through its event adapter (src/send/no-pane-messaging.ts).
   if (NO_PANE_MESSAGING.length > 0) return report({ stop: 'typing', typed: false, sent: false, kind: 'unknown', row: NO_PANE_MESSAGING });
@@ -478,7 +497,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   const readBackStop = async (): Promise<false> => {
     const why = stoppedOn(cli, 'read-back', io.screen(), line);
     if (resumed) return report(why);
-    return report(await clearTypedLine(cli, why, io));
+    return report(await clearTypedLine(cli, why, io, line));
   };
   if (!resumed) {
     if (start !== 'idle') {

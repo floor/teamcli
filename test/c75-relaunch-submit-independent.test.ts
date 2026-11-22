@@ -10,6 +10,7 @@
 // process signal is invoked.
 import { describe, expect, test } from 'bun:test';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { CLAUDE_IDLE } from './helpers.ts';
 import { executePlan, type Host, type ScreenKind } from '../src/launch/execute.ts';
 import type { Step } from '../src/launch/plan.ts';
 import { recordText } from '../src/launch/progress.ts';
@@ -350,7 +351,9 @@ describe('an own-line relaunch launches in the same pane, so its wait reads it t
         ? { shell: NEW_SHELL, foreground: [NEW_CLI] }
         : { shell: NEW_SHELL, foreground: [NEW_SHELL] }),
       screen: () => {
-        if (phase === 'cli') return '❯\n';
+        // Enter follows the exit word only when that word is drawn, or the composer is idle and empty of it.
+        // `❯\n` is neither. This composer is idle, so the word is not drawn yet and the Enter still goes.
+        if (phase === 'cli') return CLAUDE_IDLE;
         if (phase === 'bare') return `${PROMPT}\n`;
         if (phase === 'typed') return typed !== null ? wrappedEcho(typed) : `${PROMPT}\n`;
         return IDLE_SCREEN;

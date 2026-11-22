@@ -108,6 +108,7 @@ export type DevModeOperation = (typeof DEV_MODE_OPERATIONS)[number];
 export const ENFORCED_POLICY_NAMES = [
   'dev-mode',
   'lead-gates',
+  'leads.authority',
   'seats-cross-teams',
   'state-trace-window-seconds',
   'state-blind-after-seconds',
@@ -149,6 +150,7 @@ export const ENFORCED_POLICY_NAMES = [
   'workspace.sidebar.rows',
   'workspace.sidebar.manage',
   'workspace.sidebar.status_indicators',
+  'workspace.sidebar.row_gap',
   'daemon.sidebar-ttl-ms',
   'daemon.sidebar-refresh-ms',
   'watch-rhythm',
@@ -177,6 +179,7 @@ export const ADVISED_POLICY_NAMES = [
   'board',
   'review-terms',
   'workspace-mode',
+  'model-drift',
   'landing-mode',
   'vault-root',
   'entity-orchestrator',
@@ -197,6 +200,7 @@ export type CataloguePolicyName = EnforcedPolicyName | AdvisedPolicyName;
 export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> = {
   dev_mode: 'dev-mode',
   lead_gates: 'lead-gates',
+  leads_authority: 'leads.authority',
   seats_cross_teams: 'seats-cross-teams',
   state_trace_window_seconds: 'state-trace-window-seconds',
   trace_window_seconds: 'state-trace-window-seconds',
@@ -264,6 +268,10 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   'workspace-sidebar-status-indicators': 'workspace.sidebar.status_indicators',
   sidebar_status_indicators: 'workspace.sidebar.status_indicators',
   'sidebar-status-indicators': 'workspace.sidebar.status_indicators',
+  workspace_sidebar_row_gap: 'workspace.sidebar.row_gap',
+  'workspace-sidebar-row-gap': 'workspace.sidebar.row_gap',
+  sidebar_row_gap: 'workspace.sidebar.row_gap',
+  'sidebar-row-gap': 'workspace.sidebar.row_gap',
   daemon_sidebar_ttl_ms: 'daemon.sidebar-ttl-ms',
   'daemon-sidebar-ttl-ms': 'daemon.sidebar-ttl-ms',
   sidebar_ttl_ms: 'daemon.sidebar-ttl-ms',
@@ -278,6 +286,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
   workspace_mode: 'workspace-mode',
+  model_drift: 'model-drift',
   landing_mode: 'landing-mode',
   vault_root: 'vault-root',
   entity_orchestrator: 'entity-orchestrator',
@@ -381,6 +390,8 @@ export type PolicySpec<V extends PolicyValue = PolicyValue> = {
   defaultValue: V;
   /** True for gate-lifting policies (§2.7), where absent or expired means `'off'`. */
   gateLifting: boolean;
+  /** True when setting this key changes who may act. Only the owner sets it. */
+  needsOwner?: boolean;
   /**
    * True for advised policies whose defining text says a lower level chooses without ordering
    * (`development-mode`, amendment 02 §2.3 exception).
@@ -432,6 +443,14 @@ export type LeadGatesValue = 'lead' | 'lead+operator';
 /** `lead-gates` accepts exactly its two words; anything else is a load refusal. */
 function parseLeadGates(raw: unknown): LeadGatesValue | null {
   return raw === 'lead' || raw === 'lead+operator' ? raw : null;
+}
+
+/** `leads.authority`: `own-team` is the default; `owner-asks` restores the owner gates. */
+export type LeadsAuthorityValue = 'own-team' | 'owner-asks';
+
+/** `leads.authority` accepts exactly its two words; anything else is a load refusal. */
+function parseLeadsAuthority(raw: unknown): LeadsAuthorityValue | null {
+  return raw === 'own-team' || raw === 'owner-asks' ? raw : null;
 }
 
 /** The Actions commands a caller may leave in the guard's allowlist. The release default is all
@@ -1261,6 +1280,19 @@ function sidebarIndicatorsProblem(raw: unknown): string | null {
   return `policy "workspace.sidebar.status_indicators" needs one of ${STATUS_INDICATOR_VALUES.join(' or ')}, such as symbols`;
 }
 
+/** A whole number from 0 up. The catalogue default is 0 and means unset: the reader ignores a
+ *  value that arrived at level `default` and leaves the host's own `row_gap` line alone. */
+function parseSidebarRowGap(raw: unknown): number | null {
+  const token = typeof raw === 'string' ? raw.trim() : raw;
+  const n = typeof token === 'string' && /^(0|[1-9][0-9]*)$/.test(token) ? Number(token) : token;
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+function sidebarRowGapProblem(raw: unknown): string | null {
+  if (parseSidebarRowGap(raw) !== null) return null;
+  return 'policy "workspace.sidebar.row_gap" needs a whole number from 0 up, such as 1';
+}
+
 /** Whole milliseconds from 1000 up (`daemon.sidebar-ttl-ms`): no ceiling is enforced here — the
  *  host caps what it is sent at its own 86400000, and the reader clamps to that cap rather than
  *  refusing a stored word a future host might accept. */
@@ -1295,14 +1327,14 @@ function sidebarRefreshProblem(raw: unknown): string | null {
  * sourced directly from `src/settings/inherit.ts`.
  */
 /**
- * The owner's reserved scope, in four words: public releases, spending,
+ * The owner's reserved scope, in four words: major releases, spending,
  * credentials, and the owner's machine. The machine's gloss names what it covers, so a rule
  * that prints the list never leaves "the machine" to be read as "any act on it": it is the
  * system's own settings and accounts, logins, keychain and hardware, never a checkout, a seat
  * or the team's config.
  */
 export const OWNER_RESERVED_SCOPE_DEFAULT = [
-  'public releases',
+  'major releases',
   'spending',
   'credentials',
   "the owner's machine",
@@ -1375,6 +1407,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: 'off',
     gateLifting: true,
+    needsOwner: true,
     parseValue: parseOnOff,
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off', lowerExpiry?: string | null, higherExpiry?: string | null) => {
       if (lower === 'off') return true;
@@ -1396,6 +1429,18 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     // `lead+operator` is only within `lead+operator`: a nearer level cannot widen the gates past
     // a farther level that kept them the lead's.
     isWithin: (lower: LeadGatesValue, higher: LeadGatesValue) => lower === 'lead' || lower === higher,
+  },
+  'leads.authority': {
+    name: 'leads.authority',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'own-team',
+    gateLifting: false,
+    needsOwner: true,
+    parseValue: parseLeadsAuthority,
+    // `owner-asks` is tighter: it restores the owner gates. A nearer level cannot widen them
+    // back to `own-team` past a farther level that asked the owner.
+    isWithin: (lower: LeadsAuthorityValue, higher: LeadsAuthorityValue) => lower === 'owner-asks' || lower === higher,
   },
   'seats-cross-teams': {
     name: 'seats-cross-teams',
@@ -1837,6 +1882,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     // access because it failed to say anything. Turning it on is an explicit owner declaration.
     defaultValue: 'off',
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseOnOff,
     // 'off' is tighter than 'on': off is within on, on is not within off.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
@@ -1886,6 +1932,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_HEARTBEAT_SECONDS.release,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseHeartbeatSeconds,
     valueProblem: (raw: unknown) => heartbeatSecondsProblem('daemon.heartbeat', raw),
     // A shorter or equal beat is tighter, the same direction as every interval policy.
@@ -1909,6 +1956,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: DAEMON_CHORES_DEFAULTS.mode,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseChoreMode,
     valueProblem: (raw: unknown) => choreModeProblem('daemon.chores', raw),
     isWithin: (lower: DaemonChoresMode, higher: DaemonChoresMode) => CHORE_MODE_RANK[lower] <= CHORE_MODE_RANK[higher],
@@ -2002,6 +2050,20 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     valueProblem: sidebarIndicatorsProblem,
     isWithin: () => true,
   },
+  // Blank lines between sidebar rows, written as `row_gap` in the marked sidebar table. The
+  // release default is 0 at level `default`, which the sidebar reader treats as unset: nothing
+  // is written and an existing line stays. A declared whole number from 0 up is written, and
+  // the nearest level chooses.
+  'workspace.sidebar.row_gap': {
+    name: 'workspace.sidebar.row_gap',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 0,
+    gateLifting: false,
+    parseValue: parseSidebarRowGap,
+    valueProblem: sidebarRowGapProblem,
+    isWithin: () => true,
+  },
   // How long a pane's reported sidebar metadata lives before it lapses: whole milliseconds,
   // one day (the host's own cap) when nothing declares it. The host refuses a ttl above its cap
   // outright, so the reader clamps the word to the cap instead of refusing it — a stored word
@@ -2053,6 +2115,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: null,
     gateLifting: false,
+    needsOwner: true,
     parseValue: parseOwnerSigners,
     isWithin: (lower: string[] | null, higher: string[] | null) => higher === null || (lower !== null && lower.every((n) => higher.includes(n))),
   },
@@ -2063,6 +2126,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: 'any',
     gateLifting: false,
+    needsOwner: true,
     parseValue: (raw: unknown) => (raw === 'any' ? raw : null),
     isWithin: () => true,
   },
@@ -2144,6 +2208,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: 'owner-terminal',
     gateLifting: false,
+    needsOwner: true,
     parseValue: (raw: unknown) => (raw === 'owner-terminal' || raw === 'conversational' ? raw : null),
     isWithin: (lower: 'owner-terminal' | 'conversational', higher: 'owner-terminal' | 'conversational') =>
       lower === higher || lower === 'owner-terminal',
@@ -2171,6 +2236,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: 'local-fast',
     gateLifting: false,
+    needsOwner: true,
     lowerLevelChooses: true,
     parseValue: (raw: unknown) => (raw === 'local-fast' || raw === 'pr-per-change' ? raw : null),
     isWithin: () => true,
@@ -2241,6 +2307,22 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     valueProblem: (raw: unknown) => `workspace-mode is worktree or shared (branch), got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
+  // What a send does when the recipient runs another model than its signed record (review
+  // finding 3, 2026-11-12): `rule` (the default) delivers only when the entity's model rule names
+  // the seat and allows the observed lab, and refuses otherwise with nothing kept; `deliver` always
+  // delivers with a drift notice to the lead; `hold` refuses every drift until the seat is
+  // repaired. A model the rule forbids is refused under every value.
+  'model-drift': {
+    name: 'model-drift',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'deliver',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (raw === 'rule' || raw === 'deliver' || raw === 'hold' ? raw : null),
+    valueProblem: (raw: unknown) => `model-drift is rule, deliver or hold, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
   // How changes land: one pull request per change, a batch of reviewed commits per pull request, or
   // reviewed commits landed directly on the integration branch. Every mode keeps review: the mode
   // chooses how much lands at once, never whether it is reviewed.
@@ -2255,8 +2337,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     valueProblem: (raw: unknown) => `landing-mode is pr-per-change, batch or direct, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
-  // The root of the docs vault where seats keep memory (an absolute path, or `~/` relative to the
-  // home). Empty means no vault: memory stays where each CLI keeps it.
+  // The root of the docs vault where seats keep memory (an absolute path, `~/` relative to the
+  // home, or `{root}/…` / `{worktrees}/…` under the entity's folders on the machine that reads it,
+  // src/file/root-word.ts). Empty means no vault: memory stays where each CLI keeps it.
   'vault-root': {
     name: 'vault-root',
     kind: 'advised',
@@ -2264,8 +2347,8 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     defaultValue: '',
     gateLifting: false,
     lowerLevelChooses: true,
-    parseValue: (raw: unknown) => (typeof raw === 'string' && (raw.startsWith('/') || raw.startsWith('~/')) && !/[\x00-\x1f\x7f]/.test(raw) ? raw.replace(/\/+$/, '') || '/' : null),
-    valueProblem: (raw: unknown) => `vault-root is an absolute path or one under ~/, got ${JSON.stringify(raw)}`,
+    parseValue: (raw: unknown) => (typeof raw === 'string' && (raw.startsWith('/') || raw.startsWith('~/') || /^\{(root|worktrees)\}(\/|$)/.test(raw)) && !/[\x00-\x1f\x7f]/.test(raw) ? raw.replace(/\/+$/, '') || '/' : null),
+    valueProblem: (raw: unknown) => `vault-root is an absolute path, one under ~/, or one under {root}/ or {worktrees}/, got ${JSON.stringify(raw)}`,
     isWithin: () => true,
   },
   // The entity's own orchestrator: `auto` (the root project's team lead plays it), `dedicated` (a
@@ -2332,6 +2415,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity', 'project', 'team'],
     defaultValue: OWNER_RESERVED_SCOPE_DEFAULT,
     gateLifting: false,
+    needsOwner: true,
     lowerLevelChooses: true,
     parseValue: parseScopeItems,
     valueProblem: (raw: unknown) => `owner.reserved-scope is a list of reserved scopes, got ${JSON.stringify(raw)}`,

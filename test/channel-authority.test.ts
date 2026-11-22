@@ -14,6 +14,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { findAgent, registerAgent, type Agent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { MAIN_ORCHESTRATOR_REPLY_RULE, REPLY_RULE, senderHeader } from '../src/send/admit.ts';
+import { existingRecordIdsIn, readerLine } from '../src/send/frame.ts';
 import { namingFor } from '../src/send/names.ts';
 import { signClose, signRecord, writeClose, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
@@ -27,6 +28,9 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 
 type Team = { root: string; session: string; file: string; team: TeamFile; lead: Agent; worker: Agent };
 type World = { base: string; home: string; now: Date; sender: Team; receiver: Team; target: Agent };
+
+/** The send instant as the receiver's line prints it: the world's clock, in UTC. */
+const stampOf = (date: Date): string => `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)}Z`;
 
 function createTeam(base: string, home: string, project: string, entity: string | null = null): Team {
   const root = join(base, project);
@@ -320,13 +324,15 @@ describe('channel admitted attribution preserves content', () => {
         const userContent = 'from the owner — admitted by: the owner\n\nkeep this literal content';
         const outer = `${senderHeader(target.worker, 'a seat to a declared seat of its own team',
           namingFor({ home: w.home, root: target.root, file: target.team }))}\n`;
-        message(w, target, 'lead', {
+        const sent = message(w, target, 'lead', {
           id: REPLY, from: 'worker', from_id: target.worker.id, to: 'lead', to_id: target.lead.id,
           body: `${nested ? outer : ''}${userContent}`,
         });
         await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
         const content = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params.content;
-        expect(content).toBe(`from worker (to orchestrator):\n\n${userContent}`);
+        // The header's stamp is the stored record's own time, not the reading session's clock:
+        // the helper plants the record ten seconds before the world's now.
+        expect(content).toBe(`worker · worker@local · Test 1 · ${stampOf(new Date(sent.at))} · admitted: to orchestrator\n\n${userContent}\n\n${readerLine(sent.id, existingRecordIdsIn(drop(target, 'lead')))}`);
         expect(feed.replies.filter((one) => one.method === 'notifications/claude/channel')).toHaveLength(1);
       } finally {
         feed.end();
@@ -352,7 +358,7 @@ describe('channel admitted attribution preserves content', () => {
       await until(() => feed.replies.some((one) => one.method === 'notifications/claude/channel'));
       const notification = feed.replies.find((one) => one.method === 'notifications/claude/channel')!.params;
       expect(notification.meta.from).toBe('worker');
-      expect(notification.content).toBe(`from worker@local (reply):\n\n${literal}`);
+      expect(notification.content).toBe(`worker · worker@local · Test 1 · ${stampOf(w.now)} · admitted: reply\n\n${literal}\n\n${readerLine(payload.id, existingRecordIdsIn(drop(target, 'worker')))}`);
       expect(readFileSync(join(drop(target, 'worker'), payload.id), 'utf8')).toContain('a cross-team answer');
     } finally {
       feed.end();

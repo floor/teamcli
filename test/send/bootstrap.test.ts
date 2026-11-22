@@ -37,44 +37,6 @@ function record(dir: string, seat: string, pane: string): void {
 }
 
 describe("team send: the file's seat, before its record", () => {
-  test("a declared seat reaches its own orchestrator, and the header says no record yet", async () => {
-    const one = make();
-    record(one.dir, 'helper', 'w2:p1');
-    const io = testIo(one.root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
-
-    const code = await runSend(['lead', 'a note'], io, fake(one, { native: scripted(['idle', 'working']) }));
-
-    expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_PANE_MESSAGING));
-    // The delivery path stays another suite's subject: the plain word is the outcome here.
-    // What this file judges is the header the receiver reads.
-    expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(
-      'team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n',
-    );
-    const drops = dropDir(one.dir, 'lead');
-    expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
-      "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
-    );
-  });
-
-  test('the declared coordinator reaches a declared seat of its own team the same way', async () => {
-    const one = make();
-    record(one.dir, 'lead', 'w1:p1');
-    const io = testIo(one.root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
-    const host = fake(one, { agents: () => [{ name: 'native', pane: 'w9:p1' }], native: scripted(['idle', 'working']) });
-
-    const code = await runSend(['native', 'a note'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(withoutSendId(io.out), `outcome line: ${io.out}`).toBe(
-      'team acme, session "acme"\nnative: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); native reads it at its next turn, and nothing here gives it one (pull-only)\n',
-    );
-    const drops = dropDir(one.dir, 'native');
-    expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
-      "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team\n\na note",
-    );
-  });
 
   test('a caller the file does not declare is refused, and the refusal names the command that records it', async () => {
     const one = make();

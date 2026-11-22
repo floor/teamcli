@@ -8,8 +8,10 @@ export type HostedLoop = {
   /** Aborted when the host stops; a loop that reads it between passes leaves promptly. */
   signal: AbortSignal;
   /** Resolves true at the first host tick at or after `ms` on the pass clock, and false when
-   *  the host stopped — including for a wait registered after the stop. */
-  wait(ms: number): Promise<boolean>;
+   *  the host stopped — including for a wait registered after the stop. `between` marks the one
+   *  wait a nudge may end: the loop's wait between two passes. Every other wait (a settle delay
+   *  inside a pass, a sleep on the typing path) runs its full time whatever arrives. */
+  wait(ms: number, options?: { between?: true }): Promise<boolean>;
   /** One completed pass, at the pass's own clock. */
   cycled(at: Date): void;
   /** A live pane watch owns the session: leave at the next seam without touching anything. */
@@ -18,6 +20,12 @@ export type HostedLoop = {
    *  that holds the event loop still renews the other hosted routes' authority; the calling
    *  route keeps its own renewal on the daemon's fixed beat. Absent, the pass never yields. */
   beat?(): void;
+  /** Ends the loop's between-pass wait now, true, so its next pass starts at once: an event the
+   *  pass must answer (a message for a seat no channel reaches) instead of the interval. A nudge
+   *  that lands during a pass never touches that pass's own waits: it is carried to the next
+   *  between-pass wait, which then ends at once. It never stands in for a stop, a standby or a
+   *  fault. Absent, the loop keeps its interval. */
+  nudge?(): void;
 };
 
 /**

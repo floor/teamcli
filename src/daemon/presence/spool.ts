@@ -8,7 +8,7 @@
 // A missing `spool/` folder means the seat is not participating (it was launched before this
 // feature, or the launch kept no hook): the ingester leaves everything under that seat alone and
 // creates no log, projection or status file. The first valid spool is what permits creation.
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { SEAT_NAME } from '../../file/sections/seats.ts';

@@ -27,14 +27,15 @@ function sectionOf(team: Approvable, name: string): unknown {
  * Seat fields that change without a new approval: where the seat sits in the
  * file, how its entry is written (`count: 3` becoming `count: 2`, or
  * explicit seats, when one is taken out), and `labelWritten`, which only records
- * that the file wrote `label:`. `parked` and `stopped` stay in the
+ * that the file wrote `label:`, and `cwdOutside`, which only records that the cwd
+ * was outside the project and matched no trust path. `parked` and `stopped` stay in the
  * digest: a seat that can edit the file must not silence itself. `remove --keep`
  * and `add` record the new digest with the edit.
  */
-const SEAT_FREE_FIELDS = new Set(['line', 'declared', 'count', 'instance', 'labelWritten']);
+const SEAT_FREE_FIELDS = new Set(['line', 'declared', 'count', 'instance', 'labelWritten', 'cwdOutside']);
 
 /** The free set from before `parked` and `stopped` joined the digest. */
-const LEGACY_SEAT_FREE_FIELDS = new Set(['parked', 'stopped', 'line', 'declared', 'count', 'instance', 'labelWritten']);
+const LEGACY_SEAT_FREE_FIELDS = new Set(['parked', 'stopped', 'line', 'declared', 'count', 'instance', 'labelWritten', 'cwdOutside']);
 
 /** A validated team file, as far as an approval reads it. */
 export type Approvable = Record<string, unknown> & {
@@ -103,9 +104,9 @@ export function legacyLabelDigests(team: Approvable): { named: Record<string, st
 /**
  * A watch section digest as computed before `idle_repeat` defaulted to off — when the key was
  * not set in the file, its value was filled in as 1200 seconds — and before `idle_owner`,
- * `blind_after`, `unread_after` and `stuck_after` joined the section. `omittedIdleFirst` says
- * the approved text wrote no `idle_first`, so the reader then took the ten minutes the section
- * shipped.
+ * `blind_after`, `unread_after`, `stuck_after` and `lead_unread_after` joined the section.
+ * `omittedIdleFirst` says the approved text wrote no `idle_first`, so the reader then took
+ * the ten minutes the section shipped.
  */
 export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): string | null {
   const watch = team.watch as Record<string, unknown> | null | undefined;
@@ -116,6 +117,9 @@ export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): s
   delete rest.blindAfter;
   delete rest.unreadAfter;
   delete rest.stuckAfter;
+  delete rest.leadUnreadAfter;
+  delete rest.watchStartLimit;
+  delete rest.childLateLimit;
   if (omittedIdleFirst && rest.idleFirst === 300) rest.idleFirst = 600;
   return digest(rest);
 }
@@ -124,7 +128,7 @@ export function legacyWatchDigest(team: Approvable, omittedIdleFirst = false): s
  * Every earlier spelling of the `watch` digest a record may carry: the shape without
  * `idle_owner`, `blind_after`, `unread_after` and `stuck_after`; the 0.5.0–0.5.2 shape, which
  * kept `idle_owner` and `blind_after` and omitted only `unread_after` (and, later,
- * `stuck_after`); each with or without the `idle_repeat` fill-in, and, when the file wrote no
+ * `stuck_after`, then `lead_unread_after`); each with or without the `idle_repeat` fill-in, and, when the file wrote no
  * `idle_first`, with the ten-minute default it shipped then. A stored digest equal to one of
  * these was not edited by the arrival — it is adopted as the current one.
  */
@@ -137,9 +141,11 @@ export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean):
     return rest;
   };
   const shapes = [
-    without('checks', 'idleOwner', 'blindAfter', 'unreadAfter', 'stuckAfter'),
-    without('checks', 'unreadAfter', 'stuckAfter'),
-    without('checks', 'stuckAfter'),
+    without('checks', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'idleOwner', 'blindAfter', 'unreadAfter', 'stuckAfter', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'unreadAfter', 'stuckAfter', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'stuckAfter', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
+    without('checks', 'leadUnreadAfter', 'watchStartLimit', 'childLateLimit'),
   ];
   const out = new Set<string>();
   for (const rest of shapes) {
@@ -157,7 +163,12 @@ export function legacyWatchDigests(team: Approvable, omittedIdleFirst: boolean):
 }
 
 function seatDigest(seat: Record<string, unknown>, free: Set<string>): string {
-  const fields = Object.fromEntries(Object.entries(seat).filter(([key]) => !free.has(key)));
+  // A seat folder the file did not write is a loaded default, digested as the `.` the file
+  // implies, as the canonical record keeps it (src/file/canonical-record.ts).
+  const defaulted = seat.cwdDefaulted === true;
+  const fields = Object.fromEntries(Object.entries(seat)
+    .filter(([key]) => !free.has(key) && key !== 'cwdDefaulted')
+    .map(([key, value]) => (key === 'cwd' && defaulted ? [key, '.'] : [key, value])));
   return digest(fields);
 }
 

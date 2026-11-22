@@ -64,6 +64,7 @@ import { recordHolds, type StatusContext } from '../send/record.ts';
 import { dropFolderReadable } from './drops.ts';
 import { emptySession, readState, type SessionState } from '../state.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
+import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
        team brief prune [--apply] [--json]
@@ -259,7 +260,7 @@ function currency(input: {
 }): boolean {
   const { claim } = input;
   if (claim === null || claim.sha256 !== GENERAL_BRIEF_SHA256) return false;
-  const dropDir = join(input.root, '.agents', 'send-drops', input.session, input.seat);
+  const dropDir = seatDropDir(input.root, input.session, input.seat);
   const expected = {
     ...deliveredPayload({
       seat: input.seat,
@@ -321,7 +322,7 @@ function planSeat(input: {
   // A live inbox server started from another build cannot read the record this one signs until
   // its host reloads it. The plan names that instead of writing a drop the server would refuse.
   const inbox = inboxLive(
-    join(input.root, '.agents', 'send-drops', input.session, seat.name),
+    seatDropDir(input.root, input.session, seat.name),
     input.root,
     input.session,
     seat.name,
@@ -336,7 +337,7 @@ function planSeat(input: {
   const incarnation = claim?.incarnation ?? mintBriefIncarnation();
   const attempt = claim?.attempt ?? 0;
   const id = generalBriefId(incarnation, body, attempt);
-  const path = join(input.root, '.agents', 'send-drops', input.session, seat.name, id);
+  const path = join(seatDropDir(input.root, input.session, seat.name), id);
   const held = heldAt(path);
   const holds = held.kind === 'file'
     && recordHolds(path, deliveredPayload({
@@ -677,7 +678,7 @@ function runBriefPrune(input: { io: Io; json: boolean; apply: boolean; sources: 
     return pruneRefused(io, json, `only a seat of this team retires its own launch-brief retry markers; this call is ${describeCaller(shown)}`);
   }
   const seat = named.name;
-  const dropDir = join(dir, 'send-drops', session, seat);
+  const dropDir = seatMailDirIn(dir, session, seat);
   if (!dropFolderReadable(dir, session, seat)) {
     return pruneRefused(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
   }

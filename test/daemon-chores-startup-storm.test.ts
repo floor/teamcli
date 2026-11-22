@@ -490,4 +490,29 @@ describe('chores supervisor startup grace and parent-stall guards', () => {
       nextStartAt: new Date(NOW + 20_000 + 60_000).toISOString(),
     });
   });
+
+  test('a loaded machine writes one late-beat line a minute, each counting the late beats it stands for', () => {
+    const { home, roots } = makeWorld(['root-late-lines']);
+    const root = roots[0]!;
+    const logs: string[] = [];
+    const clock = { at: NOW };
+    const fleet = createChoresFleet({
+      home,
+      beatMs: 5000,
+      since: AT,
+      now: () => new Date(clock.at),
+      routes: [routeInput(root)],
+      log: (text) => logs.push(text),
+      cpuTimeOf: flatCpu,
+      factory: (input) => fakeChild(5300, input.config.routes[0]!.root, clock.at).child,
+    });
+    // Every beat arrives 11 s after the one before it, for two minutes: eleven late beats.
+    for (let at = 0; at <= 121_000; at += 11_000) {
+      clock.at = NOW + at;
+      fleet.tick(new Date(clock.at));
+    }
+    const late = logs.filter((line) => line.includes('the daemon beat arrived late'));
+    expect(late.length).toBe(2);
+    expect(late[1]).toContain('5 more late beats since the last such line');
+  });
 });

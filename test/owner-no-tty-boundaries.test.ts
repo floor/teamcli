@@ -56,7 +56,6 @@ const UNDER_A_CLI: Process[] = [{ pid: 90, name: 'zsh' }, { pid: 80, name: 'clau
 const LEADS_ROUTE = 'only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane';
 const DELEGATE_ROUTE = 'only the owner or an approved delegate runs this, from a terminal outside herdr or its own pane';
 const ADMISSION_ROUTE = 'only the owner or a seat the send admission admits runs this, from a terminal outside herdr or its own pane';
-const PLACED_ROUTE = 'only the owner or a placed seat runs this, from a terminal outside herdr or its own pane';
 const OPERATOR_ROUTE = 'only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat';
 const ANSWER_ROUTE = 'only the owner or the orchestrator from its own seat runs this, from a terminal outside herdr or its own seat';
 
@@ -329,7 +328,8 @@ describe('every owner-gated command refuses the run with no terminal, through th
     agents: boom('the agent list'),
     workspaces: boom('the workspaces'),
     doctor: throwingDoctor,
-    now: boom('the clock'),
+    // Own-team admission reads the clock before the no-terminal refusal. The other sources still throw.
+    now: () => NOW,
     launch: {
       sessionState: boom('the session state'),
       startServer: boom('the server'),
@@ -425,7 +425,8 @@ describe('every owner-gated command refuses the run with no terminal, through th
       wait: async () => { throw new Error('past the refusal: a wait'); },
       paneText: boom('a pane'),
     },
-    now: boom('the clock'),
+    // Own-team admission reads the clock before the no-terminal refusal.
+    now: () => NOW,
     home: '',
   };
 
@@ -451,17 +452,19 @@ describe('every owner-gated command refuses the run with no terminal, through th
     pressEnter: boom('an enter'),
     sleep: async () => { throw new Error('past the refusal: a sleep'); },
     notify: boom('a notice'),
-    now: boom('the clock'),
+    // 1352: this fixture resolves no team. A hand-run watch reads the clock, then returns the unnamed daemon line.
+    now: () => NOW,
     wait: async () => { throw new Error('past the refusal: a wait'); },
     alive: boom('a pid'),
     pid: 0,
   };
 
-  test('watch refuses the run before the team file or the state is read', async () => {
+  test('a hand-run watch prints the daemon line and does not start a pane watch', async () => {
     const io = leftItsPane();
     const code = await runWatch([], io, throwingWatch);
-    expect(code).toBe(1);
-    expect(io.err).toBe(`team watch: ${PLACED_ROUTE}\n`);
+    expect(code).toBe(0);
+    expect(io.out).toBe('team watch: the daemon does not host this session\n');
+    expect(io.err).toBe('');
   });
 
   test('broker refuses the run before the credential is read and the socket is bound', async () => {

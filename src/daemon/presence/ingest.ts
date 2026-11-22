@@ -1,5 +1,5 @@
 // The daemon's presence ingester: one instance per canonical route, created and driven by the
-// machine daemon after it owns its lock (the host owns the shared 250 ms timer, the one-in-flight
+// machine daemon after it owns its lock (the host owns the shared 500 ms timer, the one-in-flight
 // guard per route and cleanup). This module never starts a timer, a service or a second daemon.
 //
 // One step is a bounded asynchronous batch: a spool folder is listed, at most `maxRecords`
@@ -21,12 +21,13 @@
 // final `stopped` channel record and resolves. It never releases anything early and has no
 // timeout; if an fs write cannot complete, close stays pending, which is the honest state.
 import { constants, type Dirent } from 'node:fs';
-import { mkdir, open, readFile, readdir, rename, stat, truncate, unlink } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, open, rename, truncate, unlink } from '../../host/guarded-fs-promises.ts';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { STATE_FILE } from '../../state.ts';
 import {
-  PRESENCE_FORMAT, PRESENCE_STATE_OF, isPresenceBinding, presenceFutureBeyond, presenceNewer,
+  PRESENCE_FORMAT, PRESENCE_SESSION_START_RAW, PRESENCE_STATE_OF, isPresenceBinding, presenceFutureBeyond, presenceNewer,
   readPresenceLogLine, readPresenceReading, readPresenceRecord,
   type PresenceLogLine, type PresenceReading, type PresenceRecord, type PresenceStatus,
 } from './contract.ts';
@@ -107,6 +108,22 @@ type SeatIndex = {
 };
 
 class PresenceLogFault extends Error {}
+
+/** A hook's session-start bootstrap (`raw: session-start`): the incarnation's first word, which
+ *  takes no part in ordering. It is applied only while its binding has no applied line, and any
+ *  real event under the binding replaces it whatever the two stamps say. */
+function isBootstrap(line: Pick<PresenceRecord, 'source' | 'raw'>): boolean {
+  return line.source === 'runtime-hook' && line.raw === PRESENCE_SESSION_START_RAW;
+}
+
+/** Whether `line` replaces `known` as its binding's newest applied word. One rule for the live
+ *  apply, the per-binding index and the log rebuild. */
+function supersedes(line: PresenceRecord, known: PresenceRecord | null | undefined): boolean {
+  if (known === undefined || known === null) return true;
+  if (isBootstrap(line)) return false;
+  if (isBootstrap(known)) return true;
+  return presenceNewer(line, known);
+}
 
 function emptyResult(closed = false): PresenceIngestResult {
   return { ingested: [], rejected: [], stale: [], repaired: [], errors: [], pending: false, closed, healthy: false };
@@ -504,7 +521,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
           index.seq = line.seq;
           if (line.applied) {
             const known = index.newest.get(line.binding);
-            if (known === undefined || presenceNewer(line, known)) index.newest.set(line.binding, line);
+            if (supersedes(line, known)) index.newest.set(line.binding, line);
           }
           expectedSeq++;
           from = newline + 1;
@@ -730,7 +747,11 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
             result.pending = true;
             break;
           }
-          const applied = index.current === null || presenceNewer(record, index.current);
+          // A session-start word only bootstraps an incarnation that has no applied line yet: a
+          // late or repeated SessionStart (after a turn began, or an in-session /clear or
+          // /resume) is logged, never applied, and any real event replaces an applied bootstrap
+          // whatever its stamp (a delayed turn hook can carry an older one).
+          const applied = supersedes(record, index.current);
           const line: PresenceLogLine = {
             ...record,
             seq: index.seq + 1,
@@ -758,7 +779,7 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
           result.ingested.push(line);
           if (applied) {
             const known = index.newest.get(line.binding);
-            if (known === undefined || presenceNewer(line, known)) index.newest.set(line.binding, line);
+            if (supersedes(line, known)) index.newest.set(line.binding, line);
             if (line.binding === index.currentBinding) {
               index.current = line;
               index.projectionDirty = true;

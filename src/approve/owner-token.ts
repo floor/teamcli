@@ -8,6 +8,7 @@
 // This is a minimal, throwaway gate pending the kernel rewrite.
 import { createHash } from 'node:crypto';
 import { canonical, fingerprints, type Approvable, type Fingerprints } from './fingerprint.ts';
+import { ownerMachinePinned } from '../client/owner-pin-path.ts';
 
 /** The env var the out-of-band token is carried in. An env var, not a CLI flag: a flag could be a
  *  stray shell-history or pasted line, while an env var set for the one run is a deliberate act. */
@@ -34,8 +35,12 @@ export function upFingerprint(approved: Fingerprints, generation: number): strin
 /** Whether an out-of-band owner token authorizes exactly this change: true only when the env var
  *  holds, trimmed, the fingerprint the run recomputed now. Absent or empty is false — the owner
  *  gate's behaviour is unchanged when no token is set — and a token for any other change (a
- *  mutated file recomputes to a different fingerprint) never matches. */
-export function ownerAuthorized(env: Record<string, string | undefined>, expectedFingerprint: string): boolean {
+ *  mutated file recomputes to a different fingerprint) never matches. On a machine whose owner
+ *  seat is pinned from another machine no token admits anything: a fingerprint is public, so
+ *  there the owner's word is a signed answer bound to that machine. `home` is the run's home,
+ *  which the pin resolver itself never reads outside the test suite. */
+export function ownerAuthorized(env: Record<string, string | undefined>, expectedFingerprint: string, home?: string): boolean {
+  if (ownerMachinePinned(home)) return false;
   const token = env[OWNER_APPROVAL_ENV]?.trim();
   return token !== undefined && token.length > 0 && token === expectedFingerprint;
 }

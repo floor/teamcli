@@ -1,48 +1,81 @@
-import { isTypingLeg, NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, queuedLine, refuseTyping } from '../send/no-pane-messaging.ts';
+import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
+import { withSignedIdentity } from '../comms/identity.ts';
+import { typedPaneProof, type TypedPaneSources } from '../launch/identity.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
+import { readProcessParent } from '../process-parent-adapter.ts';
+import { channelFlagDropped, claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
+import { ensureFolder } from '../queue/durable.ts';
+import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
+import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
+import { relayIfConfined } from '../send/confined-outbox.ts';
+import { appendDelivery } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
+import { captureModelDriftFence, clearModelDrift, driftRefusal, modelDriftMode, modelDriftText, observedModelRefusal, reportModelDrift, type ModelDrift } from '../send/model-drift.ts';
+import { readEntityModelRule } from '../policy/entity-rule.ts';
+import { findAgent as findRegisteredAgent } from '../registry/agents.ts';
+import { carriedPointer, carrierDeliveryOf, inlineWake, legBody, legText, oversizedWake, recordDeliveredBody, settleLegBody, typedWakeMaxFor, RUNTIME_WAKE_MAX, type LegBody } from '../send/readable-wake.ts';
+import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, extname, join, resolve, sep } from 'node:path';
-import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
+import { basename, dirname, extname, join, resolve, sep } from 'node:path';
+import { relayDeliver } from '../send/relay-stage.ts';
+import { relayStage } from '../send/relay-stage.ts';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { nudgeBus } from '../bus/server.ts';
+import { nudgeBusNoWait } from '../bus/server.ts';
 import { postArrivalWebhook, type SenderPostOutcome } from '../bus/webhook.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
-import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
-import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, readAncestors, standingOf, walkCaller, type Caller, type CallerSources, type SeatStanding } from '../caller.ts';
+import { placedCallerTeam } from '../registry/binding.ts';
+import { charterTargetOf, ownerSeatRuleAdmits, ownerSeatRuleCovers, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
-import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { clearUnrecognisedScreen, leadOfRoot, noteUnrecognisedScreen } from '../send/unrecognised-screen.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, beginHerdrSnapshot, endHerdrSnapshot, evictHerdrAgentList, evictHerdrPaneProcessInfo, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, WEBHOOK_QUEUED_WORDS, type DeliveryClass, type WakeOutcome } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, holderText, seatLockHolder, seatLockPath, type LockHolder } from '../launch/seat-lock.ts';
-import { readState, type SeatState } from '../state.ts';
+import { LOG_FILE, readState, updateState, type SeatState } from '../state.ts';
+import { wakeMarkAt, wakePath } from '../send/wake-marker.ts';
+import { cliHookStatePath, reportedModel } from '../launch/cli-hook.ts';
+
+/** How long a real send waits for the daemon's typed-wake child to report. Zero: the send returns
+ *  once the daemon has accepted the handoff and staged its copy, and says the outcome is pending.
+ *  Waiting held every send to a typed seat for up to 20 s, more while the machine was loaded
+ *  (2026-11-17: 22 s for a wake whose first read refused at once, measured after a reboot). The
+ *  child still records its ending in the history, the trace and the team log, and the watch's
+ *  unread pass wakes the seat again when the wake did not land. */
+const HANDED_WAIT_MS = 0;
 import { logLine } from '../log.ts';
+import { tokenMark } from '../quota/out-of-tokens.ts';
+import { messageKeyOf } from '../store/keys.ts';
+import { seatCanWork, type CantWorkReason } from '../watch/seat-can-work.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor, type TypedWake } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
-import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
+import { getAgent, readAgents, updateAgent, recordAgentSessionWhen, recordProvenAgentAddress, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
-import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, getTeam, readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { crossTeamsFor } from '../send/cross-teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
+import { livePlacement } from '../send/placement.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitProjects, type AdmitTeam, type AdmitTeams, type DeclaredSender, type ReplyContext, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { markAnsweredBySend } from '../send/answered-by-send.ts';
-import { noteUnread } from '../send/unread-hint.ts';
-import { ensureRecord, isRecordSidecarName, readRecord, recordTextOf, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
+import { ensureRecord, sameFolder, isRead, isRecordSidecarName, isStampedPayload, readRecord, recordTextOf, signReceiptPayload, signRecord, stampedPayload, stampedSettlement, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { attributedBody } from '../send/sender-claim.ts';
 import { legStep, stagedStep, webhookStep, type StepFields } from '../send/steps.ts';
 import { isPublicOnly, scanPublicBody, type PrivateListPaths } from '../send/public-only.ts';
@@ -50,12 +83,12 @@ import { realRepoRead, type RepoRead } from '../send/repo-visibility.ts';
 import { createSession, originRepoOf, type SessionCliSpec } from '../send/session-cli.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { verifiedPayloadOf } from '../send/wake.ts';
-import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
-import { deliveryChainOf, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
+import { daemonSocketPath, isBareShellPane, probeDaemonSocket, requestDaemon, type DaemonResponse, type DaemonSendResponse } from '../send/daemon.ts';
+import { deliveryChainOf, deliveryInboxLed, DeliveryChainUnreadable, type DeliveryChain } from '../send/delivery.ts';
 import { messagingStoreChainOf, StoreChainUnreadable } from '../send/store.ts';
 import { cascadeOrder, cascadeWalk, legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { webhookRefusal } from '../send/webhook.ts';
-import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
+import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -64,16 +97,17 @@ import {
   type HeadlessResumeSpawn,
 } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
-import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice } from '../send/endpoint-notice.ts';
+import { clearEndpointBlocked, endpointBlockedLine, writeEndpointBlockedNotice, writeRuntimeNotice } from '../send/endpoint-notice.ts';
 import { dropMessage, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { deliverTypedWake, herdrTypedWakeHost, type TypedWakeHost } from '../send/typed-wake.ts';
-import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
-import { channelLaunchEnabled, channelNotified, recordChannelHeld, reserveChannelFallback, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
+import { claimBindingIn, inboxLive, INBOX_POLL_MS, receiptHeld, type InboxLiveness } from '../mcp/inbox.ts';
+import { channelLaunchEnabled, channelNotified, recordChannelHeld, reserveChannelFallback, CHANNEL_HELD_RECEIPT, CHANNEL_LOOK_MS, CHANNEL_PUSH_GRACE_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
-import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
+import { tokenUnavailable } from '../quota/token-fallback.ts';
+import { quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { compactReaderLine, existingRecordIdsIn, frameFor, readerLine } from '../send/frame.ts';
 import {
@@ -90,7 +124,10 @@ import { deliveryTimeoutInForce } from '../policy/delivery.ts';
 import { enterRunMemo, leaveRunMemo } from '../run-memo.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
-import { modelDiffers, signedSeatModel } from '../status/statusline.ts';
+import { modelDiffers, positiveModelObservation, signedSeatModel, signedSeatModelObservation, type SeatModelObservation } from '../status/statusline.ts';
+import { clearPreflightReports, reportHeldSend } from '../send/held-reports.ts';
+import { NO_STAMPED_FOLDER, mailTreeIn, recordFolderFor, seatMailDirIn, sessionMailDir } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -116,9 +153,11 @@ input box after that trigger line and Enter, and the pane host reported the seat
 done or blocked, changed from the status read before Enter — or the transcript shows
 the drop being read; no signed receipt has come back, so the message is never called
 read. The pane must not be a dialog this command already classifies (question,
-permission, trust, vendor notice, provider error, rate limit). A screen that is one of
-those is not reached: the kind and the drop path are named, and nothing further is
-pressed. Who may call it is the registry's decision, default deny: the
+permission, trust, vendor notice, provider error, rate limit). A rate-limit screen is not
+that wall when a readable prompt sits below the limit line and every window on the status
+row shows quota left. A row with no prompt, or any window with none left, keeps the wall. A
+screen that is one of those is not reached: the kind and the drop path are named, and
+nothing further is pressed. Who may call it is the registry's decision, default deny: the
 owner; an orchestrator to an orchestrator of its own team or entity; an orchestrator
 or operator to a seat of its own team; a seat whose role is operator to another such
 seat of its own team; an assistant seat to its entity's coordinator; the entity's main
@@ -197,9 +236,11 @@ The outcome is one of eight, and none of them is silent:
                line says \`trigger taken, no read receipt yet\`
   answered     --wait: a reply record on the thread arrived within the window; the
                reply follows on stdout (exit 0)
-  held         the message is safe — the signed record is on disk — and nothing was typed
-               or dialed further: the reason names what held it, and the copy's path when
-               one was kept. A socket frame that lands at the receiving box's held-message
+  held         exit 1, with the reason and held-send count. A model-drift hold stops before
+               the body is read or kept; the sender must retry after repair. Other holds
+               name the retained copy. One notice names the seat, reason and count to its
+               lead, and the output says whether that notice was delivered or still waits.
+               A socket frame that lands at the receiving box's held-message
                dialog is not this run's to see: the send reports \`delivered (socket)\` at
                the frame, and the daemon's presence pass records the hold afterwards, once
                for that id, and keeps the socket out until the declaration is re-confirmed
@@ -287,7 +328,7 @@ CLI. \`team route <seat>\` answers the address such a delivery uses.
 
 --client sends as an external client principal named by an owner-signed grant, never
 as the owner or a seat: the request is signed with the client's own key and one
-signed drop is written to the entity's orchestrator — \`orchestrator@floor\` is the only
+signed drop is written to the entity's orchestrator — \`orchestrator@<entity>\` is the only
 address this build admits. The same signed record is then carried through that
 seat's resolved delivery order — its own inbox channel, the cross-session socket
 when the seat's launch declares \`crossSessionInbound: accept\`, and the typed
@@ -323,8 +364,9 @@ export type DirectSendResult = {
 
 /**
  * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
- * live receiver without a keystroke — the typed and native legs type, and the drop leg is a
- * stored copy rather than a wake, so none of the three is attempted. The walk's ending is
+ * live receiver: the event legs, and the profile-gated typed wake for a seat whose profile
+ * declares one (its guarded seam, rechecked before every key). The native leg and the drop leg
+ * (a stored copy rather than a wake) are not attempted. The walk's ending is
  * handed back as a result instead of only an exit code. Admission, the delivery order and every
  * remaining route's rules are the same ones an ordinary send runs.
  */
@@ -384,13 +426,17 @@ export type DaemonSendPrincipal = {
   /** The roots the daemon hosted when the principal was established. */
   roots: readonly string[];
   recheck(): { ok: true } | { ok: false; why: string };
+  /** A daemon notice addresses the loaded team's lead and nobody else. Absent on a reminder. */
+  notice?: 'stuck-child' | 'seat-blocked' | 'drops-archived';
 };
 
 export type SendHost = {
+  /** Internal ordinary drift notice: stable timestamp/id, and no recursive lead notification. */
+  modelDriftNotice?: { at: string; admitted?(): void };
   /** The live agents of a session; null when herdr can't be reached. `cli` is the agent herdr
    *  reads on the pane (`claude`, `codex`, …), the process name a CLI profile names — null or
    *  absent when herdr reported none. */
-  agents(session: string): { name: string; pane: string; cli?: string | null }[] | null;
+  agents(session: string): { name: string; pane: string; cli?: string | null; session?: string }[] | null;
   /** A pane's process pids, or null when the pane can't be read. */
   processInfo(session: string, pane: string): PaneProcesses | null;
   /** The folder the session sockets live in; the real one is the runtime temp folder's. */
@@ -406,6 +452,10 @@ export type SendHost = {
    *  herdr binding is used; tests pass a fake. Every other binding in this host still refuses to
    *  type — this one is the single wake the profile gate allows (src/send/typed-wake.ts). */
   typedWake?: (session: string) => TypedWakeHost;
+  /** Fresh terminal-host and process readings for a direct typed wake's launch-identity proof
+   *  before each key (src/launch/identity.ts `typedPaneProof`). Absent, a direct typed wake types
+   *  nothing. */
+  keyOwner?: TypedPaneSources;
   now(): Date;
   /** The id a native handoff prints and records under; the real host mints a UUID, and a test or
    *  the docs runner pins one so the printed confirm line is exact. */
@@ -438,6 +488,15 @@ export type SendHost = {
    *  (beside a listener it also writes) to see the unconfirmed ending without waiting, or a
    *  small number to watch the receipt land. */
   inboxGraceMs?: number;
+  /** Out of tokens. The real host reads the recipient token mark; a test injects the observation and
+   *  absent is none. */
+  tokens?: (session: string, seat: string, dir: string) => { reason: 'out of tokens' } | undefined;
+  /** How long a typed wake waits for a working screen or a read receipt. Absent, the wake's own bound. */
+  wakeVerifyMs?: number;
+  /** The poll interval inside that bound. Absent, the wake's own interval. */
+  wakePollMs?: number;
+  /** Whether the drop's read receipt is already verified. Absent, the wake does not ask. */
+  wakeReceipt?: (input: { dropDir: string; id: string; seat: string; root: string; session: string; home: string }) => boolean;
   /** How long the channel leg waits for the seat server's push marker, in milliseconds. The real
    *  host leaves it at `CHANNEL_PUSH_GRACE_MS`; a test sets 0 to see the ending without waiting,
    *  with the marker it also writes already in place. */
@@ -446,11 +505,19 @@ export type SendHost = {
    *  real host so `--timeout <s>` (default 120s) sets the window; a test sets a small number or 0
    *  to exercise the thread wait without sleeping. */
   waitMs?: number;
+  /** How long a typed handoff the daemon's endpoint dropped waits for the endpoint to answer
+   *  again before it is asked once more, in milliseconds. The real host leaves it out
+   *  (`HANDOFF_RETRY_WAIT_MS`); 0 does not ask again. */
+  handoffRetryMs?: number;
+  /** How long a send handed to the daemon's typed wake waits for the child's outcome, in
+   *  milliseconds. The real host waits `HANDED_WAIT_MS`; a test's host leaves it out (0) and
+   *  sees the handoff line. */
+  handedWaitMs?: number;
   /** The build this process runs, compared against a live inbox listener's marker. Left out
    *  (a test's host), the retired inbox name's receipt wait keeps the liveness-only check. */
   build?: () => BuildIdentity;
-  /** The direct-only ending hook: when set, the typed leg is never walked and the ending is
-   *  reported once. The watch's idle dispatch is its caller. */
+  /** The direct-only ending hook: when set, only wake legs are walked (the typed one only where
+   *  the profile declares it) and the ending is reported once. The watch's idle dispatch is its caller. */
   direct?: DirectSendHook;
   /** The watch's own sender principal, set only by the internal `sendWatchDirect`. Absent, the
    *  caller is placed from the ordinary sources (`io.caller`, `io.callerSources`, ancestry). */
@@ -461,6 +528,9 @@ export type SendHost = {
   daemon?: DaemonSendPrincipal;
   /** Optional process runner override for the `headless-resume` leg (`gemini` / `cursor-agent`). */
   headlessResumeSpawn?: HeadlessResumeSpawn;
+  /** The Codex native route a reply's (and a re-send's) walk takes. Absent (the real host), the
+   *  runtime's own route; a test hands in a queue that records what it was given. */
+  nativeRoute?: typeof deliverCodexNativeRoute;
   /** The two external private lists a public-only body is scanned against. Absent (the real
    *  host), the machine's default paths are read; a test hands in its own files, so no send
    *  touches the machine's lists. */
@@ -472,12 +542,17 @@ export type SendHost = {
 };
 
 export const realHost: SendHost = {
-  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, cli: agent.agent })) ?? null,
+  agents: (session) => agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, cli: agent.agent, session: agent.session })) ?? null,
   processInfo: (session, pane) => paneProcesses(pane, session),
   // The probe's path shape: `<tmp>/cc-socks/<pid>.sock`, the runtime temp folder's own
   // (observed on this Mac as /tmp/cc-socks; a version-specific observation, not a public
   // API contract).
-  socketsDir: join(tmpdir(), 'cc-socks'),
+  handedWaitMs: HANDED_WAIT_MS,
+  // Read when a send looks, not when the module loads: the warm send host serves callers whose
+  // runtime temp folder differs from its own (rfc-bus-send-server §2.4).
+  get socketsDir() { return join(tmpdir(), 'cc-socks'); },
+  // A fixture that assigns a folder replaces the reading with that plain value.
+  set socketsDir(value: string) { Object.defineProperty(this, 'socketsDir', { value, writable: true, enumerable: true, configurable: true }); },
   socketsDirAlt: '/tmp/cc-socks',
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
@@ -491,10 +566,31 @@ export const realHost: SendHost = {
     foregroundCwd: (session, pane) => paneForegroundCwd(pane, session),
   },
   typedWake: (session) => herdrTypedWakeHost(session),
+  // Fresh readings, never the send's snapshot: a direct typed wake's launch-identity proof.
+  keyOwner: {
+    agents: (session) => {
+      evictHerdrAgentList(session);
+      return agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, ...(agent.session === undefined ? {} : { session: agent.session }) })) ?? null;
+    },
+    processes: (pane, session) => {
+      evictHerdrPaneProcessInfo(pane, session);
+      return paneProcesses(pane, session);
+    },
+    processStart: (pid) => processStartOf(pid),
+    processParent: readProcessParent,
+  },
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
   build: () => buildIdentity(),
+  tokens: (_session, _seat, dir) => tokenMark(dir, _seat),
+  wakeReceipt: (input) => {
+    try {
+      return isRead(input.dropDir, input.id, { to: input.seat, root: input.root, session: input.session }, messageKeyOf(input.home));
+    } catch {
+      return false;
+    }
+  },
 };
 
 const send: Command = (argv, io) => runSend(argv, io, realHost);
@@ -537,15 +633,24 @@ function setLegState(report: Report, leg: WalkLeg, state: LegState, reason?: str
  *  names, the id of the frame it composed (null until one is built), and the team and session
  *  the send addresses, read from the receiving team file once it names one. */
 type Report = {
+  /** Recipient model drift is advisory unless the observed model violates an existing rule. */
+  recipientDrift?: string;
+  /** Why the receiving seat's channel was not walked, when its process carries no channel flag. */
+  channelNote?: string;
   json: boolean;
   seat: string | null;
   sent: string | null;
   project: string | null;
   session: string | null;
+  /** The receiving team's reporting scope; never used to admit or deliver the original send. */
+  holdScope?: { root: string; project: string; session: string; lead: string; leadSpec: string; senderLeadSpec: string; dry: boolean };
   /** The team the sender stands in, by team id: every history line this run writes carries it,
    *  so a reader in another team resolves the sender like the record does. A run that refused
    *  before a team was read names none, and writes no history line anyway. */
   from_team?: string;
+  /** The typed wake this send attempted without delivering, and whether any key reached the
+   *  pane: carried into every history line the send writes after it, as `wake_keys_sent`. */
+  typedWake?: { keysSent: boolean };
   /** The resolved walk's legs, in order: a real send fills each state as the walk runs, and a
    *  dry run lists the candidates it would walk. Absent on a run that never resolved a walk. */
   delivery?: LegReport[];
@@ -575,8 +680,11 @@ type Report = {
 type SentAs = { spec: string; resolved: string };
 
 /** The sender's team as every history line this run writes carries it. */
-function historySender(report: Report): { from_team?: string } {
-  return report.from_team === undefined ? {} : { from_team: report.from_team };
+function historySender(report: Report): { from_team?: string; wake_keys_sent?: boolean } {
+  return {
+    ...(report.from_team === undefined ? {} : { from_team: report.from_team }),
+    ...(report.typedWake === undefined ? {} : { wake_keys_sent: report.typedWake.keysSent }),
+  };
 }
 
 /** The receiving seat's runtime record, when the team's state can be read: the launch's own
@@ -588,6 +696,44 @@ function seatStateOf(dir: string, session: string, seat: string): SeatState | un
   } catch {
     return undefined;
   }
+}
+
+/** A seat that cannot take work, read once before any route. Wake-not-taken is not decided
+ *  here: that reason exists only after a typed wake. No pane is not "no CLI". `seen` is the
+ *  pane text this send already read; when it is passed, this check does not read the pane again. */
+function workBlock(
+  host: SendHost,
+  dir: string,
+  session: string,
+  seat: string,
+  cli: string,
+  seen?: { raw: string | null },
+): { reason: CantWorkReason; line: string } | null {
+  const marked = host.tokens ? host.tokens(session, seat, dir) : tokenMark(dir, seat);
+  const canRead = typeof host.agents === 'function' && typeof host.processInfo === 'function';
+  if (!canRead && marked === undefined) return null;
+  const found = canRead ? findAgent(host, session, seat) : { ok: false as const };
+  const pane = found.ok ? found.pane : undefined;
+  const processes = pane === undefined ? null : host.processInfo(session, pane);
+  const raw = seen !== undefined
+    ? seen.raw
+    : pane === undefined ? null : host.native.paneText?.(session, pane) ?? null;
+  const screen = raw ?? { kind: 'idle' as const };
+  // A usage wall is the detector's out-of-tokens reason. The old preflight returned
+  // on its own, before this reading, and a cross-team send must judge the recipient.
+  const wall = typeof raw === 'string' && raw !== '' ? quotaOutOf(cli, raw) : null;
+  const tokens = marked ?? (wall !== null ? { reason: 'out of tokens' as const } : undefined);
+  const recorded = canRead ? seatStateOf(dir, session, seat)?.launched : undefined;
+  const verdict = seatCanWork({
+    seat,
+    cli,
+    screen,
+    processes,
+    ...(recorded === undefined ? {} : { recorded }),
+    ...(tokens === undefined ? {} : { tokens }),
+  });
+  if (verdict.ok || verdict.reason === 'wake not taken') return null;
+  return { reason: verdict.reason, line: verdict.line };
 }
 
 /** The class a class read ended in, whether the seat's webhook adapter is the only route the
@@ -609,8 +755,8 @@ function classWords(read: ClassRead, seat: string, wake?: WakeOutcome): string {
   if (read.cls === 'push' && read.webhookOnly) return WEBHOOK_QUEUED_WORDS;
   return deliveryWords(read.cls, seat, {
     ...(read.human ? { human: true } : {}),
-    ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) !== null ? { typedWake: true } : {}),
     ...(read.watchWake ? { watchWake: true } : {}),
+    ...(!read.human && (profileFor(read.cli)?.typedWake ?? null) === null && (profileFor(read.cli)?.sessionCli ?? null) !== null ? { sessionOnly: true } : {}),
     ...(wake === undefined ? {} : { wake }),
   });
 }
@@ -681,6 +827,8 @@ function dropNotWoken(report: Report): boolean {
  *  a dry run) has no id to print; a line that already names the id — the queued answer's — is
  *  left as it stands rather than naming it twice. */
 function withId(summary: string, report: Report): string {
+  if (report.recipientDrift !== undefined) summary = `${summary}; model drift: ${report.recipientDrift}`;
+  if (report.channelNote !== undefined && !summary.includes(report.channelNote)) summary = `${summary}; ${report.channelNote}`;
   const id = report.sent;
   if (id === null || id === '' || summary.includes(id)) return summary;
   return `${summary} (id ${id})`;
@@ -727,6 +875,10 @@ type Aim = {
   root: string;
   /** True when the target's team is not the caller's. */
   cross: boolean;
+  /** The registry key the recipient's record is filed under, when the caller resolved it from
+   *  a signed binding (a client grant's team): the socket's record check reads it in place of
+   *  the root's own id, which a registry may key differently. */
+  teamId?: string;
 };
 
 type TeamLoad = ReturnType<typeof readTeamConfig>;
@@ -776,14 +928,19 @@ function needsTeam(spec: string): string {
  * teams' roots, and the receiving team's file is loaded and read in its place; a bare name has
  * no team to resolve in and is refused with `needsTeam`'s sentence.
  */
-function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
-  const loaded = readTeamConfig(io.cwd, { home: host.home });
+/** `first` is the resolution this run already made of the same spec (`sendCharterTargets`): it is
+ *  used as it stands rather than resolved again. */
+function prologue(io: Io, host: SendHost, seatName: string, first?: ResolvedTarget): Prologue | Ended {
+  // The pane places the sender before the folder does. A seat whose shell sits in another
+  // team's bound root is still that seat; an unnamed pane leaves the folder to decide.
+  const placed = placedCallerTeam(host.home, io);
+  const loaded = readTeamConfig(placed === null ? io.cwd : placed.root, { home: host.home });
   if (!loaded.ok) {
     if (noTeamFolder(loaded.errors)) {
       const parsed = parseSpec(seatName);
       if ('error' in parsed) return { ended: 'configuration', message: parsed.error };
       if (parsed.kind === 'seat') return { ended: 'configuration', message: needsTeam(seatName) };
-      return homeless(io, host, seatName);
+      return homeless(io, host, seatName, first);
     }
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return { ended: 'configuration', message: message || 'the team file cannot be read' };
@@ -810,7 +967,7 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   const { caller } = judged;
   const who = logTag(caller);
   const from = senderLabelOf(caller);
-  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  const resolved = first ?? resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   // A settings record that exists and does not verify refuses the send: the address it may
   // stand for cannot be decided from a record the store disowns.
   if ('error' in resolved && resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
@@ -824,18 +981,36 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   return { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit };
 }
 
+/** The refusal for a send whose target is the sending seat itself: the same seat of the same team
+ *  in the same session. Null for every other target, and for a caller that is not a seat. A seat
+ *  never sends to itself: the frame would wake the sender with its own words and the command would
+ *  print "delivered", which reads as the other seat having it. It is asked only once the caller is
+ *  admitted, so a caller the placement or admission checks refuse keeps that refusal. The aim is
+ *  the resolved one — its seat, its team's root and its session — never the words written, so a
+ *  nickname, an id or a `seat@team` that names the sender is refused like its seat's own name. */
+export function selfAddressed(caller: Caller, seatName: string, to: { seat: string; root: string; session: string }, root: string): string | null {
+  if (caller.kind !== 'seat') return null;
+  if (to.seat !== caller.name || to.session !== caller.session || to.root !== root) return null;
+  return `${seatName}: that is your own seat (${caller.name} of this team); nothing was sent. To reach another team's seat of that name, write ${caller.name}@<team id> (team send --list shows the addresses)`;
+}
+
 /**
  * A full address from a folder that is no team: the registry names the receiving team's root, so
  * its own file is loaded and the caller — the owner, the only caller this path admits, since
  * every other caller is judged by its team's file and there is none here — stands in it for the
  * read. Every refusal this path writes has no team log to write to: it is reported, not logged.
  */
-function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
+function homeless(io: Io, host: SendHost, seatName: string, first?: ResolvedTarget): Prologue | Ended {
   const caller = callerOf(io);
   if (caller.kind !== 'owner') {
-    return { ended: 'refused', dir: null, who: describeCaller(caller), reason: 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder' };
+    // An unplaced caller is most often a seat team could not place by its pane (no folder of its
+    // own team to fall back on): the placement's reason is the cause to name, not the folder.
+    const reason = caller.kind === 'unplaced'
+      ? `this call is ${describeCaller(caller)}, and it runs outside a team's folder; a send from there is the owner's`
+      : 'a send from outside a team\'s folder is the owner\'s; run it inside a team\'s folder';
+    return { ended: 'refused', dir: null, who: describeCaller(caller), reason };
   }
-  const resolved = resolveTarget(host.home, seatName, io, (session) => host.agents(session));
+  const resolved = first ?? resolveTarget(host.home, seatName, io, (session) => host.agents(session));
   if ('error' in resolved) {
     if (resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
     return { ended: 'refused', dir: null, who: 'owner', reason: resolved.error };
@@ -976,15 +1151,30 @@ type WalkOrderInput = {
   build?: () => BuildIdentity;
 };
 
+/** Whether the deciding word of this chain began with the retired inbox name. A chain this
+ *  reader built records that on the chain; a host-supplied chain still carries the alias when
+ *  the test left it as the first name of the innermost word. */
+function chainNamesInboxFirst(chain: DeliveryChain): boolean {
+  if (deliveryInboxLed(chain)) return true;
+  for (const level of ['seat', 'team', 'project', 'entity'] as const) {
+    const words = chain[level];
+    if (words === undefined || words.length === 0) continue;
+    return words[0] === 'mcp-inbox';
+  }
+  return false;
+}
+
 function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const order = deliveryOrder(input.rawChain);
   // The line the receiving seat actually ran, read from its own runtime record first: the
   // declaration and the development channel are what that argv carries, and the file's row is
   // only what a later launch would run. Without a runtime record the row stands, as before.
   const runtimeLaunch = seatStateOf(input.dir, input.session, input.seat)?.launch_line ?? input.declared?.launch ?? '';
-  // A receiving seat whose launch declares `crossSessionInbound: "accept"` takes the frame
-  // first: the socket is the fastest channel and the owner asked for it ahead of the rest of the
-  // order. A receiver keeps the order its files declare — hold, refuse and unset in the launch
+  // The cross-session socket is an opt-in: a receiving seat is dialed only when its team file
+  // declares `inbound: accept` and its launch declares `crossSessionInbound: "accept"`, and then
+  // only after a development channel that is not connected or did not complete (comms roadmap,
+  // 2026-11-17: the receiving CLI frames a socket frame as a message from another Claude
+  // session, which mislabels the sender). A receiver keeps the order its files declare — hold, refuse and unset in the launch
   // are never dialed, since a held frame would block the seat's box — and another CLI has no
   // cross-session socket at all.
   const inbound = declaredInboundOf({
@@ -994,18 +1184,17 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     seat: input.seat,
     ...(runtimeLaunch === '' ? {} : { launch: runtimeLaunch }),
   });
-  // The one implied default that names the socket: a receiving Claude session whose launch
-  // declares `crossSessionInbound: accept`, with no level of its chain declaring an order, walks
-  // socket first. A seat this build launched (its generated settings file is on the line) is
-  // authorized by that launch alone; an explicit team-file `inbound: hold` or `refuse` keeps the
-  // socket out, and a session launched some other way still needs the team file's
-  // `inbound: accept`. The launch word is always what the receiving CLI needs to take the frame.
+  // The one implied default that names the socket: a receiving Claude session whose team file
+  // declares `inbound: accept` and whose launch declares `crossSessionInbound: accept`, with no
+  // level of its chain declaring an order, keeps the socket in its walk, behind a connected
+  // channel. A launch's own accept authorizes nothing without the team-file word; an explicit
+  // `inbound: hold` or `refuse` keeps the socket out. The launch word is always what the receiving CLI needs to take the frame.
   // A word the chain declares — team, seat, project — is walked as written: it may place `socket`
   // anywhere or leave it out, and this build never force-prepends it. A seat whose box held a
   // frame keeps the socket out until its declaration is re-confirmed.
   const socketWord = input.declared?.inbound;
   const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)), inbound);
-  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
+  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null && !socketSuppressed(input.root, input.home);
   const declaredOrder = Object.values(input.rawChain).some((word) => word !== undefined && word.length > 0);
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
@@ -1044,7 +1233,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // client to load the channel, the listener marker says the server declared it, and a seat
   // with either word missing walks its order exactly as a send without the channel would. A
   // declared order is walked as written, and the channel is never a declared word.
-  const dropDir = join(input.dir, 'send-drops', input.session, input.seat);
+  const dropDir = seatMailDirIn(input.dir, input.session, input.seat);
   // The listener is probed whenever the seat's launch enables the channel, even for a declared
   // order the channel is never a word of: a serving channel this build cannot vouch for pushes
   // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
@@ -1060,7 +1249,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The word the channel leg is missing, for the report: the launch does not flag it, the seat's
   // inbox server is not serving, or it serves without declaring the channel. A walk that takes
   // the channel has no such word and reports the leg itself.
-  const channelSkip = channelSkipReason(input.declared?.launch, channelProbe);
+  const channelSkip0 = channelSkipReason(input.declared?.launch, channelProbe);
   // The fourth implied default: a receiving CLI whose profile declares its own session call
   // (`session_cli`) takes the send there first, while no level of its chain declares an order.
   // The call is the only route such a CLI has that reaches an agent at all — it has no inbox, no
@@ -1100,6 +1289,32 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
     && !declaredWithWake.includes('session')) {
     declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'session');
   }
+  // Prefer a connected channel, retaining the authorized socket as fallback if its
+  // notification does not complete. The walk stops at the first successful delivery.
+  const inboxFirst = input.cli === 'claude-code' && chainNamesInboxFirst(input.rawChain);
+  if ((channelProbe !== null || inboxFirst) && !human) {
+    const probe = channelProbe ?? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.());
+    const connected = probe.live === true && probe.listener.channel === true && !channelFlagDropped(input.root, input.session, input.seat);
+    if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
+    // A chain led by the retired inbox word resolves to the drop leg alone, which nothing reads
+    // while the seat is idle. When its channel is not proven (a dark root, a listener that is not
+    // serving the channel), the seat walks the socket its own gate allows — the team file's
+    // `inbound: accept`, the launch's `crossSessionInbound: accept`, no held box — ahead of the
+    // drop, exactly as a Claude seat with no declared order does. Mail is never left silent.
+    if (inboxFirst && !connected && socketNow && !declaredWithWake.includes('socket')) {
+      const at = declaredWithWake.indexOf('drop');
+      declaredWithWake.splice(at < 0 ? declaredWithWake.length : at, 0, 'socket');
+    }
+  }
+  // The development channel leads a Claude seat's walk (comms roadmap, 2026-11-17: the socket
+  // frame mislabels every sender as a Claude session). A socket the team
+  // declared (`inbound: accept`) is walked only after a channel that is not connected or did not
+  // complete; it never goes ahead of the channel.
+  if (input.cli === 'claude-code' && !human && declaredWithWake.includes('channel') && declaredWithWake.includes('socket')
+    && declaredWithWake.indexOf('socket') < declaredWithWake.indexOf('channel')) {
+    declaredWithWake.splice(declaredWithWake.indexOf('socket'), 1);
+    declaredWithWake.splice(declaredWithWake.indexOf('channel') + 1, 0, 'socket');
+  }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked,
   // with one profile-gated exception (src/send/typed-wake.ts). A profile that declares
@@ -1125,13 +1340,29 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The adapter row's usability, read once before the walk runs: it decides whether the dry
   // phrase names the webhook, whether a stale serving channel is held off (the sender's own
   // post is a wake only when the route stands), and the leg itself re-reads it when reached.
-  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook);
+  const webhookReason = input.declared === undefined || input.declared.webhook === undefined ? null : webhookRefusal(input.declared.webhook, input.declared.cli);
   const cascade = cascadeWalk(ordered, webhookWalked);
   // No pane messaging, continued: the drop leg always closes the walk, so a seat with no event
   // adapter keeps the message in its bus inbox and the sender is told so.
   const eventLegs: WalkLeg[] = cascade.filter((leg) => !isTypingLeg(leg) || (walkingTyped && leg === 'typed'));
   if (!eventLegs.includes('drop')) eventLegs.push('drop');
   const typingSetAside = ordered.filter((leg) => isTypingLeg(leg) && !(walkingTyped && leg === 'typed'));
+  // The Claude adapter (§2.1): on an active root a claude-code receiver's declared order is
+  // ignored. Its walk is the channel when its listener serves one (the channel server pushes the
+  // copy with its offer), then the drop; the scheduler's pointer covers a seat whose channel is
+  // not proven. No socket and no typed leg is walked from here.
+  const adapterRoot = !human && claudeAdapterRoot(input.cli, input.root, input.home, input.declared?.webhook !== undefined);
+  // A seat whose process carries no channel flag (a terminal-host resume after a restart) is
+  // walked as one with no channel: its listener may declare one, but no push reaches the seat.
+  // This holds on every root and for a seat with a webhook too: the channel leg leaves the walk.
+  const listening = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+  const flagDropped = !human && listening && channelFlagDropped(input.root, input.session, input.seat);
+  if (flagDropped && eventLegs.includes('channel')) eventLegs.splice(eventLegs.indexOf('channel'), 1);
+  if (adapterRoot) {
+    eventLegs.splice(0, eventLegs.length, ...(listening && !flagDropped ? ['channel', 'drop'] as WalkLeg[] : ['drop'] as WalkLeg[]));
+    typingSetAside.splice(0, typingSetAside.length);
+  }
+  const channelSkip = flagDropped ? CHANNEL_FLAG_DROPPED : channelSkip0;
   const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop' && leg !== 'webhook');
   const chosen: readonly WalkLeg[] = human ? (webhookWalked ? ['webhook', 'drop'] : ['drop']) : eventLegs;
   return {
@@ -1165,6 +1396,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
 
 type SnapshotSendHost = SendHost & {
   evictProcessInfo?: (session: string, pane: string) => void;
+  evictAgents?: (session: string) => void;
 };
 
 function snapshotSendHost(host: SendHost): SnapshotSendHost {
@@ -1172,18 +1404,28 @@ function snapshotSendHost(host: SendHost): SnapshotSendHost {
   const processInfoCache = new Map<string, ReturnType<SendHost['processInfo']>>();
   return {
     ...host,
-    agents(session: string) {
-      if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
-      const res = host.agents(session);
-      agentsCache.set(session, res);
-      return res;
-    },
-    processInfo(session: string, pane: string) {
-      const key = `${session}\0${pane}`;
-      if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
-      const res = host.processInfo(session, pane);
-      processInfoCache.set(key, res);
-      return res;
+    // A snapshot caches capabilities the host has; it must not invent pane readers.
+    ...(typeof host.agents !== 'function' ? {} : {
+      agents(session: string) {
+        if (agentsCache.has(session)) return agentsCache.get(session) ?? null;
+        const res = host.agents(session);
+        agentsCache.set(session, res);
+        return res;
+      },
+    }),
+    ...(typeof host.processInfo !== 'function' ? {} : {
+      processInfo(session: string, pane: string) {
+        const key = `${session}\0${pane}`;
+        if (processInfoCache.has(key)) return processInfoCache.get(key) ?? null;
+        const res = host.processInfo(session, pane);
+        processInfoCache.set(key, res);
+        return res;
+      },
+    }),
+    evictAgents(session: string) {
+      agentsCache.delete(session);
+      evictHerdrAgentList(session);
+      if (session === 'default') evictHerdrAgentList(undefined);
     },
     evictProcessInfo(session: string, pane: string) {
       processInfoCache.delete(`${session}\0${pane}`);
@@ -1243,6 +1485,11 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   const host = snapshotSendHost(rawHost);
   enterRunMemo();
   try {
+    // A seat its sandbox confines cannot write the recipient's drop or lock: its outbox carries
+    // the send to the team's watch, which runs this same command as that seat. The placement is
+    // the snapshot's own, so the send's gate reads the same one.
+    const relayed = await relayIfConfined('send', argv, io);
+    if (relayed !== null) return relayed;
     return await runSendWithSnapshot(argv, io, host);
   } finally {
     leaveRunMemo();
@@ -1250,7 +1497,80 @@ export async function runSend(argv: string[], rawIo: Io, rawHost: SendHost): Pro
   }
 }
 
-async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Promise<number> {
+/** How long a dropped typed handoff waits for its endpoint to answer again, and how often it looks. */
+export const HANDOFF_RETRY_WAIT_MS = 15_000;
+const HANDOFF_RETRY_POLL_MS = 500;
+
+/** Asks the daemon again for a typed handoff its endpoint dropped: once the endpoint answers a
+ *  ping within `HANDOFF_RETRY_WAIT_MS`, the same request goes once more. Null when the endpoint
+ *  never came back or did not answer the second time either. */
+export async function retryDaemonHandoff(
+  socketPath: string,
+  request: Parameters<typeof requestDaemon>[1],
+  host: Pick<SendHost, 'handoffRetryMs'>,
+): Promise<DaemonResponse | null> {
+  // One deadline on the monotonic clock covers the pings and the one replay: the pings stop
+  // early enough to leave the replay its share, and nothing runs past the deadline.
+  const window = host.handoffRetryMs ?? HANDOFF_RETRY_WAIT_MS;
+  const deadline = performance.now() + window;
+  const reserve = Math.min(HANDOFF_REPLAY_MS, Math.max(0, window / 2));
+  const left = () => deadline - performance.now();
+  for (;;) {
+    const pingBudget = left() - reserve;
+    if (pingBudget < 50) return null;
+    if (await probeDaemonSocket(socketPath, Math.min(400, pingBudget))) {
+      const replayBudget = Math.floor(left());
+      if (replayBudget < 50) return null;
+      return requestDaemon(socketPath, request, Math.min(HANDOFF_REPLAY_MS, replayBudget));
+    }
+    if (left() - reserve < HANDOFF_RETRY_POLL_MS) return null;
+    await new Promise<void>((resolve) => setTimeout(resolve, HANDOFF_RETRY_POLL_MS));
+  }
+}
+
+/** The longest the one replay of a dropped handoff waits for its answer. */
+const HANDOFF_REPLAY_MS = 10_000;
+
+/** The team session the rest of this send will judge the caller in, read once from the folder
+ *  the shell is in. `default` is the sessionless key `judgeCallerIn` already uses. A folder
+ *  that is not a team leaves the session unset, and the gate keeps the placement it has today. */
+function sendTeamSession(io: Io, home: string): string | undefined {
+  let loaded: ReturnType<typeof readTeamConfig>;
+  try {
+    loaded = readTeamConfig(io.cwd, { home });
+  } catch {
+    return undefined;
+  }
+  if (!loaded.ok) return undefined;
+  const session = loaded.team.session;
+  if (session === '' || session === 'default') return undefined;
+  return session;
+}
+
+type ResolvedTarget = ReturnType<typeof resolveTarget>;
+
+/** The folder the charter judges for this send: the recipient team's root, or this checkout for a
+ *  read that names no recipient. A spec that names a team the registry cannot place is no
+ *  admission. */
+function sendCharterTargets(home: string, seatName: string | undefined, args: { flags: { has(name: string): boolean }; values: { confirm?: string; record?: string } }, io: Io, host: SendHost, keep: (resolved: ResolvedTarget) => void): string[] {
+  if (seatName === undefined || args.flags.has('list') || args.values.confirm !== undefined || args.values.record !== undefined) {
+    return [charterTargetOf(io.cwd)];
+  }
+  const resolved = resolveTarget(home, seatName, io, (session) => host.agents(session));
+  keep(resolved);
+  if (!('error' in resolved)) return [resolved.team.root];
+  const parsed = parseSpec(seatName);
+  if (!('error' in parsed) && parsed.kind === 'at') {
+    const teams = findTeams(home, parsed.scope);
+    if (teams.length === 1) return [teams[0]!.root];
+  }
+  if (!('error' in parsed) && (parsed.kind === 'seat' || parsed.kind === 'nickname')) return [charterTargetOf(io.cwd)];
+  return [];
+}
+
+async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, reportHolds = true): Promise<number> {
+  // The literal lists the contract reads; src/send/command-grammar.ts carries the same words for
+  // the confined-seat relay, and test/confined-outbox.test.ts holds the two equal.
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval', 'reason'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
@@ -1283,9 +1603,18 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // principals are established by their internal entries with their own proof, so neither asks
   // the owner seat and neither can be handed an owner answer.
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
+  // The spec is resolved once per run: the charter's answer is the one the prologue uses.
+  let firstTarget: ResolvedTarget | undefined;
+  const sendTargets = sendCharterTargets(host.home, seatName, args, io, host, (resolved) => { firstTarget = resolved; });
   let seatApproved = false;
+  // The default rule lifts the owner gate and leaves the sender as the seat. An owner-seat
+  // signature still admits the run as the owner, because the owner seat signed it.
+  let leadsLift = false;
+  // A registry record that is not running never becomes the sender, including through a later
+  // always-rule lift that would otherwise admit the run as the owner.
+  let recordNotRunning = false;
   if (internalCallerOf(host) === null) {
-    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources);
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, seatSources, sendTargets, sendTeamSession(io, host.home));
     if (step.kind === 'requested') {
       // exit: send.approval-requested
       return 0;
@@ -1294,14 +1623,54 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       // exit: send.approval-refused
       return 1;
     }
-    seatApproved = step.kind === 'admitted';
+    // The default rule lifts the gate. Attribution stays the seat: a record that is not running
+    // is refused, and a running record or a missing one is judged as that seat.
+    if (step.kind === 'admitted') {
+      seatApproved = true;
+      if (step.admission.via === 'leads') {
+        leadsLift = true;
+        const seated = callerOf(io);
+        if (seated.kind === 'seat') {
+          // A seat caller may carry no session. The team file's session is the same one the
+          // record is filed under. With neither, the not-running check cannot be skipped:
+          // skipping it would admit the seat as the owner.
+          let session = seated.session !== undefined && seated.session !== '' ? seated.session : null;
+          if (session === null) {
+            try {
+              const loaded = readTeamConfig(io.cwd, { home: host.home });
+              if (loaded.ok && loaded.team.session !== '') session = loaded.team.session;
+            } catch {
+              session = null;
+            }
+          }
+          if (session === null) {
+            let lifecycle: string | null = null;
+            for (const agent of readAgents(host.home)) {
+              if (agent.lifecycle === 'retired' || agent.reach.seat !== seated.name || agent.lifecycle === 'running') continue;
+              lifecycle = agent.lifecycle;
+              break;
+            }
+            const why = lifecycle === null
+              ? `the registry's record for seat ${seated.name} is not running: only a running seat acts as its own record`
+              : `the registry's record for seat ${seated.name} is ${lifecycle}, not running: only a running seat acts as its own record`;
+            return refuse(io, null, seated.name, why, host, report);
+          }
+          const held = recordFor(host.home, session, seated.name);
+          if (held !== null && held.lifecycle !== 'running') {
+            seatApproved = false;
+            leadsLift = false;
+            recordNotRunning = true;
+          }
+        }
+      }
+    }
   }
   const preCaller = internalCallerOf(host) ?? (seatApproved ? undefined : walkCaller(io));
   if (
-    internalCallerOf(host) === null && !seatApproved && preCaller !== undefined && !isOwner(preCaller)
+    internalCallerOf(host) === null && !seatApproved && !recordNotRunning && preCaller !== undefined && !isOwner(preCaller)
     && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
   ) {
-    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
+    seatApproved = ownerSeatRuleCovers(io.cwd, sendTargets) && ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), io, seatSources);
   }
   // The no-terminal refusal judges the ordinary caller. A direct-work or reminder run's caller is
   // the principal its internal entry established and verified, which may run with no terminal; it
@@ -1357,7 +1726,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     timeoutS = seconds;
   }
 
-  const pro = prologue(io, host, seatName);
+  const pro = prologue(io, host, seatName, firstTarget);
   if ('ended' in pro) {
     if (pro.ended === 'configuration') return configuration(io, pro.message, report);
     return refuse(io, pro.dir, pro.who, pro.reason, host, report);
@@ -1365,7 +1734,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
   // An owner-seat answer admits this one send the way the owner would. The caller's own identity
   // stays on the log line; the admission is the owner's, because the owner seat signed it.
-  const acting: Caller = seatApproved ? { kind: 'owner' } : caller;
+  // The default rule lifts the same gate and leaves the sender as the seat: the header names
+  // the seat, and the id rides the seat's own record, or the file's seat when it has none.
+  // The owner as acting principal is never decided in the warm send host (rfc-bus-send-server §2.5).
+  if (seatApproved && !leadsLift) hostedFallbackPoint('the owner would be the acting principal');
+  const acting: Caller = seatApproved && !leadsLift ? { kind: 'owner' } : caller;
   // The line's own team, for every reader outside this one: the history the receiving team keeps
   // must say where its sender stood, not leave a shared seat name to the local roster.
   report.from_team = fileTeamId;
@@ -1398,7 +1771,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -1409,7 +1782,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -1434,6 +1807,9 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       cross,
     };
   }
+  const ownSeat = selfAddressed(acting, seatName, to, root);
+  if (ownSeat !== null) return refuse(io, dir, who, ownSeat, host, report);
+  host.modelDriftNotice?.admitted?.();
   // Whether this sender can make the native leg itself: a seat whose registry record or team file
   // declares Claude Code carries the cross-session SendMessage the leg is made with. The owner's
   // terminal, and every other CLI, do not, and their native leg stays a skip.
@@ -1453,6 +1829,13 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // make a stopped seat take a message.
   const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
+  if (receiving.ok) report.holdScope = {
+    root: to.root, project: to.project, session: to.session,
+    lead: receiving.team.orchestrator || receiving.team.operator,
+    leadSpec: `${receiving.team.orchestrator || receiving.team.operator}${to.cross ? `@${to.project}` : ''}`,
+    senderLeadSpec: team.orchestrator || team.operator,
+    dry: args.flags.has('dry-run') || !reportHolds,
+  };
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   // The receiving CLI's own session call, when its profile declares one (`session_cli`): the leg
   // that hands the whole body to the CLI as one argument, in the seat's own folder. A profile
@@ -1488,42 +1871,80 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   });
   report.deliveryClass = classRead.cls;
   report.deliveryWords = classRead.words;
-  // The registry's signing model is the running seat's authority. A pane whose live status
-  // names another model is held before the body is read and before any delivery leg is walked;
-  // the team file is only the roster projection and cannot override that signed record.
-  const registeredTarget = readAgents(host.home).find((agent) =>
-    agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
+  // Source: lead decision 2026-11-11 02:30Z after the cross-lab design read. Recorded
+  // model metadata is not message authority: model-only drift delivers and flags. Judge the
+  // observed model against the existing entity rule; never infer another CLI or public-only
+  // setting from it. The existing public-body/repository route guards remain in force.
+  let recipientDrift: ModelDrift | undefined;
+  let repairedRecipient: string | undefined;
+  let repairedObservation: SeatModelObservation | undefined;
+  const targetTeamId = teamIdOf(to.root);
+  let registeredTarget = readAgents(host.home).find((agent) =>
+    agent.reach.team === targetTeamId && agent.reach.seat === to.seat &&
     agent.reach.session === to.session && agent.lifecycle !== 'retired'
   );
+  // The seat's CLI reports its own model (Claude Code's SessionStart and PostModelSwitch hooks,
+  // written beside its state file). A reported model the entity rule allows, under the default
+  // `deliver` drift policy, becomes the record's: a /model switch the owner made is followed,
+  // not flagged on every send (2026-11-13). `rule` and `hold` keep the record as it is.
+  if (registeredTarget !== undefined && receiving.ok) {
+    const statePath = cliHookStatePath(to.dir, to.session, to.seat);
+    const reported = statePath === null ? null : reportedModel(statePath, registeredTarget.cli);
+    if (reported !== null && modelDiffers(reported, registeredTarget.signing)
+      && observedModelRefusal({ name: to.seat, role: registeredTarget.signing.role }, reported, readEntityModelRule(host.home, receiving.team)) === null
+      && modelDriftMode(host.home, to.root, receiving.team) === 'deliver') {
+      const was = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
+      try {
+        registeredTarget = updateAgent(host.home, registeredTarget.id, { signing: { model: reported.model, version: reported.version } });
+        logLine(dir, 'send', who, `${to.seat}: its record follows the model its CLI reports: ${reported.model} ${reported.version} (was ${was})`, host.now());
+      } catch {
+        // An unwritable record keeps the older reading: the drift check below still runs.
+      }
+    }
+  }
   const preflightLive = findAgent(host, to.session, to.seat);
+  const driftFence = captureModelDriftFence({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat }, registeredTarget);
   const preflightScreen = preflightLive.ok ? host.native.paneText?.(to.session, preflightLive.pane) : undefined;
   if (registeredTarget !== undefined && preflightLive.ok) {
     const screen = preflightScreen ?? null;
-    // The target's own model, read as its launch makes it readable: for a provider wrapper the
-    // screen shows the wrapper CLI's default family whatever the launcher selected, so the
-    // reading is the record's signed declaration — the same like-for-like the drift test needs.
-    const running = screen === null ? null : signedSeatModel({
+    // Preserve the existing model value, but distinguish an observed provider from the
+    // declaration-only wrapper fallback. Only the former can positively prove repair.
+    const observation = signedSeatModelObservation({
       cli: registeredTarget.cli,
       model: registeredTarget.signing.model,
       version: registeredTarget.signing.version,
       launch: registeredTarget.launch,
-    }, screen);
-    if (modelDiffers(running, registeredTarget.signing)) {
-      const declaredModel = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
-      const runningLabel = `${running.model} ${running.version}`;
-      return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
+    }, screen ?? undefined);
+    const running = observation.model;
+    if (running !== null) {
+      if (!receiving.ok) return configuration(io, 'the receiving team cannot be read, so the observed model policy cannot be judged', report);
+      const rule = readEntityModelRule(host.home, receiving.team);
+      // The signed role is the seat's (review finding 3): the file's role does not widen it.
+      const judged = { name: to.seat, role: registeredTarget.signing.role };
+      const policyRefusal = observedModelRefusal(judged, running, rule);
+      if (policyRefusal !== null) return refuse(io, dir, who,
+        `${to.seat}: observed model violates policy: ${policyRefusal}; not kept or delivered`, host, report);
+      if (modelDiffers(running, registeredTarget.signing)) {
+        const held = driftRefusal(modelDriftMode(host.home, to.root, receiving.team), judged, running, rule);
+        if (held !== null) return refuse(io, dir, who,
+          `${to.seat}: model drift: record says ${registeredTarget.signing.model} ${registeredTarget.signing.version}, runs ${running.model} ${running.version}; ${held}; not kept or delivered: repair the seat (team restart ${to.seat})`, host, report);
+        recipientDrift = { recipient: registeredTarget.id, recorded: registeredTarget.signing, observed: running };
+        report.recipientDrift = modelDriftText(recipientDrift);
+      } else if (positiveModelObservation(observation)) {
+        repairedRecipient = registeredTarget.id;
+        repairedObservation = observation;
+      }
     }
   }
-  // The quota preflight: a walled seat is refused before the body is read into a send, before
-  // a drop file, a socket frame or a key exists. Only a positive read of the seat's own pane
-  // refuses; an absent agent or a pane that does not read leaves the existing delivery-time
-  // cautions, and that gap is the named limitation, not a safe outcome. The host's status is
-  // not consulted: a wall the screen proves holds even while the terminal host still calls the
-  // seat working, so no socket or drop effect can start ahead of the old caution.
-  if (preflightLive.ok) {
-    const quota = quotaOutOf(to.cli, preflightScreen);
-    if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
+  if (report.holdScope !== undefined && !report.holdScope.dry) {
+    const problem = clearPreflightReports({ ...report.holdScope, home: host.home, seat: to.seat, at: host.now().toISOString() });
+    if (problem !== null) io.stderr(`team send: held-send reporting: ${problem}\n`);
   }
+  // A seat that cannot take work is not refused here. The body has not been read yet, and
+  // the message has to stay in the recipient's inbox: the walk's gate, once the record
+  // exists, writes that drop and then reports the detector's reason. The folder that gate
+  // reads is the recipient's, so a cross-team send does not use the sender's mark. A human's
+  // pane is not judged.
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
   // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
   // send — the walk is the same one — while `memory` is refused with nothing written on either
@@ -1595,7 +2016,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // public-only seat is never given them: its rules are the team's own text, and a service
   // outside this machine reads the whole body it is handed.
   if (declared !== undefined && receiving.ok && !publicOnly && profileFor(declared.cli)?.rulesMode === 'prepend') {
-    body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source))}\n\n${body}`;
+    body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source), host.home)}\n\n${body}`;
   }
 
   const dry = args.flags.has('dry-run');
@@ -1680,18 +2101,22 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   const {
     dropDir, order, inbound, socketWord, heldStanding, socketNow, declaredOrder,
     staleChannel, channelSkip, human, typedWake, walkingTyped, webhookWalked, webhookReason,
-    typingSetAside, noEventAdapter, chosen,
+    typingSetAside, chosen,
   } = plan;
+  if (channelSkip === CHANNEL_FLAG_DROPPED) report.channelNote = CHANNEL_FLAG_DROPPED;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
-  // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
-  // drop leg is a stored copy rather than a wake, so none of the three is attempted. A
-  // functional headless route would stay if this build carried one. Every remaining leg keeps
-  // its own rules, and the order's own words decide whether the receiver offers it. A watch
-  // principal makes the walk direct by itself: the watch's own send never falls back to a route
-  // that types or stores, whatever hook its caller built.
+  // reaches a live receiver stays. The native leg types and the drop leg is a stored copy rather
+  // than a wake, so neither is attempted. The profile-gated typed wake stays when the plan walks
+  // it (`walkingTyped`: the profile declares `typed_wake`, the pane is not a person's, the order
+  // keeps `typed`): it is the one guarded seam (src/send/typed-wake.ts) — empty composer only,
+  // never over a draft — and it is the seat's only wake while it is idle. Every remaining leg
+  // keeps its own rules. A watch principal makes the walk direct by itself, whatever hook its
+  // caller built.
   const DIRECT_WAKE_LEGS: readonly WalkLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const declaredWalk: readonly WalkLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const declaredWalk: readonly WalkLeg[] = directWalk
+    ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg) || (leg === 'typed' && walkingTyped))
+    : chosen;
   // The walk is the cascade exactly as resolved: a live MCP inbox server standing beside the
   // seat no longer splices a leg into it. MCP push is not a wake (ADR D1); the inbox is the
   // store's reader, and the record is already stored there for it to read.
@@ -1703,6 +2128,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // push and the webhook wake it to read one, and the typed wake and the drop file leave a
   // trigger — so each is set aside with its reason, before anything is written.
   const BODY_CARRYING_LEGS: readonly WalkLeg[] = ['socket', 'session'];
+  // The profile-gated plan already includes permitted typed wakes; a host hook adds no pane leg.
   const walk: readonly WalkLeg[] = store === 'none'
     ? declaredWalk.filter((leg) => BODY_CARRYING_LEGS.includes(leg))
     : [...declaredWalk];
@@ -1745,7 +2171,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // send walks the same delivery order and then waits on the thread for the first verified reply
   // record within the timeout window.
   const msgId = host.sendId?.() ?? randomUUID();
-  const record = recordOf(msgId, to, body, from, admission, host.now().toISOString(), subject === '' ? undefined : subject);
+  // E7b: the delivery era is decided once, here, and this exact payload is what is signed, staged,
+  // carried by every leg and retried. A send that keeps no record (`messaging.store: none`) has no
+  // stored copy to retry or acknowledge, so it stays on legacy delivery (unstamped).
+  const unstamped = recordOf(msgId, to, body, from, admission, host.modelDriftNotice?.at ?? host.now().toISOString(), subject === '' ? undefined : subject);
+  const record = store === 'none' ? unstamped : withSignedIdentity(stampedPayload(unstamped, host.home), host.home);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -1840,6 +2270,56 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // daemon principal is composed the same way. It is composed once here, before the walk, so no
   // route can transport without it and no caller has to remember to pass one.
   const directGuard = composedGuard(host);
+  if (repairedRecipient !== undefined && repairedObservation !== undefined && host.modelDriftNotice === undefined) {
+    const refusal = guardRefusal(directGuard);
+    if (refusal !== null) return refuse(io, dir, who, refusal.why, host, report);
+    clearModelDrift({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat, recipient: repairedRecipient, observation: repairedObservation, fence: driftFence });
+  }
+  if (recipientDrift !== undefined && host.modelDriftNotice === undefined) {
+    const refusal = guardRefusal(directGuard);
+    if (refusal !== null) return refuse(io, dir, who, refusal.why, host, report);
+    const lead = receiving.ok ? receiving.team.orchestrator || receiving.team.operator : '';
+    const leadId = findRegisteredAgent(host.home, { team: teamIdOf(to.root), seat: lead })?.id ?? null;
+    const notice = await reportModelDrift({
+      dir: to.dir, root: to.root, session: to.session, seat: to.seat,
+      drift: recipientDrift, lead, leadId, now: host.now(),
+      send: async (notice) => {
+        let output = '';
+        let noticeAdmitted = false;
+        const quiet: Io = { ...io, stdout: (text) => { output += text; }, stderr: (text) => { output += text; } };
+        const noticeHost: SendHost = { ...host, modelDriftNotice: { at: notice.at, admitted: () => { noticeAdmitted = true; } }, sendId: () => notice.id,
+          ...(host.direct === undefined ? {} : { direct: { ...host.direct, ended: () => {} } }),
+        };
+        // By the team's id, never its project's name: a project with two teams makes the name
+        // ambiguous and the notice was refused (2026-11-13, material and md3io-marketing).
+        const spec = to.cross ? `${lead}@${teamIdOf(to.root)}` : lead;
+        const code = await runSend([spec, notice.body, '--json'], quiet, noticeHost);
+        let recorded = code === 0;
+        let detail = recorded ? 'lead notice accepted by the ordinary send' : 'lead notice refused or not delivered';
+        try {
+          const result = JSON.parse(output) as { status?: string; error?: { id?: string; message?: string } };
+          detail = recorded ? `lead notice: ${result.status ?? 'accepted by the ordinary send'}`
+            : `lead notice not delivered: ${result.error?.message ?? detail}`;
+          // Only a post-admission ending may inspect its own notice copy. Admission refusals
+          // never reach this read, and there is no fallback writer or transport here.
+          if (!recorded && ['send.held', 'send.not-delivered', 'send.not-submitted', 'send.unreachable'].includes(result.error?.id ?? '')) {
+            const copy = readRecord(liveRecordPath(seatMailDirIn(to.dir, to.session, lead), notice.id), notice.id);
+            const key = messageKeyState(host.home);
+            if (key.kind === 'key' && copy.ok && copy.record !== null && verifyRecord(copy.record, key.key)) {
+              const payload = copy.record.payload;
+              if (payload.to === lead && payload.to_id === leadId && payload.session === to.session && samePath(payload.root, to.root)
+                && payload.from === from && payload.from_id === senderIdOf(admission) && payload.body.endsWith(notice.body)) {
+                recorded = true;
+                detail = 'lead notice kept by the ordinary send; awaiting delivery';
+              }
+            }
+          }
+        } catch { /* An unreadable result or copy never proves that a notice was delivered. */ }
+        return { ok: recorded, detail, retry: !noticeAdmitted };
+      },
+    });
+    report.recipientDrift = `${modelDriftText(recipientDrift)}; ${notice}`;
+  }
 
   // The delivery walk, in the owner's cascade over the legs the receiving seat's chain resolves
   // to: the channel classes, then typed, then the mailbox. A leg that takes
@@ -1912,6 +2392,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // here. A write that refuses is not this run's refusal — each leg reports its own ending — it
   // only leaves the walk without an episode to record.
   let stagedWalk: StagedForWalk | null = null;
+  let stagedTraced = false;
   let stagedRun: Promise<void> | null = null;
   let announced = false;
   // A leg records through this; until a record is staged it is a no-op, so a walk that never
@@ -1923,36 +2404,36 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
   // The direct-only hook fires once, when a route's ending closes the walk.
   let directEnded = false;
   const installNote = (begun: FallbackWalk | null): void => {
+    // The episode (marker and attempt ledger) opens with the walk's first fact that is not a
+    // first-leg delivery: a fresh record the channel, the native queue or the socket took at once
+    // had no fallback to record. A record already there keeps its episode.
+    let episode = false;
     note = (attempt) => {
       if (!attempt.liveRoutesRemain) ended = true;
+      episode ||= !(attempt.outcome === 'delivered' && FIRST_LEGS.includes(attempt.route) && stagedWalk?.ok === true && stagedWalk.existing !== true);
       // The record is durable before the first note, so a busy episode's key never holds the
       // sender's line: the fact is written beside the record and the next drain pass records it.
-      if (begun !== null) {
+      if (begun !== null && episode) {
         const noted = begun.noteSoon(attempt);
         if (!noted.ok) logLine(dir, 'send', who, `${to.seat}: the fallback attempt was not recorded (${noted.reason})`, host.now());
       }
-      // One signed step per attempted leg, filed in the receiving team's store beside the bus's
-      // own `message.arrived`, so `team trace <id>` prints the walk in order. The append is
-      // bounded (`STEP_APPEND_MS`); a step that cannot be written is a missing trace line, never
+      // One signed step per attempted leg (the staging's first), filed in the receiving team's
+      // store beside the bus's own `message.arrived`, so `team trace <id>` prints the walk in
+      // order. A first-leg delivery writes none: its history line is the one log line, and the
+      // trace reads it from there. A step that cannot be written is a missing trace line, never
       // a failed send, and it is logged here where the send's own log folder is in hand.
-      const step = legStep(
-        {
-          store: { project: to.project, root: to.root, home: host.home },
-          id: msgId,
-          session: to.session,
-          from: who,
-          to: to.seat,
-          thread: record.thread,
-          ts: attempt.at.toISOString(),
-        },
-        {
+      if (episode) {
+        const fields = { store: { project: to.project, root: to.root, home: host.home }, id: msgId, session: to.session, from: who, to: to.seat, thread: record.thread };
+        if (!stagedTraced && stagedWalk?.ok === true && stagedWalk.path !== null) stagedStep({ ...fields, from: record.from, rule: record.rule, ts: record.at });
+        stagedTraced = true;
+        const step = legStep({ ...fields, ts: attempt.at.toISOString() }, {
           route: attempt.route,
           outcome: attempt.outcome,
           ms: attempt.ms,
           ...(attempt.reason === undefined ? {} : { reason: attempt.reason }),
-        },
-      );
-      if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the leg step ${attempt.route} was not written (${step.reason})`, host.now());
+        });
+        if (!step.ok) logLine(dir, 'send', who, `${to.seat}: the leg step ${attempt.route} was not written (${step.reason})`, host.now());
+      }
       // A direct-only caller hears the walk's ending here: the attempt that took the send, or
       // the last route's failure. The record was staged before the first attempt, whatever it was.
       if (host.direct !== undefined && !directEnded && (attempt.outcome === 'delivered' || !attempt.liveRoutesRemain)) {
@@ -1974,7 +2455,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     // steps still name the legs it took.
     if (store === 'none') {
       try {
-        const signed = signRecord(record, host.home);
+        const signed = signRecord(record, host.home, { stamp: false });
         stagedWalk = { ok: true, path: null, record: recordTextOf(signed), signed };
       } catch {
         stagedWalk = { ok: false, reason: 'the record could not be signed' };
@@ -2005,7 +2486,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     // instant — the seat's signed act, never the original sender's — and only the newest, so one
     // answer never swallows the older unread work. A sweep that cannot read or write is a missing
     // annotation, never a failed send.
-    if (caller.kind === 'seat') {
+    if (reportHolds && caller.kind === 'seat') {
       try {
         const answered = markAnsweredBySend({
           seat: caller.name,
@@ -2093,6 +2574,60 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     report.deliveryClass = classWithout(to, host.home, walkLost, declared).cls;
     report.deliveryWords = wordsNow(wakeOutcome);
   };
+  // The detector's refusal still keeps the message: the same drop the drop leg writes, and
+  // no key is typed. The history line is the drop's own word, so a restart and the watch's
+  // retry find the record. The console line is the detector's reason.
+  const journalKept = (failed?: readonly string[]): void => {
+    const ms = host.now().getTime() - startedAt;
+    appendHistory(to.project, to.root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: to.seat,
+      ...(to.sentAs === null ? {} : to.sentAs),
+      ...historySender(report),
+      body: record.body,
+      id: record.id,
+      thread: record.thread,
+      outcome: 'queued, not woken',
+      ms,
+      via: 'drop',
+      ...(failed !== undefined && failed.length > 0 ? { failed: [...failed] } : {}),
+    });
+  };
+  const keepBlocked = async (): Promise<void> => {
+    // messaging.store none keeps no copy. The refusal says so and writes nothing.
+    if (store === 'none') return;
+    const stored = await storeDropRecord(
+      to.dir,
+      who,
+      to.session,
+      to.seat,
+      dropDir,
+      record,
+      from,
+      host,
+      report,
+      to.sentAs,
+      human,
+      startedAt,
+      note,
+      'the record is stored; the seat cannot take it',
+      to.project,
+    );
+    if (!stored.ok) return;
+    stored.release();
+    journalKept();
+  };
+  if (!human) {
+    const blocked = workBlock(
+      host, to.dir, to.session, to.seat, to.cli,
+      preflightLive.ok ? { raw: preflightScreen ?? null } : undefined,
+    );
+    if (blocked !== null) {
+      await keepBlocked();
+      return notDelivered(io, dir, who, to.seat, blocked.reason, host, report, store === 'none');
+    }
+  }
   for (const [at, leg] of walk.entries()) {
     // A reminder send stands on the daemon principal its internal entry established, and that
     // identity is rechecked before every leg, whatever the leg can do: a daemon that stopped, a
@@ -2151,6 +2686,11 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
             via: 'drop',
             failed: [...failures],
           });
+          // A stamped record's wait still ends on its settlement (the Claude adapter §3): the
+          // durable copy is the recipient's, and no second leg starts.
+          if (wait && isStampedPayload(record)) {
+            return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'drop', timeoutS, host, report, startedAt, failures, to.sentAs, why, callerRoot);
+          }
           return sentUnconfirmed(io, label, report, ms, 'drop');
         }
       }
@@ -2164,11 +2704,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         continue;
       }
       note(walkAttempt('channel', 'delivered', false, host.now(), startedAt, { reason: 'pushed on its development channel' }));
-      logLine(dir, 'send', who, `${to.seat}: sent on its development channel (drop ${String(body.length)} characters)`, host.now());
       const ms = host.now().getTime() - startedAt;
       const failed = failures.length > 0 ? { failed: [...failures] } : {};
       const entry = { ts: host.now().toISOString(), from, to: to.seat, ...(to.sentAs === null ? {} : to.sentAs), body, id: msgId, thread: record.thread };
-      appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (channel)', ms, via: 'channel', ...failed });
+      appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (channel)', ms, via: 'channel', rule: record.rule, ...failed });
       if (wait) {
         return finishThreadWait(io, dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'channel', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
       }
@@ -2183,7 +2722,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       // this leg staged itself is posted before the bus is told of it, so the claim decides who
       // posts and one arrival wakes the seat once.
       const hook = declared?.webhook;
-      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook, declared?.cli);
       if (hook === undefined || routeRefusal !== null) {
         const why = routeRefusal ?? 'the receiving seat declares no webhook row';
         failures.push(`webhook: ${why}`);
@@ -2238,7 +2777,6 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         report.sent = msgId;
         await announceStaged();
         note(walkAttempt('webhook', 'delivered', false, host.now(), startedAt, { reason: `posted in ${String(posted.ms)} ms` }));
-        logLine(dir, 'send', who, `${to.seat}: delivered to its webhook adapter (${String(posted.ms)} ms; drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...hookEntry, ...historySender(report), outcome: 'delivered', ms: hookMs, via: 'webhook', ...hookFailures() });
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'webhook', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
@@ -2337,6 +2875,14 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: `${to.cli} sessions have no cross-session socket` }));
         continue;
       }
+      // The Claude adapter §1: no new delivery dials a socket on an E7b-active root, read from the
+      // receiving root's floor state at this delivery. A dark root keeps the leg as before.
+      if (socketSuppressed(to.root, host.home)) {
+        failures.push(`socket: ${SOCKET_OFF_ON_ACTIVE}`);
+        markLeg('socket', 'skipped', SOCKET_OFF_ON_ACTIVE);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: SOCKET_OFF_ON_ACTIVE }));
+        continue;
+      }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
         markLeg('socket', 'skipped', 'this build does not carry the cross-session socket');
@@ -2381,22 +2927,15 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      // The accepted frame opens with the sender's identity line alone. `#682` pinned that shape:
-      // no summary, no rule. The message-display line is the typed wake's, where the seat reads
-      // it in its own composer; an agent handling a socket frame has the whole signed record.
-      const identityHeader = frameIdentityHeader(
-        record,
-        naming,
-        fileTeamId,
-        team.project,
-        caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
-      );
+      // The accepted frame opens with the sender's identity line, read from the record alone
+      // (src/comms/identity.ts). The message-display line is the typed wake's, where the seat
+      // reads it in its own composer; an agent handling a socket frame has the whole signed record.
       const socketStore = store === 'parallel'
         ? { mode: 'parallel' as const, settle: settleStaged }
         : store === 'none'
           ? { mode: 'none' as const }
           : { mode: 'first' as const, staged: stagedRecordOf() };
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, identityHeader, human, true, socketStore);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, human, true, socketStore);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -2475,6 +3014,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
               seat: to.seat,
               now: host.now(),
             });
+        // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+        const nativeBody = legBody(record, host.home, 'native', dropDir);
         const attempt = await deliverCodexNativeRoute(
           {
             route: 'native',
@@ -2486,7 +3027,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
             seat: to.seat,
             sender: { seat: from, team: teamIdOf(root) },
           },
-          { id: msgId, record: staged.record, sentAt: record.at },
+          { id: msgId, record: staged.record, sentAt: record.at, pointer: legText(nativeBody, record) },
           {
             now: host.now,
             startedAt,
@@ -2501,7 +3042,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         );
         note(attempt.walkAttempt);
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
+        // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
+          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined, via: 'native' });
           clearEndpointBlocked(to.root, to.session, to.seat);
           report.sent = msgId;
           // The leg that took the message decides the words. The queue accepted the pointer, so
@@ -2515,18 +3059,10 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
           if (wait) {
             return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'native', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
           }
-          // The queue took the pointer; a read is only what the seat's own signed receipt says.
-          // The receipt check is the same central one every leg uses, bounded by the same grace.
-          const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-          if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
-            clearPending(dropDir, msgId);
-            logLine(dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, native queue receipt)`, host.now());
-            appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'native', ...failed });
-            return delivered(io, to.seat, report, 'read', 'native');
-          }
+          // The queue took the pointer: that ends the send, as a channel push does. A read is only
+          // the seat's own signed receipt, which a model writes seconds later; the watch settles it.
           const ms = host.now().getTime() - startedAt;
-          logLine(dir, 'send', who, `${to.seat}: queued to its native runtime (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
-          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'native', ...failed });
+          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'native', rule: record.rule, ...failed });
           return sentUnconfirmed(io, to.seat, report, ms, 'native');
         }
         // A held thread, an unreachable or refused queue, or an unreadable policy: the route did
@@ -2625,6 +3161,8 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
             now: host.now(),
           });
       const seatCwd = declared?.cwd === undefined ? to.root : resolve(to.root, declared.cwd);
+      // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+      const nativeBody = legBody(record, host.home, 'native', dropDir);
       const attempt = await deliverHeadlessResumeRoute(
         {
           route: 'headless-resume',
@@ -2637,7 +3175,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
           sender: { seat: from, team: teamIdOf(root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record },
+        { id: msgId, record: staged.record, pointer: legText(nativeBody, record) },
         {
           now: host.now,
           startedAt,
@@ -2650,22 +3188,17 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       );
       markLeg('headless-resume', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
       note(attempt.walkAttempt);
+      // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
+        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, wake: nativeBody.text ?? undefined, via: 'headless-resume' });
         report.sent = msgId;
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'headless-resume', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
         }
-        const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
-        if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
-          clearPending(dropDir, msgId);
-          logLine(dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, headless-resume receipt)`, host.now());
-          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'headless-resume', ...failed });
-          return delivered(io, to.seat, report, 'read', 'headless-resume');
-        }
         const ms = host.now().getTime() - startedAt;
-        logLine(dir, 'send', who, `${to.seat}: resumed headlessly (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
         appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'headless-resume', ...failed });
         return sentUnconfirmed(io, to.seat, report, ms, 'headless-resume');
       }
@@ -2750,7 +3283,6 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(walkAttempt('session', 'delivered', false, host.now(), startedAt, { reason: `session ${attempt.session} created` }));
         const failed = failures.length > 0 ? { failed: [...failures] } : {};
         const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
-        logLine(dir, 'send', who, `${to.seat}: delivered (session ${attempt.session}) (drop ${String(body.length)} characters)`, host.now());
         appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered', ms, via: 'session', session: attempt.session, ...failed });
         if (wait) {
           return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'session', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
@@ -2773,14 +3305,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       walkLost.endpoint = true;
       lowerDelivery();
       await ensureEpisode();
-      // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
-      // did (src/send/no-pane-messaging.ts). It is the cascade's last resort, under every other
-      // class (src/send/walk-cascade.ts). Across teams the outcome line below names the full
-      // address, so this line would print the same recipient a second time — once by its bare
-      // resolved seat name — and read as a second target; the summary is the one statement.
-      if (!human && !dry && !to.cross) {
-        io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
-      }
+      // The durable inbox is kept, but no event leg delivered: the ending reports no live route.
       if (endpointDown !== undefined) {
         report.endpointBlocked = endpointDown;
         writeEndpointBlockedNotice({
@@ -2806,7 +3331,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
-    const trigger = readTriggerLine(to.seat, to.session, {
+    const trigger = inlineWake(record, host.home, typedWakeMaxFor(to.cli), 'typed') ?? readTriggerLine(to.seat, to.session, {
       seat: record.from,
       team: team.project,
       template: wakeTemplate,
@@ -2814,7 +3339,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       body: record.body,
       ageMs: 0,
       ...(record.subject === undefined ? {} : { subject: record.subject }),
-    }, to.cli);
+    }, to.cli, 'Body too long; read it with: team drops --read.');
     if (trigger === null && compose === null && typedWake === null) {
       const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
       markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
@@ -2835,13 +3360,24 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     // another team's record and a `--wait` run are reached directly as before, and so is a daemon
     // that answers `direct: true` (it runs no wake child, and staged and typed nothing): the walk
     // below is then this process's, exactly once.
-    const handoff = !to.cross && compose === null && typedWake !== null && !wait && trigger !== null;
-    const dialled = existsSync(daemonSock)
+    // A direct walk types here, behind its own recheck: its caller reads the wake's real ending.
+    const handoff = !directWalk && !to.cross && compose === null && typedWake !== null && !wait && trigger !== null;
+    // E7b revision 3 (carrier 2): a stamped record's body is never handed to the daemon. Its
+    // record is already staged in the stamped tree, and this process (the installed build, level 3)
+    // walks its legs itself, so no request carrying the body can reach an older daemon.
+    const dialled = !isStampedPayload(record) && existsSync(daemonSock)
       && (handoff || (!to.cross && compose === null && typedWake === null && !wait));
     if (dialled) await ensureEpisode();
-    const viaDaemon = dialled
-      ? await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) })
-      : null;
+    const daemonRequest = { v: 1 as const, op: 'send' as const, id: msgId, from, to: to.seat, ...sentAs, body, rule: record.rule, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(handoff ? { typedWake: { trigger } } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) };
+    let viaDaemon = dialled ? await requestDaemon(daemonSock, daemonRequest) : null;
+    // A typed handoff the endpoint dropped without answering (the daemon restarts an endpoint
+    // that missed its probes, and a restart closes the connection) is asked again once the
+    // endpoint answers a ping, under the same id: the daemon reserves the wake by id, so a
+    // request it had already taken is coalesced, never typed twice (2026-11-15, vlist: two
+    // messages to an idle Antigravity seat were kept unwoken this way).
+    if (viaDaemon === null && handoff && dialled) {
+      viaDaemon = await retryDaemonHandoff(daemonSock, daemonRequest, host);
+    }
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
       // A daemon that found no live agent typed nothing: when a leg still stands behind the
       // typed one, the failure joins the walk and the send goes on to it. The daemon wrote no
@@ -2908,7 +3444,32 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
       note(walkAttempt('typed', 'unreachable', false, host.now(), startedAt, { reason: found.reason }));
       return unreachable(io, dir, who, to.seat, found.reason, host, report);
     }
-    if (isBareShellPane(to.dir, to.session, to.seat, host.processInfo(to.session, found.pane))) {
+    // The launch this wake is for, bound before any screen of the pane is read: every key is
+    // refused once the state names another launch (an in-place relaunch), so no key acts on screen
+    // evidence an earlier launch drew.
+    const launchOf = (held: SeatState | undefined): string =>
+      JSON.stringify([held?.pane, held?.launched, held?.pane_shell, held?.pane_shell_start, held?.agent_session]);
+    const boundLaunch = launchOf(seatStateOf(to.dir, to.session, to.seat));
+    const paneProcs = host.processInfo(to.session, found.pane);
+    // The usage wall already read this pane. A second look would be a second read of the same box.
+    const preScreen = preflightLive.ok && preflightLive.pane === found.pane
+      ? (preflightScreen ?? null)
+      : host.native.paneText?.(to.session, found.pane);
+    const recorded = seatStateOf(to.dir, to.session, to.seat)?.launched;
+    const marked = host.tokens ? host.tokens(to.session, to.seat, to.dir) : tokenMark(to.dir, to.seat);
+    const blocked = seatCanWork({
+      seat: to.seat,
+      cli: to.cli,
+      screen: preScreen ?? { kind: 'idle' },
+      processes: paneProcs,
+      ...(recorded === undefined ? {} : { recorded }),
+      ...(marked === undefined ? {} : { tokens: marked }),
+    });
+    if (!blocked.ok && blocked.reason !== 'wake not taken') {
+      await keepBlocked();
+      return notDelivered(io, dir, who, to.seat, blocked.reason, host, report, store === 'none');
+    }
+    if (isBareShellPane(to.dir, to.session, to.seat, paneProcs)) {
       const why = 'the seat is back at its shell; nothing was typed';
       if (typedWake !== null && at + 1 < walk.length) {
         failures.push(`typed: ${why}`);
@@ -2937,11 +3498,67 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
         note(walkAttempt('typed', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
         continue;
       }
+      // A direct-only caller's authority is rechecked before the wake and before each key it
+      // types: a refusal ends the walk with nothing more typed.
+      // A direct caller's recipient is re-proven the same way, as the watch's pointer is: still
+      // listed at the pane the pass bound, still that pass's exact target, still not a protected
+      // pane. Any move or replacement ends the walk with nothing more typed.
+      const recipientNow = bound === undefined ? undefined : (): { ok: false; why: string } | null => {
+        // A live read each time: the send's snapshot of the session list is not reused here.
+        (host as SnapshotSendHost).evictAgents?.(to.session);
+        const here = findAgent(host, to.session, to.seat);
+        if (!here.ok) return { ok: false, why: `${to.seat}: ${here.reason}` };
+        if (here.pane !== bound.pane || here.pane !== found.pane) return { ok: false, why: `${to.seat}: its pane is now ${here.pane}, not the ${bound.pane} the pass saw` };
+        const exact = host.watch === undefined ? null : exactWatchTarget(host, to, bound, dir);
+        if (exact !== null) return { ok: false, why: exact };
+        try {
+          const loaded = readTeamConfig(to.root, { home: host.home });
+          if (!loaded.ok) return { ok: false, why: `${to.seat}: its declaration cannot be read now` };
+          // The declaration as it stands now must still let this seat, on this CLI, take keys.
+          const declaredNow = loaded.team.seats.find((one) => one.name === to.seat);
+          if (declaredNow === undefined || declaredNow.stopped === true || declaredNow.human === true || declaredNow.cli !== to.cli) {
+            return { ok: false, why: `${to.seat}: its declaration no longer lets it take keys` };
+          }
+          if (permittedEventLegs({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat, team: loaded.team, now: host.now }).pointer !== true) {
+            return { ok: false, why: `${to.seat}: its pane is protected now` };
+          }
+          // The live launch identity, as the watch's unread wake proves it before each key: the
+          // recorded shell and CLI still in front of the pane, at their recorded births. A pane
+          // that kept the seat's name and id but holds a replacement takes no key.
+          if (host.keyOwner === undefined) return { ok: false, why: `${to.seat}: its pane's launch identity cannot be read` };
+          // One read of the seat's record per key: the launch comparison and the process proof
+          // judge the same snapshot, so a relaunch recorded between two reads cannot pass both.
+          const heldNow = readState(to.dir).sessions[to.session]?.seats[to.seat];
+          if (launchOf(heldNow) !== boundLaunch) return { ok: false, why: `${to.seat}: its launch changed since the wake read its pane` };
+          const proof = typedPaneProof(heldNow, to.seat, here.pane, to.session, host.keyOwner);
+          if (!proof.ok) return { ok: false, why: `${to.seat}: ${proof.why}` };
+        } catch {
+          return { ok: false, why: `${to.seat}: its protection cannot be read` };
+        }
+        return null;
+      };
+      const typedGuard = guardRefusal(directGuard) ?? recipientNow?.() ?? null;
+      if (typedGuard !== null) {
+        failures.push(`typed: refused: ${typedGuard.why}`);
+        markLeg('typed', 'refused', typedGuard.why);
+        note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: typedGuard.why }));
+        break;
+      }
       await ensureEpisode();
-      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note, true, stagedWrittenOf());
+      const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note, true, stagedWrittenOf(),
+        directGuard === undefined && recipientNow === undefined ? undefined : () => guardRefusal(directGuard) === null && (recipientNow?.() ?? null) === null);
       if (wake.delivered) {
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
+      }
+      // Any wake that ran and did not deliver is recorded with whether a key reached the pane.
+      report.typedWake = { keysSent: wake.typed };
+      if (wake.typed || wake.reason.startsWith('the screen stayed working')) {
+        // The drop is already in the inbox. The history line is the same one the keep
+        // path writes, plus the wake's own reason, so a later read is not an empty journal.
+        const failed = [...failures, `typed: ${wake.reason}`];
+        journalKept(failed);
+        return notDelivered(io, dir, who, to.seat, 'wake not taken', host, report);
       }
       wakeOutcome = { attempted: true, reason: wake.reason };
       failures.push(`typed: ${wake.reason}`);
@@ -2978,7 +3595,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost): Prom
     note(walkAttempt(walk[walk.length - 1] as string, 'unreachable', false, host.now(), startedAt, { reason: why }));
   }
   appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
-  return unreachable(io, dir, who, to.seat, why, host, report);
+  return notDelivered(io, dir, who, label, 'no live route', host, report, store === 'none');
 }
 
 /** Why the native leg cannot be walked for this receiver and sender, or null when it can. A
@@ -2989,6 +3606,10 @@ function nativeIneligibleReason(cli: string, handoffEligible: boolean): string |
   if (cli === 'claude-code') return handoffEligible ? null : NATIVE_LEG_UNAVAILABLE;
   return `${cli} sessions have no native route this build can walk`;
 }
+
+/** The channel's reason, and the ending's note, for a Claude seat whose process carries no channel
+ *  flag (`channelFlagDropped`): the push is not walked, and the watch's pointer reaches the seat. */
+export const CHANNEL_FLAG_DROPPED = 'its channel is not a working push: the process in its pane was not started from its launch line (a terminal-host resume drops the channel flag); the watch types a pointer when the seat is idle and its pane takes one';
 
 /** Why a receiving Claude seat's development channel is not the first leg its walk takes, or
  *  null when the walk carries it. The three words the walk reads in this order: the launch's own
@@ -3056,14 +3677,12 @@ function dryDeliveryPlan(input: {
   if (input.channelReason !== null) {
     entries.push({ leg: 'channel', state: 'skipped', eligible: false, reason: input.channelReason });
   }
-  // The implied socket default: a Claude receiver whose chain declares no order walks socket
-  // first when it may be dialed. When it may not, the walk leaves it out entirely, and this is
-  // the entry that says why — the omission the report used to leave unexplained.
+  // An unavailable Claude socket stays visible in the dry run, including a declared order
+  // whose retired typed wake could not be replaced. This row explains a skip, never adds a leg.
   if (
     !input.human
     && input.cli === 'claude-code'
-    && !input.declaredOrder
-    && !input.order.includes('socket')
+    && !input.walk.includes('socket')
     && input.socketReason !== null
   ) {
     entries.push(candidate('socket'));
@@ -3182,6 +3801,9 @@ export async function sendDirect(
 /** Records one route attempt for the send's fallback episode; null when no episode could be
  *  staged. The recorder's own refusal is logged by the caller and never changes the walk. */
 type WalkNote = (attempt: WalkAttempt) => void;
+
+/** The legs whose delivery as a walk's first fact opens no fallback episode. */
+const FIRST_LEGS: readonly string[] = ['channel', 'native', 'socket'];
 
 /** The attempt shape the walk records, measured from the run's own clock. */
 function walkAttempt(
@@ -3326,14 +3948,16 @@ type StagedForWalk =
  *  An unanswered continuation files nothing: the claim stays `sent`. History is only appended. */
 function noteLateWebhook(posted: SenderPostOutcome, fields: StepFields, onDelivered: (ms: number) => void): void {
   if (posted.kind !== 'unknown' || posted.late === undefined) return;
-  void posted.late.then((late) => {
+  // The one callback the send path leaves running after it returns; the warm send host waits for
+  // it (bounded) before restoring the request's environment (rfc-bus-send-server §2.4).
+  deferHosted(posted.late.then((late) => {
     if (late.kind === 'posted') {
       webhookStep(fields, { kind: 'posted', ms: late.ms }, 'late');
       onDelivered(late.ms);
       return;
     }
     if (late.kind === 'failed') webhookStep(fields, { kind: 'failed', reason: late.reason }, 'late');
-  });
+  }));
 }
 
 async function postSeatWebhook(
@@ -3347,9 +3971,13 @@ async function postSeatWebhook(
   team: TeamFile | null,
   project?: string,
   body?: string,
+  again = false,
+  delivery?: () => string | null,
 ): Promise<SenderPostOutcome> {
   try {
     return await postArrivalWebhook({
+      ...(again ? { again: true } : {}),
+      ...(delivery === undefined ? {} : { delivery }),
       seat,
       webhook,
       team,
@@ -3408,12 +4036,11 @@ async function postArrivalNow(
  * walks the owner's cascade decides when the webhook is tried (its own leg, after every
  * channel-class leg) and when the arrival is announced.
  *
- * The staging is one signed event in the receiving team's log (`message.staged`), bound to the
- * message id; `project` is that team's project, the key the post's own `webhook.posted` shares.
- * The event is a record, never a delivery fact: an append that cannot be written is logged and
- * changes nothing about the send.
+ * The staging writes no event: a walk that opens an episode files `message.staged` itself, and
+ * `team trace` reads any other send's staging from its history line. `project` is the receiving
+ * team's project, the key the post's own `webhook.posted` uses.
  */
-async function stageSendRecord(
+export async function stageSendRecord(
   dropDir: string,
   payload: RecordPayload,
   home: string,
@@ -3433,35 +4060,36 @@ async function stageSendRecord(
     }
   }
   const record = recordTextOf(signed);
-  const staged = await relayStage({ dir: dropDir, name: payload.id }, { id: payload.id, record }, { now });
+  // E7b revision 3: the record's era names its container (src/queue/mail-tree.ts): a stamped record
+  // is staged only into the seat's stamped folder, never where an older reader lists mail.
+  const recordDir = recordFolderFor(dropDir, isStampedPayload(signed.payload));
+  hostedCommit('relay stage');
+  // The receiver's queue (rfc-event-comms §1, E4, shadow): the staging is the record write the
+  // append wraps, unchanged; the queue's own outcome never changes this send's.
+  const { value: staged } = await appendDelivery(
+    { dropDir, record: signed },
+    async () => {
+      // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before
+      // the record is published, on the queued path and the queue-skip fallback alike (this is the
+      // one writer both run), so no receipt can ever stand on it without the strict rule.
+      if (recordDir === null) return { ok: false, value: { outcome: 'refused' as const, reason: NO_STAMPED_FOLDER } };
+      if (isStampedPayload(signed.payload) && !ensureFolder(join(recordDir, EXPOSURES, payload.id))) {
+        return { ok: false, value: { outcome: 'refused' as const, reason: 'the delivery history folder could not be made durable' } };
+      }
+      const result = await relayStage({ dir: recordDir, name: payload.id }, { id: payload.id, record }, { now });
+      return { ok: result.outcome !== 'refused', value: result };
+    },
+    { home, log: queueLog(dropDir, now) },
+  );
   if (staged.outcome === 'refused') return { ok: false, reason: staged.reason };
-  // The step fields are the record's own: the receiving team's store, the message id, the
-  // session, the pair and the thread. `ts` differs per step — the record's signed `at` for the
-  // staging, the post's own instant for the webhook.
-  const fields = (ts: string): StepFields => ({
-    store: { project, root: payload.root, home },
-    id: payload.id,
-    session: payload.session,
-    from: payload.from,
-    to: payload.to,
-    thread: payload.thread,
-    rule: payload.rule,
-    ts,
-  });
   if (staged.receipt.existing) {
     // Admission still decides whether the file at the name is this message's record: `ensureRecord`
     // reads it and, while the name is held, writes nothing.
     const held = ensureRecord(dropDir, signed);
     if (!held.ok) return { ok: false, reason: held.reason };
-    stagedStep(fields(payload.at));
     return { ok: true, path: held.path, existing: true, record, signed };
   }
-  stagedStep(fields(payload.at));
-  // The recipient's unread index names this record as its sender's newest. It is a hint the
-  // receiver's sweep verifies against the record itself, never a second source of truth, and a
-  // hint that cannot be written never changes what this send did.
-  noteUnread(dropDir, payload.from, payload.id, payload.at);
-  return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record, signed };
+  return { ok: true, path: staged.receipt.copy ?? join(recordDir ?? dropDir, payload.id), record, signed };
 }
 
 /** Stages a record the asking principal already signed, through the same durable copy the
@@ -3525,8 +4153,8 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
   return written;
 }
 
-/** How long a send waits on the bus to take its nudge. A bus that is not running refuses the
- *  connection at once; one that is running answers within a few milliseconds. */
+/** Source: lead corrective instruction, 2026-11-11: reuse ARRIVAL_NUDGE_MS for
+ * held notices, retaining this existing best-effort arrival-nudge bound. */
 export const ARRIVAL_NUDGE_MS = 250;
 
 /**
@@ -3539,7 +4167,8 @@ export const ARRIVAL_NUDGE_MS = 250;
  */
 export async function announceArrival(payload: RecordPayload): Promise<void> {
   try {
-    await nudgeBus(
+    // Only the line has to reach the bus; its answer is never read here (`nudgeBusNoWait`).
+    await nudgeBusNoWait(
       payload.root,
       { session: payload.session, seat: payload.to, record_id: payload.id },
       { deadlineMs: ARRIVAL_NUDGE_MS },
@@ -3616,7 +4245,8 @@ async function handOff(
   if (!signed.ok) {
     return { kind: 'refused', why: `the record could not be written (${signed.reason}); nothing was sent` };
   }
-  const written = writePending(storeProject, storeRoot, host.home, pending);
+  // E7b revision 3 (carrier 1): a stamped send's handoff waits only under the stamped tree.
+  const written = writePending(storeProject, storeRoot, host.home, pending, isStampedPayload(payload));
   if (!written.ok) {
     return { kind: 'refused', why: `the native handoff could not be written down (${written.reason}); nothing was sent` };
   }
@@ -3727,7 +4357,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -3738,7 +4368,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root));
+    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root), daemonContext(host, root), host, dir);
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuseAdmission(io, dir, who, admission, host, report);
@@ -3761,6 +4391,8 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       cross,
     };
   }
+  const ownSeat = selfAddressed(caller, seatName, to, root);
+  if (ownSeat !== null) return refuse(io, dir, who, ownSeat, host, report);
   report.seat = to.seat;
   report.project = to.project;
   report.session = to.session;
@@ -3883,7 +4515,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
       }
     }
     if (callerRecord !== null) {
-      const identity = recordIdentityProblem(caller, callerRecord, standing);
+      const identity = recordIdentityProblem(caller, callerRecord, standing, host, dir);
       if (identity !== null) return refuse(io, dir, who, identity, host, report);
     }
   }
@@ -3929,6 +4561,7 @@ async function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): Pr
     ? { spec: record.spec, resolved: record.resolved }
     : {};
   const written = appendHistory(record.project, record.root, host.home, {
+    ...(taken.stamped ? { stamped: true as const } : {}),
     ts: host.now().toISOString(),
     from: record.from,
     to: record.to,
@@ -3995,7 +4628,7 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
   // the typed step is the child's own — the daemon files it in the receiving store after this run
   // has exited, so this step must not take the typed record id.
   if (res.outcome === 'handed') {
-    note(walkAttempt('daemon', 'delivered', false, at, startedAt, { reason: 'handed to the daemon for a typed wake' }));
+    note(walkAttempt('daemon', 'pending', false, at, startedAt, { reason: 'handed to the daemon for a typed wake; outcome pending' }));
     return;
   }
   const outcome: AttemptOutcome =
@@ -4005,7 +4638,7 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
   note(walkAttempt('typed', outcome, false, at, startedAt, { reason: res.detail }));
 }
 
-function finishDaemonSend(
+async function finishDaemonSend(
   io: Io,
   dir: string,
   who: string,
@@ -4017,7 +4650,7 @@ function finishDaemonSend(
   startedAt: number,
   /** How the send reached the seat, for the outcome line (the fallback's own reason). */
   note?: string,
-): number {
+): Promise<number> {
   report.sent = res.id;
   if (res.outcome === 'delivered') {
     // The daemon's own word for a trigger the seat took. It is a trigger sent, not a message
@@ -4028,7 +4661,7 @@ function finishDaemonSend(
     return sentUnconfirmed(io, seatName, report, ms, 'typed', notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
-  if (res.outcome === 'handed') return handedTypedWake(io, seatName, res.id, host, report, startedAt);
+  if (res.outcome === 'handed') return handedTypedWake(io, seatName, res.id, host, report, startedAt, { dropPath: res.drop_path, dir });
   if (res.outcome === 'queued') {
     // The receiver was busy when the send reached the daemon: the signed copy is stored and the
     // message holds one place in that seat's FIFO, so the sender is answered now instead of
@@ -4078,7 +4711,7 @@ function queuedBusy(
     logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
   }
   const ms = host.now().getTime() - startedAt;
-  const summary = withDelivery(`${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`, report);
+  const summary = withId(withDelivery(`${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`, report), report);
   if (report.json) {
     writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: leg });
   } else {
@@ -4088,30 +4721,78 @@ function queuedBusy(
   return 0; // exit: send.queued
 }
 
-/** The send daemon took the typed wake: the staged message is in its store, its wake child owns
- *  the screen walk, and the delivery's own history line and the trace are the child's. The line
- *  names the handoff, never a delivery, and the id on it is the one the child's history keeps.
- *  The class words a leg's own ending appends are left off: they say what wakes an idle seat when
- *  nothing here does, and the child's walk is exactly the wake this run handed over. Exit 0, the
- *  same acceptance a queued send reports. */
-function handedTypedWake(
+/** The send daemon took the typed wake: the staged message is in its store and its wake child
+ *  owns the screen walk. The send waits a short while for the child's outcome — the wake marker
+ *  beside the stored copy turns `sent` when the line landed, and is given back when a guard or
+ *  the walk refused — and says which, so a wake that cannot land is never left "pending" with
+ *  nobody told (2026-11-13: six sends sat pending on seats the daemon never typed into). With no
+ *  outcome inside the window it says that, and that the message waits in the inbox. Exit 0 for
+ *  delivered or still running, 1 for a wake that did not land (the message is kept). */
+async function handedTypedWake(
   io: Io,
   seatName: string,
   msgId: string,
   host: SendHost,
   report: Report,
   startedAt: number,
-): number {
+  where: { dropPath?: string; dir?: string } = {},
+): Promise<number> {
   report.sent = msgId;
+  const waitMs = host.handedWaitMs ?? 0;
+  let outcome: 'delivered' | 'failed' | 'pending' = 'pending';
+  let why: string | undefined;
+  if (waitMs > 0 && where.dropPath !== undefined) {
+    const marker = wakePath(dirname(where.dropPath), basename(where.dropPath));
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const mark = wakeMarkAt(marker);
+      if (mark !== null && mark.state !== 'reserved') { outcome = 'delivered'; break; }
+      if (mark === null && !existsSync(marker)) { outcome = 'failed'; break; }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (outcome === 'failed' && where.dir !== undefined) why = wakeFailureReason(where.dir, where.dropPath);
+  }
   const ms = host.now().getTime() - startedAt;
-  const summary = `${seatName}: handed to the daemon for a typed wake (typed, ${String(ms)} ms; id ${msgId})`;
+  const summary = withId(
+    outcome === 'delivered'
+      ? `${seatName}: delivered (typed wake, ${String(ms)} ms; id ${msgId})`
+      : outcome === 'failed'
+        ? `${seatName}: not delivered: the typed wake did not land${why === undefined ? '' : ` (${why})`}; kept in ${seatName}'s inbox (typed, ${String(ms)} ms; id ${msgId})`
+        : waitMs > 0
+          ? `${seatName}: no typed-wake outcome after ${String(Math.round(waitMs / 1000))} s; kept in ${seatName}'s inbox, the daemon is still trying (typed, ${String(ms)} ms; id ${msgId})`
+          : `${seatName}: handed to the daemon for a typed wake; outcome pending (typed, ${String(ms)} ms; id ${msgId})`,
+    report,
+  );
   if (report.json) {
-    writeAction(io, report, { status: 'handed to the daemon for a typed wake', summary, channel: 'typed' });
+    writeAction(io, report, {
+      status: outcome === 'delivered' ? 'delivered' : outcome === 'failed' ? 'queued, not woken' : 'handed to the daemon for a typed wake',
+      summary,
+      channel: 'typed',
+    });
   } else {
     openText(io, report);
-    io.stdout(`${summary}\n`);
+    if (outcome === 'failed') io.stderr(`team send: ${summary}\n`);
+    else io.stdout(`${summary}\n`);
   }
-  return 0; // exit: send.handed
+  return outcome === 'failed' ? 1 : 0; // exit: send.handed
+}
+
+/** The reason the daemon's wake child logged for a wake that did not land, read from the team
+ *  log's line that names this message's stored copy; undefined when no such line is found. */
+function wakeFailureReason(dir: string, dropPath: string): string | undefined {
+  try {
+    const lines = readFileSync(join(dir, LOG_FILE), 'utf8').split('\n');
+    for (let at = lines.length - 1; at >= 0 && at >= lines.length - 400; at -= 1) {
+      const line = lines[at]!;
+      if (!line.includes(dropPath)) continue;
+      const found = /the typed wake did not land \((.*)\); the drop is at /.exec(line);
+      if (found) return found[1];
+    }
+  } catch {
+    // No log to read: the line says the wake did not land, without a reason.
+  }
+  return undefined;
 }
 
 type ThreadReply = { reply: string; msg_id: string };
@@ -4146,8 +4827,9 @@ function findThreadReply(
   const keyState = messageKeyState(home);
   if (keyState.kind !== 'key') return null;
   const hits: { at: number; id: string; body: string }[] = [];
-  for (const { root, session } of roots) {
-    const sessionDir = join(root, '.agents', 'send-drops', session);
+  // E7b revision 3: both trees of each session (src/queue/mail-tree.ts).
+  for (const { root, session, tree } of roots.flatMap((place) => (['legacy', 'stamped'] as const).map((tree) => ({ ...place, tree })))) {
+    const sessionDir = sessionMailDir(root, session, tree);
     let seats: string[];
     try {
       seats = readdirSync(sessionDir).sort();
@@ -4186,15 +4868,32 @@ function findThreadReply(
  * Waits up to `timeoutMs` for a verified reply record on `sentPayload.thread`, looking once,
  * then every `pollMs`. A timeout of zero is the one look and no wait at all.
  */
+/** The receiving team's lead seat, whose clearance settles a stamped record; null when unread. */
+function leadAt(root: string, home: string): string | null {
+  try {
+    const loaded = readTeamConfig(root, { home });
+    return loaded.ok && loaded.team.orchestrator !== '' ? loaded.team.orchestrator : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A stamped record's settlement other than a reply, as `--wait` reports it (§3). */
+type SettledReport = { kind: 'acked' } | { kind: 'cleared'; by: string };
+
 async function awaitThreadReply(
   roots: readonly { root: string; session: string }[],
   sentPayload: RecordPayload,
   home: string,
   timeoutMs: number,
   pollMs = INBOX_POLL_MS,
-): Promise<ThreadReply | null> {
+  /** A stamped record's settlement: the wait ends on it too. */
+  settled?: () => SettledReport | null,
+): Promise<ThreadReply | SettledReport | null> {
   const immediate = findThreadReply(roots, sentPayload, home);
   if (immediate !== null) return immediate;
+  const first = settled?.() ?? null;
+  if (first !== null) return first;
   const deadline = Date.now() + timeoutMs;
   for (let left = deadline - Date.now(); left > 0; left = deadline - Date.now()) {
     await new Promise((resolve) => {
@@ -4202,6 +4901,8 @@ async function awaitThreadReply(
     });
     const found = findThreadReply(roots, sentPayload, home);
     if (found !== null) return found;
+    const done = settled?.() ?? null;
+    if (done !== null) return done;
   }
   return null;
 }
@@ -4238,7 +4939,21 @@ async function finishThreadWait(
     ? [{ root, session }, extraRoot]
     : [{ root, session }];
   const waitMs = host.waitMs ?? timeoutS * 1000;
-  const found = await awaitThreadReply(roots, payload, host.home, waitMs);
+  // The Claude adapter §3: a stamped record's wait also ends on its settlement — the recipient's
+  // ack or a lead's or the owner's clearance — never on a read, which is only a copy.
+  const lead = isStampedPayload(payload) ? leadAt(root, host.home) : null;
+  const stampedContext = { to: seatName, root, session, ...(lead === null ? {} : { lead }) };
+  const settledNow = isStampedPayload(payload)
+    ? (): SettledReport | null => {
+        const key = messageKeyState(host.home);
+        if (key.kind !== 'key') return null;
+        const settled = stampedSettlement(dropDir, payload.id, stampedContext, key.key);
+        return settled === null || settled.kind === 'answered' ? null : settled;
+      }
+    : undefined;
+  const raced = await awaitThreadReply(roots, payload, host.home, waitMs, INBOX_POLL_MS, settledNow);
+  const found = raced !== null && 'reply' in raced ? raced : null;
+  const settledBy = raced !== null && 'kind' in raced ? raced : null;
   if ((via === 'mcp-inbox' || via === 'drop' || via === 'channel') && (found !== null || receiptHeld(dropDir, payload.id, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, payload.id)))) {
     clearPending(dropDir, payload.id);
   }
@@ -4262,7 +4977,6 @@ async function finishThreadWait(
     } catch {
       // A reply record on the thread is the answer even if the receipt sidecar cannot be written.
     }
-    logLine(dir, 'send', who, `${seatName}: answered (reply ${String(found.reply.length)} characters)`, host.now());
     appendHistory(project, root, host.home, {
       ...entry,
       outcome: 'answered',
@@ -4272,6 +4986,18 @@ async function finishThreadWait(
       ...failed,
     });
     return answered(io, seatName, found, report, via, payload.thread);
+  }
+  if (settledBy !== null) {
+    const outcome = settledBy.kind === 'acked' ? 'delivered (acked)' : `cleared by ${settledBy.by}`;
+    logLine(dir, 'send', who, `${seatName}: ${outcome}`, host.now());
+    appendHistory(project, root, host.home, { ...entry, outcome, ...(note !== undefined ? { note } : {}), ms: host.now().getTime() - startedAt, via, ...failed });
+    const summary = withId(`${seatName}: ${outcome}`, report);
+    if (report.json) writeAction(io, report, { status: 'delivered', summary, channel: via, thread: payload.thread });
+    else {
+      openText(io, report);
+      io.stdout(`${summary}\n`);
+    }
+    return 0;
   }
   logLine(dir, 'send', who, `${seatName}: timeout (sent, no reply on the thread within ${String(timeoutS)}s; the thread stays open)`, host.now());
   appendHistory(project, root, host.home, {
@@ -4289,6 +5015,10 @@ type Found = { ok: true; pane: string } | { ok: false; kind: 'unreachable' | 're
 
 /** The one live agent of this name, or why the send cannot use a pane. */
 function findAgent(host: SendHost, session: string, seatName: string): Found {
+  // Partial hosts cannot prove a pane usable; leave its delivery legs unavailable.
+  if (typeof host.agents !== 'function' || typeof host.processInfo !== 'function') {
+    return { ok: false, kind: 'unreachable', reason: 'the send host cannot read a pane' };
+  }
   const agents = host.agents(session);
   if (agents === null) return { ok: false, kind: 'unreachable', reason: `the session "${session}" could not be read` };
   const named = agents.filter((agent) => agent.name === seatName);
@@ -4433,15 +5163,14 @@ async function deliverDropped(
   const stored = await storeDropRecord(dir, who, session, seatName, dropDir, payload, from, host, report, sentAs, human, startedAt, note, 'the record is stored; no seat was woken', project, staged);
   if (stored.ok) {
     stored.release();
-    if (wait) {
+    // A stamped record's wait ends on its settlement (the Claude adapter §3): the stored copy is
+    // the message, and the scheduler's offers follow it.
+    if ((human || isStampedPayload(payload)) && wait) {
       return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, undefined, extraRoot);
     }
     const ms = host.now().getTime() - startedAt;
-    // The drop leg stores and wakes nothing, so a seat nothing wakes while it is idle is left with
-    // a message only a turn can serve: that ending is `queued, not woken`, on the history line and
-    // the console line alike (the daemon's re-wake reads this line — `via: 'drop'` is the only leg
-    // this word ever names).
-    const notWoken = dropNotWoken(report);
+    // Keeping a copy is not delivery. A person's explicitly addressed inbox keeps its existing
+    // acceptance; every agent with no successful live leg returns the not-delivered contract.
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -4451,12 +5180,12 @@ async function deliverDropped(
       body,
       id: msgId,
       thread: payload.thread,
-      outcome: notWoken ? 'queued, not woken' : 'sent (unconfirmed)',
+      outcome: human ? 'sent (unconfirmed)' : 'not delivered',
       ms,
       via: 'drop',
       ...failed,
     });
-    return sentUnconfirmed(io, label, report, ms, 'drop');
+    return human ? sentUnconfirmed(io, label, report, ms, 'drop') : notDelivered(io, dir, who, label, 'no live route', host, report);
   }
   if (!('busy' in stored)) {
     return refuse(io, dir, who, `${seatName}: ${stored.reason}; nothing was sent`, host, report);
@@ -4517,11 +5246,18 @@ async function deliverDropped(
     body,
     id: msgId,
     thread: payload.thread,
-    outcome: 'queued (receiver busy)',
+    outcome: human ? 'queued (receiver busy)' : 'not delivered',
     ms: host.now().getTime() - startedAt,
     ...failed,
   });
-  return queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt);
+  report.sent = msgId;
+  // A stamped record queued behind a busy seat is durable: its wait ends on its settlement (the
+  // Claude adapter §3), and no second leg starts.
+  if (wait && isStampedPayload(payload)) {
+    return finishThreadWait(io, dir, root, who, from, project, session, seatName, dropDir, payload, 'drop', timeoutS, host, report, startedAt, failures, sentAs, 'queued behind a busy seat', extraRoot);
+  }
+  return human ? queuedBusy(io, dir, who, seatName, 'drop', msgId, { held: stored.busy, startedAt: stored.startedAt }, host, report, startedAt)
+    : notDelivered(io, dir, who, label, 'no live route', host, report);
 }
 
 /**
@@ -4660,7 +5396,6 @@ async function deliverNative(
     // read the message, which is not a claim that it acted on it.
     if (result.evidence === 'receipt' || (result.evidence === 'taken' && receiptHeld(dropDir, msgId, { to: seatName, root, session }, host.home, claimBindingIn(root, session, seatName, msgId)))) {
       walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt));
-      logLine(dir, 'send', who, `${seatName}: delivered (read) (drop ${String(body.length)} characters, typed, receipt${draft === undefined ? '' : `; ${draft}`})`, host.now());
       appendHistory(project, root, host.home, {
         ...entry,
         ...historySender(report),
@@ -4754,27 +5489,53 @@ async function deliverTypedWakeSeat(
    *  cascade): this leg then records nothing. A send leaves it true. */
   writeHistory = true,
   staged?: RecordWritten | null,
-): Promise<{ delivered: true } | { delivered: false; reason: string }> {
+  /** A direct-only caller's recheck, asked before every key the wake types. */
+  beforeEachKey?: () => boolean,
+): Promise<{ delivered: true } | { delivered: false; reason: string; typed: boolean }> {
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    return { delivered: false, reason: `another command holds the seat (${holderText(lock)}); nothing was typed` };
+    return { delivered: false, typed: false, reason: `another command holds the seat (${holderText(lock)}); nothing was typed` };
   }
   try {
     try {
       sealDropTree(dir, session, seatName);
     } catch {
-      return { delivered: false, reason: 'the record could not be written; nothing was typed' };
+      return { delivered: false, typed: false, reason: 'the record could not be written; nothing was typed' };
     }
     const written = staged !== undefined
       ? (staged ?? { ok: false as const, reason: 'the record was not staged' })
       : await writeSendRecord(dropDir, payload, host.home, host.now, report, project);
     if (!written.ok) {
-      return { delivered: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
+      return { delivered: false, typed: false, reason: `the record could not be written (${written.reason}); nothing was typed` };
     }
     const wakeHost = host.typedWake?.(session);
-    if (wakeHost === undefined) return { delivered: false, reason: 'the send host binds no pane writer; nothing was typed' };
-    const wake = await deliverTypedWake(wakeHost, pane, trigger, cli);
-    if (!wake.delivered) return { delivered: false, reason: wake.reason };
+    if (wakeHost === undefined) return { delivered: false, typed: false, reason: 'the send host binds no pane writer; nothing was typed' };
+    // rfc-event-comms §3 (E6): a trigger that carries the body takes the hand-over decision here,
+    // immediately before the keys; another hand-over's body turns it into a pointer.
+    const carrying = trigger === inlineWake(payload, host.home, typedWakeMaxFor(cli), 'typed');
+    const typedBody: LegBody = carrying
+      ? legBody(payload, host.home, 'typed', dropDir, typedWakeMaxFor(cli), 'typed')
+      : { text: trigger, carriesBody: false, handle: null };
+    // E7b: a body that could not be numbered never goes out raw: the leg carries the pointer.
+    const line = carrying ? legText(typedBody, payload) : trigger;
+    const wake = await deliverTypedWake(wakeHost, pane, line, cli, {
+      ...(host.wakeVerifyMs === undefined ? {} : { verifyMs: host.wakeVerifyMs, workingBoundMs: host.wakeVerifyMs }),
+      ...(host.wakePollMs === undefined ? {} : { pollMs: host.wakePollMs }),
+      ...(host.wakeReceipt === undefined ? {} : {
+        receipt: () => host.wakeReceipt!({ dropDir, id: payload.id, seat: seatName, root, session, home: host.home }),
+      }),
+      draftFile: join(dropDir, `${payload.id}.draft`),
+      ...(beforeEachKey === undefined ? {} : { beforeEachKey }),
+    });
+    if (!wake.delivered) {
+      settleLegBody(typedBody, wake.typed ? 'unknown' : 'no');
+      if (wake.unrecognised === true) {
+        noteUnrecognisedScreen({ dropDir, root, session, home: host.home, seat: seatName, pane, lead: leadOfRoot(root, host.home), at: host.now() });
+      }
+      return { delivered: false, typed: wake.typed, reason: wake.reason };
+    }
+    clearUnrecognisedScreen(dropDir);
+    settleLegBody(typedBody, 'yes', { dropDir, id: payload.id, root, session, seat: seatName, home: host.home, wake: line, via: 'typed' });
     const ms = host.now().getTime() - startedAt;
     logLine(dir, 'send', who, `${seatName}: delivered (typed wake) (drop ${String(payload.body.length)} characters, typed; ${wake.reason})`, host.now());
     if (writeHistory) {
@@ -4845,10 +5606,10 @@ async function stageChannelRecord(
  *  Only the server's own push ends the wait: a held marker the sender left for another leg is at
  *  the same name and is not a delivery. */
 async function awaitChannelPush(dropDir: string, id: string, graceMs: number, host: SendHost): Promise<boolean> {
-  const polls = Math.max(1, Math.ceil(Math.max(0, graceMs) / CHANNEL_TICK_MS));
+  const polls = Math.max(1, Math.ceil(Math.max(0, graceMs) / CHANNEL_LOOK_MS));
   for (let at = 0; at < polls; at += 1) {
     if (channelNotified(dropDir, id)) return true;
-    if (at + 1 < polls) await host.native.wait(CHANNEL_TICK_MS);
+    if (at + 1 < polls) await host.native.wait(CHANNEL_LOOK_MS);
   }
   return channelNotified(dropDir, id);
 }
@@ -4992,9 +5753,13 @@ export async function walkBriefDelivery(input: {
   payload: RecordPayload;
 }): Promise<BriefWalkResult> {
   const seatName = input.seat;
+  const markedBrief = tokenUnavailable(input.dir, seatName);
+  if (markedBrief !== null) {
+    return { via: null, walked: false, exit: 1, failures: [`${seatName}: ${markedBrief}`] };
+  }
   const from = input.payload.from;
   const startedAt = input.host.now().getTime();
-  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const dropDir = seatMailDirIn(input.dir, input.session, seatName);
   const read = resolveSeatOverrides({ home: input.host.home, root: input.root, seat: seatName });
   if (!read.ok) {
     return {
@@ -5051,6 +5816,10 @@ export async function walkBriefDelivery(input: {
       if (leg === 'typed') failures.push("typed: the pane is a human's, and nothing is typed into it");
       else if (leg === 'native') failures.push("native: the pane is a human's, and no frame is sent");
     }
+  }
+  if (!human) {
+    const blocked = workBlock(input.host, input.dir, input.session, seatName, input.cli);
+    if (blocked !== null) return { via: null, walked: false, exit: 1, failures: [blocked.line] };
   }
   for (const leg of walk) {
     if (leg === 'native') {
@@ -5115,34 +5884,20 @@ export async function walkBriefDelivery(input: {
   return { via: null, walked: true, exit: 1, failures };
 }
 
-/** The sender display name for a client send's socket frame: the person's client, named as the
- *  person (`Client Grok Bot (owner relay):`). */
-const CLIENT_FRAME_HEADER = CLIENT_SLICE_DISPLAY_NAME;
-
-/** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
- *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
- *  transport that reaches a live receiver — the cross-session socket and the typed trigger — in
- *  the cascade's order, or socket, then typed. The retired `mcp-inbox` name is dropped from a
- *  declared order before this walk, so no word for it exists to walk. */
-const CLIENT_LEGS: readonly DeliveryLeg[] = ['socket', 'typed'];
-
 /**
  * The client send's own walk, after the grant wrote its drop: the same signed record, carried
- * through the coordinator seat's resolved delivery order. The order is the receiver's own — its
- * files and signed settings, or the host's injected chain in a test — and a level that declares
- * one is walked as written, restricted to the three legs a client grant understands. With no
- * declared order the walk is the client default the owner asked for: the seat's own inbox
- * channel, the cross-session socket when the receiver's launch declares `accept`, then the typed
- * trigger. Every leg keeps its pane-safety checks: a human's pane is never dialed or typed into,
- * a bare shell is never typed into, and a held frame keeps the socket out until the receiver's
- * declaration is re-confirmed.
+ * through the receiving seat's resolved delivery order by the walk a reply makes
+ * (`walkReplyDelivery`), which resolves the order exactly as a seat's send does. The receiving
+ * seat's channel push, its cross-session socket, its webhook and a profile's typed wake are all
+ * walked in the cascade's order, with the bus inbox under them, and every leg keeps its
+ * pane-safety checks: a human's pane is never dialed or typed into, a bare shell is never typed
+ * into, and a held frame keeps the socket out until the receiver's declaration is re-confirmed.
  *
  * The drop is already written and signed, so no leg stages a second record: each write accepts
- * the record at the same id, and the socket leg's receipt keeps it from being served twice. The
- * walk's own outcome lines are swallowed — the client invocation's two streams keep the contract
- * they had before any walk existed — while the receiving team's log and history record what each
- * leg did. A walk with no leg left writes one log and history line and returns: the drop is the
- * message, and this function never fails the invocation.
+ * the record at the same id. The walk's own outcome lines are swallowed — the client invocation's
+ * two streams keep the contract they had before any walk existed — while the receiving team's
+ * log and history record what the walk did. The drop is the message, and this function never
+ * fails the invocation.
  */
 async function deliverClientRecord(
   io: Io,
@@ -5153,27 +5908,10 @@ async function deliverClientRecord(
   const target = sent.target;
   const root = target.teamRoot;
   const dir = join(root, '.agents');
-  const dropDir = target.dropDir;
   const session = target.session;
   const seatName = target.recipientSeat;
   const from = record.from;
   const startedAt = host.now().getTime();
-  // The legs write the receiving team's log and history as they always do; their own outcome
-  // and refusal lines go to a quiet stream, so the client's stdout keeps its one contract line
-  // and its stderr its key-isolation line.
-  const quiet: Io = {
-    ...io,
-    stdout: () => { /* the drop's confirmation is already printed */ },
-    stderr: () => { /* the walk's reason is in the receiving team's log */ },
-  };
-  const report: Report = { json: false, seat: seatName, sent: null, project: null, session };
-  const failures: string[] = [];
-  const markLeg = (leg: DeliveryLeg, state: LegState, reason?: string): void => {
-    const entry = report.delivery?.find((one) => one.leg === leg && one.state === 'not-reached');
-    if (entry === undefined) return;
-    entry.state = state;
-    if (reason !== undefined) entry.reason = reason;
-  };
   // The receiving team's file names the seat, its CLI, its own declarations and its order. A
   // file this run cannot read or that names no such seat leaves the drop as the delivery: no
   // pane is read on a guess.
@@ -5185,24 +5923,11 @@ async function deliverClientRecord(
     team = null;
   }
   const seat = team === null ? undefined : team.seats.find((one) => one.name === seatName);
-  if (team === null || seat === undefined) {
-    logLine(dir, 'send', from, `${seatName}: the client drop was written; the receiving team file names no such seat, so no delivery leg was walked`, host.now());
-    return;
-  }
-  const project = team.project;
-  let overrides: SeatOverrides = {};
-  if (!host.delivery) {
-    const read = resolveSeatOverrides({ home: host.home, root, seat: seatName });
-    if (!read.ok) {
-      logLine(dir, 'send', from, `${seatName}: the client drop was written; its settings record cannot be read (${read.why}), so no delivery leg was walked`, host.now());
-      return;
-    }
-    overrides = read.overrides;
-  }
-  // A person reads the drop file; no frame is dialed and no line is typed into their pane.
-  const human = overrides.human ?? (seat.human === true);
-  if (human) {
-    logLine(dir, 'send', from, `${seatName}: the client drop was written to its folder; its pane is a human's, so no frame and no trigger were walked`, host.now());
+  // An accepted drop that no leg walked is still the client's message: one `queued, not woken`
+  // line in the receiving team's history keeps it in the sender's own status list
+  // (`team messages --client`), where a later signed receipt moves it on.
+  const queuedOnly = (project: string, why: string): void => {
+    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${why}, so no delivery leg was walked`, host.now());
     appendHistory(project, root, host.home, {
       ts: host.now().toISOString(),
       from,
@@ -5210,160 +5935,79 @@ async function deliverClientRecord(
       body: record.body,
       id: record.id,
       thread: record.thread,
-      // A person's pane is the one seat nothing ever wakes while it is idle, so the stored drop
-      // is `queued, not woken`, never `sent (unconfirmed)`.
+      via: 'drop',
       outcome: 'queued, not woken',
       ms: host.now().getTime() - startedAt,
-      via: 'drop',
+      failed: [why],
     });
+  };
+  if (team === null || seat === undefined) {
+    queuedOnly(team?.project ?? getTeam(host.home, target.teamId)?.project ?? target.entity, 'the receiving team file names no such seat');
     return;
   }
-  // The client's drop is already written; a project order this run cannot read leaves it as the
-  // delivery, and no leg is walked on a guess that could travel where the project forbids.
-  let rawChain: DeliveryChain;
-  try {
-    rawChain = host.delivery ?? deliveryChainOf({
-      root,
-      seat: seatName,
-      home: host.home,
-      file: team,
-      projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
-      overrides,
-      now: host.now(),
-    });
-  } catch (error) {
-    if (!(error instanceof DeliveryChainUnreadable)) throw error;
-    logLine(dir, 'send', from, `${seatName}: the client drop was written; ${error.message}, so no delivery leg was walked`, host.now());
-    return;
-  }
-  const order = deliveryOrder(rawChain);
-  const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
-  const inbound = declaredInboundOf({
-    dir,
-    root,
-    session,
-    seat: seatName,
-    ...(seat.launch !== undefined ? { launch: seat.launch } : {}),
-  });
-  const socketWord = seat.inbound;
-  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(dir, session, seatName)), inbound);
-  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
+  const project = team.project;
   // The agent record the grant bound: its CLI and cross-session address when the registry still
   // holds them, the receiving file's own seat otherwise.
   const agentRecord = getAgent(host.home, target.recipientId);
   const cli = agentRecord?.cli ?? seat.cli;
-  const defaultWalk: DeliveryLeg[] = [];
-  if (socketNow) defaultWalk.push('socket');
-  defaultWalk.push('typed');
-  const walk: readonly DeliveryLeg[] = declaredOrder
-    ? cascadeOrder(order.filter((leg) => CLIENT_LEGS.includes(leg)))
-    : defaultWalk;
-  // The implied socket default's omission is named when the walk does not carry it, the same
-  // way an ordinary send's report explains the socket it did not dial.
-  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding, true);
-  report.delivery = [
-    ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
-    ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
-  ];
-  const aim: Aim = {
-    seat: seatName,
-    agentId: target.recipientId,
-    session,
-    cli,
-    address: agentRecord?.reach.address ?? null,
-    sentAs: null,
+  // The client's walk is the walk every other carrier of a written record takes: the same order
+  // resolution a seat's send makes (`resolveWalkOrder`), the same legs in the same cascade — the
+  // development channel's push, the cross-session socket, the webhook, a profile's typed wake,
+  // the bus inbox under them — with every pane-safety, held-box and human rule they keep. Before
+  // this, the client walked its own two-leg list and filtered a declared order down to `socket`
+  // and `typed`, so a Claude seat whose team declares the retired `typed` word was never pushed or
+  // dialed: the drop waited, "queued, not woken", while every seat send reached the same seat in a
+  // second. The grant's admission is already decided; the frame names the client as the person's.
+  const naming = namingFor({ home: host.home, root, viewerTeam: target.teamId, seat: seatName, file: team });
+  const walk = await walkReplyDelivery({
+    io,
+    host,
     dir,
-    project,
     root,
-    cross: false,
-  };
-  // A minimal host (the exit-code scenes hand one in) cannot read panes or write a socket; the
-  // legs that would need those capabilities are skipped rather than crashed through.
-  const canPane = typeof host.agents === 'function' && typeof host.processInfo === 'function';
-  const canSocket = canPane && typeof host.deliver === 'function' && host.native !== undefined;
-  const canType = canPane && host.native !== undefined;
-  for (const leg of walk) {
-    if (leg === 'socket') {
-      // The socket dials only a receiving Claude session whose launch declares
-      // `crossSessionInbound: accept`; the checks are the ordinary walk's, in its order, plus the
-      // host capability a client send may lack.
-      const why = canSocket
-        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding, true)
-        : 'the send host cannot read a pane or write a socket, so no frame was dialed';
-      if (why !== null) {
-        failures.push(`socket: ${why}`);
-        markLeg('socket', 'skipped', why);
-        continue;
-      }
-      markLeg('socket', 'attempted');
-      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, CLIENT_FRAME_HEADER, false);
-      if (attempt.kind === 'delivered') return;
-      failures.push(`socket: ${attempt.reason}`);
-      // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
-      // the reported class, so the summary never claims a wake that did not happen. A surviving
-      // webhook-only route still reads as queued — the send's webhook leg posts it before the
-      // typed leg, and the bus carries it after the send returns — and the words keep the
-      // typed-wake exception: a profile that declares a typed wake reads the message at its
-      // next turn, not "no way to be woken".
-      if (attempt.kind === 'fallback' && attempt.socketUnusable === true) {
-        const lowered = classWithoutSocket(aim, host.home);
-        report.deliveryClass = lowered.cls;
-        report.deliveryWords = classWords(lowered, aim.seat);
-      }
-      markLeg('socket', 'attempted', attempt.reason);
-      logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
-      continue;
-    }
-    // The typed leg: the drop is on disk, and the pane receives the one trigger that makes the
-    // seat read it — the same receipt-writing read its own turn-start hook runs.
-    // No pane messaging (src/send/no-pane-messaging.ts): the client drop already waits in the
-    // seat's bus inbox, and nothing is typed to point at it.
-    const typedWhy = NO_PANE_MESSAGING.length > 0 ? NO_PANE_MESSAGING : canType ? null : 'the send host cannot read a pane, so no trigger was typed';
-    if (typedWhy !== null) {
-      failures.push(`typed: ${typedWhy}`);
-      markLeg('typed', 'skipped', typedWhy);
-      continue;
-    }
-    const compose = profileFor(cli)?.compose ?? null;
-    const wakeTemplate = messageDisplayInForce({ home: host.home, root, team, now: host.now() });
-    const trigger = readTriggerLine(seatName, session, {
-      seat: from,
-      team: project,
-      template: wakeTemplate,
-      body: record.body,
-      ageMs: 0,
-      ...(record.subject === undefined ? {} : { subject: record.subject }),
-    }, cli);
-    if (trigger === null && compose === null) {
-      failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-      markLeg('typed', 'skipped', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-      continue;
-    }
-    const found = findAgent(host, session, seatName);
-    if (!found.ok) {
-      failures.push(`typed: ${found.reason}`);
-      markLeg('typed', 'skipped', found.reason);
-      continue;
-    }
-    if (isBareShellPane(dir, session, seatName, host.processInfo(session, found.pane))) {
-      failures.push('typed: the seat is back at its shell; nothing was typed');
-      markLeg('typed', 'skipped', 'the seat is back at its shell; nothing was typed');
-      continue;
-    }
-    markLeg('typed', 'attempted');
-    if (compose === null) {
-      if (trigger === null) {
-        failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-        markLeg('typed', 'attempted', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
-        continue;
-      }
-      await deliverNative(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, trigger, host, report, startedAt, undefined, failures);
-      return;
-    }
-    // A compose seat's typed leg builds the body through its CLI's own screens.
-    await deliverComposeSeat(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, resolve(root, seat.cwd), host, report, startedAt, failures);
+    project,
+    session,
+    seat: seatName,
+    cli,
+    payload: record,
+    naming,
+    file: team,
+    sender: { teamId: target.teamId, project },
+    address: agentRecord?.reach.address ?? null,
+    who: from,
+    // The grant's bound recipient: the socket is dialed only while the registry still records
+    // that agent running on this seat, CLI, session and team, as a seat send's dial requires.
+    recipient: { agentId: target.recipientId, teamId: target.teamId },
+  });
+  const failures = [...walk.failures];
+  if (!walk.walked) {
+    queuedOnly(project, failures.length === 0 ? 'no delivery leg could run' : failures.join('; '));
     return;
   }
+  if (walk.via !== 'drop' && walk.endpointBlocked === undefined) {
+    // The leg that took it, with the legs that did not before it: the same audit a send's walk
+    // leaves, and one history line in the words a reply's walk uses (the shared walk's legs write
+    // none of their own).
+    const tail = failures.length === 0 ? '' : ` (after: ${failures.join('; ')})`;
+    logLine(dir, 'send', from, `${walk.summary ?? `${seatName}: delivered (${walk.via})`} for client drop ${record.id}${tail}`, host.now());
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      body: record.body,
+      id: record.id,
+      thread: record.thread,
+      outcome: walk.via === 'channel'
+        ? 'sent (channel)'
+        : walk.via === 'typed'
+          ? 'delivered (typed wake)'
+          : walk.unconfirmed ? 'sent (unconfirmed)' : 'delivered',
+      ms: host.now().getTime() - startedAt,
+      via: walk.via,
+      ...(failures.length > 0 ? { failed: [...failures] } : {}),
+    });
+    return;
+  }
+  if (walk.endpointBlocked !== undefined && walk.summary !== null) logLine(dir, 'send', from, walk.summary, host.now());
   // The client drop is already the seat's bus inbox: no event adapter took it, so it waits there
   // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable. The class is
   // read at the ending, the read the plain walk makes before it starts: a seat nothing wakes
@@ -5375,9 +6019,10 @@ async function deliverClientRecord(
     root,
     session,
     seat: seatName,
-    ...(seat === undefined ? {} : { declared: seat }),
+    declared: seat,
     home: host.home,
   });
+  const report: Report = { json: false, seat: seatName, sent: null, project, session };
   report.deliveryClass = ending.cls;
   report.deliveryWords = ending.words;
   const notWoken = dropNotWoken(report);
@@ -5453,20 +6098,33 @@ export async function walkReplyDelivery(input: {
   naming: SenderNaming;
   /** The receiving team file when the caller already read it; null reads it here. */
   file: TeamFile | null;
-  /** The replying side's own identity: the team it stands in, its project, and the label its
-   *  file writes on it (a seat's; null for the owner). */
-  sender: { teamId: string; project: string; label: string | null };
+  /** The replying side's own team and project. Its name on every leg is the record's own
+   *  identity (src/comms/identity.ts). */
+  sender: { teamId: string; project: string };
   /** The receiving seat's registry address, when the caller resolved one: the socket's first
    *  candidate. */
   address: string | null;
   /** The caller's log tag, as every leg logs it. */
   who: string;
+  /** The receiving seat's registry id and the team key its record is filed under, when the caller
+   *  resolved them from a signed binding: the socket leg then makes the same record check a
+   *  send's own walk makes before it dials (running, same CLI, team, session and seat). */
+  recipient?: { agentId: string; teamId: string };
+  /** The re-send scheduler's walk (E7b): the webhook posts again, and only a post this walk made
+   *  counts as the leg that took it. */
+  resend?: true;
+  /** The re-send scheduler's typed leg (E7b): at the typed position the walk types nothing and
+   *  asks the watch's own guarded typed wake instead; true ends the walk there. */
+  typedRequest?: () => boolean;
+  /** The re-send scheduler's continuation (E7b): the legs up to and including this one are not
+   *  walked again; the walk goes on from the leg after it (a typed request refused before any key). */
+  startAfter?: WalkLeg;
 }): Promise<ReplyWalkResult> {
   const seatName = input.seat;
   const from = input.payload.from;
   const msgId = input.payload.id;
   const startedAt = input.host.now().getTime();
-  const dropDir = join(input.dir, 'send-drops', input.session, seatName);
+  const dropDir = seatMailDirIn(input.dir, input.session, seatName);
   const quiet: Io = {
     ...input.io,
     stdout: () => { /* the reply prints its own one line */ },
@@ -5590,7 +6248,7 @@ export async function walkReplyDelivery(input: {
   const stagedRecordOf = (): RecordWritten | null => stagedWalk;
   const aim: Aim = {
     seat: seatName,
-    agentId: null,
+    agentId: input.recipient?.agentId ?? null,
     session: input.session,
     cli,
     address: input.address,
@@ -5599,8 +6257,27 @@ export async function walkReplyDelivery(input: {
     project: input.project,
     root: input.root,
     cross: false,
+    ...(input.recipient === undefined ? {} : { teamId: input.recipient.teamId }),
   };
+  if (!human) {
+    const blocked = workBlock(input.host, input.dir, input.session, seatName, cli);
+    if (blocked !== null) {
+      failures.push(blocked.line);
+      return ended({ via: 'drop', walked: false, unconfirmed: false, summary: blocked.line });
+    }
+  }
+  // A continuation whose walk no longer holds its continuation point walks nothing: the legs it
+  // would start from were already offered in this attempt.
+  if (input.startAfter !== undefined && !chosen.includes(input.startAfter)) {
+    failures.push(`${input.startAfter}: the walk no longer holds the continuation point; nothing was walked`);
+    return ended({ via: 'drop', walked: false, unconfirmed: false, summary: null });
+  }
+  let skipping = input.startAfter !== undefined;
   for (const [at, leg] of chosen.entries()) {
+    if (skipping) {
+      if (leg === input.startAfter) skipping = false;
+      continue;
+    }
     if (leg === 'channel') {
       // The seat's own inbox server pushes the record into its CLI. The marker beside the record
       // is what the watch reads when no receipt follows; a marker that never appears inside the
@@ -5637,7 +6314,7 @@ export async function walkReplyDelivery(input: {
     }
     if (leg === 'webhook') {
       const hook = declared.webhook;
-      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook);
+      const routeRefusal = hook === undefined ? 'the receiving seat declares no webhook row' : webhookRefusal(hook, declared?.cli);
       if (hook === undefined || routeRefusal !== null) {
         failures.push(`webhook: ${routeRefusal ?? 'the receiving seat declares no webhook row'}`);
         continue;
@@ -5650,7 +6327,13 @@ export async function walkReplyDelivery(input: {
       }
       // The reply's own write never posts an arrival, so a record already at the id is the
       // normal state here and no reason to skip the post: the claim decides who posts.
-      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body);
+      // A re-send (E7b) posts again whatever an earlier post left: its claim, never the posted
+      // mark, decides who posts, and a mark from an earlier post is no delivery of this attempt.
+      // A stamped record's inbox-shaped body carries its numbered copy's header (E7b).
+      const delivery = isStampedPayload(input.payload)
+        ? () => { const n = takeCopyNumber(dropDir, msgId, 'webhook'); return n === null ? null : deliveryHeader(msgId, n); }
+        : undefined;
+      const posted = await postSeatWebhook(seatName, hook, input.payload, staged.signed, dropDir, input.host.home, input.host.now, file, input.project, input.payload.body, input.resend === true, delivery);
       const ms = input.host.now().getTime() - startedAt;
       if (posted.kind === 'posted') {
         return ended({ via: 'webhook', walked: true, unconfirmed: false, summary: `${seatName}: delivered (webhook, ${String(posted.ms)} ms)` });
@@ -5658,7 +6341,7 @@ export async function walkReplyDelivery(input: {
       if (posted.kind === 'unknown') {
         return ended({ via: 'webhook', walked: true, unconfirmed: true, summary: `${seatName}: sent (unconfirmed) (webhook, ${String(ms)} ms)` });
       }
-      if (posted.kind === 'none' && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
+      if (posted.kind === 'none' && input.resend !== true && (posted.why === 'claim-held' || posted.why === 'already-posted')) {
         const postedAlready = posted.why === 'already-posted';
         return ended({
           via: 'webhook',
@@ -5682,6 +6365,10 @@ export async function walkReplyDelivery(input: {
         failures.push(`socket: ${cli} sessions have no cross-session socket`);
         continue;
       }
+      if (socketSuppressed(input.root, input.host.home)) {
+        failures.push(`socket: ${SOCKET_OFF_ON_ACTIVE}`);
+        continue;
+      }
       if (!SOCKET_SEND) {
         failures.push('socket: this build does not carry the cross-session socket');
         continue;
@@ -5695,10 +6382,9 @@ export async function walkReplyDelivery(input: {
         continue;
       }
       await ensureStaged();
-      const identityHeader = frameIdentityHeader(input.payload, input.naming, input.sender.teamId, input.sender.project, input.sender.label);
       const attempt = await deliverSocketFrame(
         input.dir, input.who, from, aim, input.payload, failures, input.host, report, startedAt,
-        false, inbound, identityHeader, false, false, { mode: 'first', staged: stagedRecordOf() },
+        false, inbound, false, false, { mode: 'first', staged: stagedRecordOf() },
       );
       if (attempt.kind === 'delivered') {
         return ended({ via: 'socket', walked: true, unconfirmed: false, summary: `${seatName}: delivered (socket)` });
@@ -5711,6 +6397,11 @@ export async function walkReplyDelivery(input: {
       // declares none keeps the no-pane rule, and the walk goes on to the mailbox behind it.
       if (!walkingTyped || typedWake === null) {
         failures.push(`typed: ${NO_PANE_MESSAGING}`);
+        continue;
+      }
+      if (input.typedRequest !== undefined) {
+        if (input.typedRequest()) return ended({ via: 'typed', walked: true, unconfirmed: true, summary: `${seatName}: a typed wake was asked of the watch` });
+        failures.push('typed: the watch takes no typed wake for this seat now');
         continue;
       }
       const found = findAgent(input.host, input.session, seatName);
@@ -5727,14 +6418,14 @@ export async function walkReplyDelivery(input: {
         { seat: from, ...(input.payload.from_id === null ? {} : { id: input.payload.from_id }) },
         { ...input.naming, mode: 'nickname' },
       );
-      const trigger = readTriggerLine(seatName, input.session, {
+      const trigger = inlineWake(input.payload, input.host.home, typedWakeMaxFor(cli), 'typed') ?? readTriggerLine(seatName, input.session, {
         seat: from,
         team: input.sender.project,
         template: wakeTemplate,
         name: wakeName,
         body: input.payload.body,
         ageMs: 0,
-      }, cli);
+      }, cli, 'Body too long; read it with: team drops --read.');
       if (trigger === null) {
         failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
         continue;
@@ -5747,6 +6438,7 @@ export async function walkReplyDelivery(input: {
       if (wake.delivered) {
         return ended({ via: 'typed', walked: true, unconfirmed: false, summary: `${seatName}: delivered (typed wake)` });
       }
+      report.typedWake = { keysSent: wake.typed };
       failures.push(`typed: ${wake.reason}`);
       continue;
     }
@@ -5783,7 +6475,9 @@ export async function walkReplyDelivery(input: {
               seat: seatName,
               now: input.host.now(),
             });
-        const attempt = await deliverCodexNativeRoute(
+        // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+        const nativeBody = legBody(input.payload, input.host.home, 'native', dropDir);
+        const attempt = await (input.host.nativeRoute ?? deliverCodexNativeRoute)(
           {
             route: 'native',
             runtime: 'codex',
@@ -5794,7 +6488,7 @@ export async function walkReplyDelivery(input: {
             seat: seatName,
             sender: { seat: from, team: teamIdOf(input.root) },
           },
-          { id: msgId, record: staged.record, sentAt: input.payload.at },
+          { id: msgId, record: staged.record, sentAt: input.payload.at, pointer: legText(nativeBody, input.payload) },
           {
             now: input.host.now,
             startedAt,
@@ -5807,17 +6501,16 @@ export async function walkReplyDelivery(input: {
             liveProbe: true,
           },
         );
+        // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+        if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
         if (attempt.outcome === 'enqueue') {
+          settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined, via: 'native' });
           clearEndpointBlocked(input.root, input.session, seatName);
-          const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
-          if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
-            return ended({ via: 'native', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, native queue receipt)` });
-          }
           return ended({
             via: 'native',
             walked: true,
             unconfirmed: true,
-            summary: `${seatName}: queued to its native runtime (drop ${String(input.payload.body.length)} characters); no receipt within ${String(grace)} ms`,
+            summary: `${seatName}: queued to its native runtime (drop ${String(input.payload.body.length)} characters)`,
           });
         }
         failures.push(`native: ${attempt.reason}`);
@@ -5861,6 +6554,8 @@ export async function walkReplyDelivery(input: {
             now: input.host.now(),
           });
       const seatCwd = declared.cwd === undefined ? input.root : resolve(input.root, declared.cwd);
+      // rfc-event-comms §3 (E6): one hand-over decision for the exact payload the queue gets.
+      const nativeBody = legBody(input.payload, input.host.home, 'native', dropDir);
       const attempt = await deliverHeadlessResumeRoute(
         {
           route: 'headless-resume',
@@ -5873,7 +6568,7 @@ export async function walkReplyDelivery(input: {
           sender: { seat: from, team: teamIdOf(input.root) },
           cwd: seatCwd,
         },
-        { id: msgId, record: staged.record },
+        { id: msgId, record: staged.record, pointer: legText(nativeBody, input.payload) },
         {
           now: input.host.now,
           startedAt,
@@ -5884,16 +6579,15 @@ export async function walkReplyDelivery(input: {
           ...(input.host.headlessResumeSpawn === undefined ? {} : { spawn: input.host.headlessResumeSpawn }),
         },
       );
+      // E3: a route that did not report `enqueue` may still have handed the body to the runtime.
+      if (attempt.outcome !== 'enqueue') settleLegBody(nativeBody, 'unknown'); // no adapter proves a refusal before hand-over: exposed-unconfirmed
       if (attempt.outcome === 'enqueue') {
-        const grace = input.host.inboxGraceMs ?? INBOX_GRACE_MS;
-        if (await awaitReceipt(dropDir, msgId, { to: seatName, root: input.root, session: input.session }, input.host.home, grace, claimBindingIn(input.root, input.session, seatName, msgId))) {
-          return ended({ via: 'headless-resume', walked: true, unconfirmed: false, summary: `${seatName}: delivered (read) (drop ${String(input.payload.body.length)} characters, headless-resume receipt)` });
-        }
+        settleLegBody(nativeBody, 'yes', { dropDir, id: msgId, root: input.root, session: input.session, seat: seatName, home: input.host.home, wake: nativeBody.text ?? undefined, via: 'headless-resume' });
         return ended({
           via: 'headless-resume',
           walked: true,
           unconfirmed: true,
-          summary: `${seatName}: resumed headlessly (drop ${String(input.payload.body.length)} characters); no receipt within ${String(grace)} ms`,
+          summary: `${seatName}: resumed headlessly (drop ${String(input.payload.body.length)} characters)`,
         });
       }
       failures.push(`headless-resume: ${attempt.reason}`);
@@ -5929,7 +6623,9 @@ function notSubmittedAt(io: Io, dir: string, who: string, seat: string, reason: 
  *  The leaf alone would leave the parents at the umask, so other users could list
  *  session ids and seat names. `.agents` itself is not changed. */
 export function sealDropTree(dir: string, session: string, seat: string): void {
-  const root = join(dir, 'send-drops');
+  // Creates the drop folders and narrows their modes: an effect.
+  hostedCommit('drop tree');
+  const root = mailTreeIn(dir);
   const sessionDir = join(root, session);
   const leaf = join(sessionDir, seat);
   mkdirSync(leaf, { recursive: true });
@@ -5942,7 +6638,7 @@ export function sealDropTree(dir: string, session: string, seat: string): void {
  *  nothing, and the log records writes. Exit 0, always. */
 function dryRun(io: Io, seat: string, what: string, report: Report): number {
   report.sent = null;
-  const summary = `${seat}: dry-run: ${what}`;
+  const summary = withId(`${seat}: dry-run: ${what}`, report);
   const plan: PlanStep[] = [{ step: 'send', seat, detail: what, prefix: '+' }];
   if (report.json) {
     writeAction(io, report, { status: 'dry-run', summary, dryRun: true, channel: null, plan });
@@ -6068,26 +6764,6 @@ function crossTeamRows(host: SendHost, teams: Record<string, TeamRecord>, ownId:
   return rows;
 }
 
-/**
- * The first of the pane's processes with a socket in the sockets folders: the foreground
- * processes first (the running CLI is one of them), then the shell; each pid's folders in
- * order — `socketsDir`, then the alt folder when the real host has one. The probe's socket
- * is derived from one process — the session — so more than one match is not resolved here:
- * the first is used, in that order.
- */
-function socketOf(host: SendHost, processes: PaneProcesses): string | null {
-  const dirs = host.socketsDirAlt === undefined ? [host.socketsDir] : [host.socketsDir, host.socketsDirAlt];
-  const pids = [...processes.foreground, processes.shell].filter((pid, index, all) => all.indexOf(pid) === index);
-  for (const pid of pids) {
-    for (const dir of dirs) {
-      const path = join(dir, `${String(pid)}.sock`);
-      if (existsSync(path)) return path;
-    }
-  }
-  return null;
-}
-
-/** The folders discovery looked in, as one phrase for a refusal's text. */
 function socketDirs(host: SendHost): string {
   return host.socketsDirAlt === undefined ? host.socketsDir : `${host.socketsDir}, ${host.socketsDirAlt}`;
 }
@@ -6107,43 +6783,6 @@ type SocketAttempt =
 const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending session's own SendMessage";
 
 /**
- * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
- * the file writes reads `<name> · <role>` — the workspace title `up` gives it — and its first half
- * is the name people call the seat by. A written label with no middle dot is the name whole. A
- * seat with no written label has no such name: the stored label is its model and version, and its
- * workspace title its seat name and role, so the seat name stands in its place. Display only.
- */
-export function labelNameOf(team: TeamFile, seat: string): string | null {
-  const found = team.seats.find((one) => one.name === seat);
-  return found === undefined ? null : labelPersona(found);
-}
-
-/**
- * The sender's display name for an accepted socket frame: the nickname the registry (or the
- * seat's own setting) holds, the name its written label carries before the middle dot, then the
- * seat name. Display only: the signed record below it is the message, and the record's body keeps
- * its own `from … — admitted by: …` line. A registry that cannot answer reads as no nickname, so
- * a frame always names its sender.
- */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, _teamName: string, labelName: string | null): string {
-  let name = '';
-  try {
-    name = senderNickname(
-      // This is a frame header for the sender's own team. Omitting the id keeps senderNickname's
-      // team lookup pinned here even if a stale or foreign roster also repeats that id.
-      { seat: record.from, team: senderTeam },
-      naming,
-    ) ?? '';
-  } catch {
-    // A registry that cannot answer is no nickname.
-  }
-  // A nickname wins; then the name the seat's written label carries; then the seat name, so the
-  // line always names its sender.
-  if (name === '') name = labelName ?? '';
-  return name === '' ? record.from : name;
-}
-
-/**
  * The default path's first leg: one frame on the target's cross-session socket, nothing typed.
  * The address is resolved first — the registry's recorded one while it is still live, else the pane's
  * own processes — and a write the socket takes is the send: this channel has no
@@ -6155,7 +6794,7 @@ function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, sender
  *
  * A taken frame ends the sender's work at once — the frame was taken, so the send reports
  * `delivered (socket)` and returns. The pane is never read here: whether the receiving session
- * held the frame at its held-message dialog is the daemon's held step to see on its own 250 ms
+ * held the frame at its held-message dialog is the daemon's held step to see on its own 500 ms
  * beat (`src/daemon/presence/held.ts`), which raises `held` and marks the socket until the
  * seat's declaration is re-confirmed. A person's command must not wait a second on another
  * seat's screen.
@@ -6173,8 +6812,6 @@ async function deliverSocketFrame(
   startedAt: number,
   wait = false,
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
-  /** The display line the frame opens with; empty, the body alone. */
-  header = '',
   /** True for a person-pane seat: no reader line, a person answers in its client. */
   personPane = false,
   /** False for a caller that writes the walk's one history line itself (the reply's own
@@ -6194,6 +6831,8 @@ async function deliverSocketFrame(
     staged?: StagedForWalk | null;
   },
 ): Promise<SocketAttempt> {
+  // The Claude adapter §1, at the frame itself: an active root is never dialed.
+  if (socketSuppressed(to.root, host.home)) return { kind: 'fallback', reason: SOCKET_OFF_ON_ACTIVE };
   const msgId = payload.id;
   const body = payload.body;
   report.sent = msgId;
@@ -6205,7 +6844,7 @@ async function deliverSocketFrame(
   // and both write its own signed read receipt (ADR D3). It addresses the record, never the
   // sender, so an owner-origin frame needs no reply target and no sending team. A person-pane
   // seat has no reader line at all: a person answers in their own client.
-  const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
+  const dropDir = seatMailDirIn(to.dir, to.session, to.seat);
   const existingIds = existingRecordIdsIn(dropDir);
   const compact = declaredCompactDeliveryAt(to, host.home);
   const reply = personPane
@@ -6213,14 +6852,12 @@ async function deliverSocketFrame(
     : compact
       ? compactReaderLine(msgId, existingIds)
       : readerLine(msgId, existingIds);
-  const normalizedDisplay = header === '' ? null : header === 'owner' ? 'the owner' : header;
-  const content = attributedBody(body, from, {
+  let content = attributedBody(body, from, {
     record: payload,
     home: host.home,
     root: to.root,
-    displayName: normalizedDisplay,
     rule: payload.rule,
-    compact,
+    compact: false,
   });
   // The record's exact text is signed here for the two stores that do not write the copy first:
   // `signRecord` has no clock and no nonce, so these are the same bytes the walk's own staging
@@ -6231,11 +6868,38 @@ async function deliverSocketFrame(
   let carried: string | null = null;
   if (store !== undefined && (store.mode === 'parallel' || store.mode === 'none')) {
     try {
-      carried = recordTextOf(signRecord(payload, host.home));
+      carried = recordTextOf(signRecord(payload, host.home, store.mode === 'none' ? { stamp: false } : {}));
     } catch {
       return { kind: 'fallback', reason: 'the record could not be signed' };
     }
   }
+  let bodyIncluded = true;
+  if (Buffer.byteLength(content, 'utf8') > RUNTIME_WAKE_MAX) {
+    content = `${content.split('\n')[0]}\n\nMessage too long for this wake. Read it with: team drops --read --id ${msgId} --seat ${to.seat}`;
+    bodyIncluded = false;
+  }
+  // A body a carrier already handed over (its signed delivered receipt, bound to this record's
+  // seat, checkout and session) is not carried again by an automatic redelivery — the watch's
+  // ladder or the channel's socket retry: the frame is the ID-only wake, and the seat's own read
+  // still serves the body. A message with no such receipt keeps the body.
+  if (bodyIncluded && carrierDeliveryOf(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home) !== null) {
+    content = `${content.split('\n')[0]}\n\n${carriedPointer(msgId, to.seat)}`;
+    bodyIncluded = false;
+  }
+  // rfc-event-comms §3 (E6): the frame's hand-over decision, taken once for the exact frame sent.
+  const socketExposure = bodyIncluded ? exposeBody({ dropDir, root: to.root, session: to.session, seat: to.seat, msgId }, 'socket', host.home) : null;
+  if (socketExposure?.kind === 'pointer') {
+    content = `${content.split('\n')[0]}\n\n${pointerFor(msgId, null)}`;
+    bodyIncluded = false;
+  }
+  // E7b: a stamped record's copy carries its delivery number, taken durably before the frame.
+  if (bodyIncluded && isStampedPayload(payload)) {
+    const n = takeCopyNumber(dropDir, msgId, 'socket');
+    if (n === null) return { kind: 'fallback', reason: 'the delivery history could not be written' };
+    content = wrapCopy(content, msgId, n);
+  }
+  // The reader line rides with the body too: a seat handed the whole body still needs the id to
+  // answer it on its thread.
   const frame = frameFor(content, msgId, reply, store?.mode === 'none' && carried !== null ? carried : undefined);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
@@ -6252,6 +6916,8 @@ async function deliverSocketFrame(
   if (seatLockHolder(to.dir, to.session, to.seat) !== null) {
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
+  (host as SnapshotSendHost).evictAgents?.(to.session);
+  (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
   const first = socketPathFor(host, to, found.pane);
   if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
   if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path, host.home), socketUnusable: true };
@@ -6266,7 +6932,10 @@ async function deliverSocketFrame(
   // signed record in its folder, which is the copy `team messages` and the watch read. Under
   // `parallel` the walk's own write is already running beside this dial, and under `none` there
   // is no copy at all: the frame carries the signed bytes instead.
-  const copy = { dir: join(to.dir, 'send-drops', to.session, to.seat), name: msgId };
+  // E7b revision 3: the durable copy sits in the folder of the record's own era.
+  const copyDir = recordFolderFor(seatMailDirIn(to.dir, to.session, to.seat), isStampedPayload(payload));
+  if (copyDir === null) return { kind: 'fallback', reason: NO_STAMPED_FOLDER };
+  const copy = { dir: copyDir, name: msgId };
   let recordText: string;
   if (carried !== null) {
     recordText = carried;
@@ -6283,21 +6952,56 @@ async function deliverSocketFrame(
   // so an injected host's transport is the transport this attempt uses. A recorded address whose
   // write refuses gets the same one live re-resolution it always did, as a second attempt.
   const message = { id: msgId, record: recordText, frame };
+  const expectedAddressRecord = to.agentId === null ? null : getAgent(host.home, to.agentId);
+  if (to.agentId !== null && (expectedAddressRecord === null || expectedAddressRecord.lifecycle !== 'running'
+    || expectedAddressRecord.cli !== to.cli || expectedAddressRecord.reach.team !== (to.teamId ?? teamIdOf(to.root))
+    || expectedAddressRecord.reach.session !== to.session || expectedAddressRecord.reach.seat !== to.seat)) {
+    return { kind: 'fallback', reason: 'the addressed seat record changed', socketUnusable: true };
+  }
+  (host as SnapshotSendHost).evictAgents?.(to.session);
+  (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
+  const dialProof = socketPathFor(host, to, found.pane);
+  if (dialProof?.kind !== 'path' || dialProof.path !== first.path || inboundStaleReason(inbound, first.path) !== null) {
+    return { kind: 'fallback', reason: 'the socket placement changed before delivery', socketUnusable: true };
+  }
+  // The Claude adapter §1, at the dial itself: the staging and placement reads above were awaited.
+  if (socketSuppressed(to.root, host.home)) return { kind: 'fallback', reason: SOCKET_OFF_ON_ACTIVE };
+  let usedAddress = first.path;
   let taken = await relayDeliver(
     { route: 'socket', socket: first.path, runtime: to.cli, copy },
     message,
     { now: host.now, dial: host.deliver },
   );
-  if (taken.outcome !== 'delivered' && first.recorded) {
+  if (taken.outcome !== 'delivered' && first.recorded
+    && (expectedAddressRecord === null || getAgent(host.home, expectedAddressRecord.id)?.provenance.seq === expectedAddressRecord.provenance.seq)) {
     (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
-    const processes = host.processInfo(to.session, found.pane);
-    const live = processes === null ? null : socketOf(host, processes);
-    if (live !== null && live !== first.path) {
+    (host as SnapshotSendHost).evictAgents?.(to.session);
+    const retried = socketPathFor(host, { ...to, address: null }, found.pane);
+    const live = retried?.kind === 'path' ? retried.path : null;
+    if (live !== null && live !== first.path && inboundStaleReason(inbound, live) === null && !socketSuppressed(to.root, host.home)) {
+      usedAddress = live;
       taken = await relayDeliver({ route: 'socket', socket: live, runtime: to.cli, copy }, message, { now: host.now, dial: host.deliver });
     }
   }
   if (taken.outcome !== 'delivered') return { kind: 'fallback', reason: taken.reason };
-  logLine(to.dir, 'send', who, `${to.seat}: sent on the socket (${String(frame.length)} characters)`, host.now());
+  // Only a taken socket with fresh placement proof is written back, under an identity
+  // compare-and-write. A failed dial or a record replaced during the dial writes nothing.
+  if (expectedAddressRecord !== null && expectedAddressRecord.cli === to.cli
+    && expectedAddressRecord.reach.team === teamIdOf(to.root)
+    && expectedAddressRecord.reach.session === to.session && expectedAddressRecord.reach.seat === to.seat) {
+    (host as SnapshotSendHost).evictAgents?.(to.session);
+    (host as SnapshotSendHost).evictProcessInfo?.(to.session, found.pane);
+    const confirmed = socketPathFor(host, { ...to, address: usedAddress }, found.pane);
+    if (confirmed?.kind === 'path' && confirmed.path === usedAddress && inboundStaleReason(inbound, usedAddress) === null) {
+      try {
+        if (!recordProvenAgentAddress(host.home, expectedAddressRecord, usedAddress)) {
+          logLine(to.dir, 'send', who, `${to.seat}: its address record changed; the socket address was not written`, host.now());
+        }
+      } catch {
+        logLine(to.dir, 'send', who, `${to.seat}: the proven socket address could not be recorded`, host.now());
+      }
+    }
+  }
   // `parallel` ends the send only when both settled: the frame was taken, and the walk's own
   // write is joined here before this leg calls itself delivered. A write that failed leaves the
   // seat woken with nothing in its folder, which is `sent (unconfirmed)` — never the socket's
@@ -6312,19 +7016,90 @@ async function deliverSocketFrame(
       return { kind: 'delivered-unrecorded', reason: settled.reason };
     }
   }
-  // The frame was taken: that is the delivery, and only the seat writes a read receipt. The
-  // sender no longer marks its own frame read — a frame a wrapper launch took but the agent never
-  // saw must stay unread — so the record waits for the seat's own `inbox_read`,
-  // `team drops --read` or hook receipt, and the watch's unread pass re-wakes it like any other
-  // message. The sender does not wait here to see whether the receiving session held the frame
-  // at its held-message dialog either: a taken frame is reported `delivered (socket)` at once,
-  // and the daemon's held step reads the pane on its own beat and raises `held` if it finds the
-  // dialog. Waiting on another seat's screen is what made this path slow, and the dialog's own
-  // arrival is never part of what this process can prove.
+  if (bodyIncluded) {
+    const delivered = { dropDir, id: msgId, root: to.root, session: to.session, seat: to.seat, home: host.home, via: 'socket' };
+    if (socketExposure?.kind === 'expose') socketExposure.settle('yes', (owner) => recordDeliveredBody({ ...delivered, owner }));
+    else recordDeliveredBody(delivered);
+  }
+  // Under the readable-wake policy, accepted full bodies settle their durable copies.
+  // An oversized-body pointer stays unread until the receiver follows its explicit read hint.
   if (!wait && writeHistory) {
-    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
+    appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', rule: payload.rule, ...failed });
   }
   return { kind: 'delivered' };
+}
+
+/** The event legs a seat's own resolved order lets a watch re-offer a stored message on. */
+export type PermittedEventLegs = {
+  channel: boolean;
+  socket: boolean;
+  /** The Claude adapter's typed pointer (§2.4): permitted unless the pane is a person's or the
+   *  seat's declared order leaves the `typed` word out (the protected pane's binding, signed in
+   *  its team file or settings). Absent reads as not permitted. */
+  pointer?: boolean;
+  why?: string;
+};
+
+/**
+ * The event legs a send to this seat would walk right now, read by the send's own order
+ * resolution (`resolveWalkOrder`): the seat's signed settings, its team file, its project's word
+ * and the whole delivery chain, with every exclusion they declare, a human's drop-only walk, the
+ * held-box gate and the live channel probe. A watch that re-offers an unread message asks this,
+ * so it never takes a route a send would not. A chain or settings record that cannot be read
+ * permits nothing.
+ */
+export function permittedEventLegs(input: {
+  dir: string;
+  root: string;
+  home: string;
+  session: string;
+  seat: string;
+  team: TeamFile;
+  now: () => Date;
+}): PermittedEventLegs {
+  const declared = input.team.seats.find((one) => one.name === input.seat);
+  if (declared === undefined) return { channel: false, socket: false, why: 'the team file names no such seat' };
+  const read = resolveSeatOverrides({ home: input.home, root: input.root, seat: input.seat });
+  if (!read.ok) return { channel: false, socket: false, why: `its settings record cannot be read (${read.why})` };
+  let rawChain: DeliveryChain;
+  try {
+    rawChain = deliveryChainOf({
+      root: input.root,
+      seat: input.seat,
+      home: input.home,
+      file: input.team,
+      projectOfTeam: (id) => projectRegistry.ofTeam(input.home, id),
+      overrides: read.overrides,
+      now: input.now(),
+    });
+  } catch (error) {
+    if (!(error instanceof DeliveryChainUnreadable)) throw error;
+    return { channel: false, socket: false, why: error.message };
+  }
+  const plan = resolveWalkOrder({
+    dir: input.dir,
+    root: input.root,
+    home: input.home,
+    session: input.session,
+    seat: input.seat,
+    cli: declared.cli,
+    declared,
+    team: input.team,
+    rawChain,
+    overrides: read.overrides,
+    now: input.now,
+  });
+  if (plan.human) return { channel: false, socket: false, pointer: false, why: 'its pane is a human\'s' };
+  // The protected panes take no key, and wait for their hook or a pull:
+  // - the entity's main orchestrator, which runs in the owner's pane by design: the orchestrator
+  //   of the team whose project is the entity itself. It is found by its role in the signed team
+  //   file, never guessed from a pane, and no order opts it in;
+  // - a person's pane (above);
+  // - any seat whose declared order leaves the `typed` word out.
+  // Every other seat, other teams' leads included, takes the pointer through the guarded seam.
+  const mainOrchestrator = input.team.entity !== null && input.team.project === input.team.entity && input.seat === input.team.orchestrator;
+  const pointer = !mainOrchestrator && (!plan.declaredOrder || plan.ordered.includes('typed'));
+  return { channel: plan.chosen.includes('channel'), socket: plan.chosen.includes('socket'), pointer };
 }
 
 /** The result of the watch's one socket redelivery for a channel push no receipt confirmed. */
@@ -6357,6 +7132,7 @@ export async function redeliverChannelOnSocket(input: {
 }): Promise<ChannelRedelivery> {
   const { host, dir, root, project, session, seat, cli, dropDir, drop } = input;
   if (cli !== 'claude-code') return { ok: false, reason: `${cli} sessions have no cross-session socket` };
+  if (socketSuppressed(root, host.home)) return { ok: false, reason: SOCKET_OFF_ON_ACTIVE };
   if (!SOCKET_SEND) return { ok: false, reason: 'this build does not carry the cross-session socket' };
   const payload = verifiedPayloadOf(dropDir, drop.id, host.home);
   if (payload === null) return { ok: false, reason: "its signed record does not verify with this home's key" };
@@ -6373,7 +7149,6 @@ export async function redeliverChannelOnSocket(input: {
     ? teamIdOf(root)
     : getAgent(host.home, payload.from_id)?.reach.team ?? teamIdOf(root);
   const report: Report = { json: false, seat, sent: payload.id, project, session, from_team: fromTeam };
-  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: input.team });
   const to: Aim = {
     seat,
     agentId: payload.to_id,
@@ -6398,11 +7173,94 @@ export async function redeliverChannelOnSocket(input: {
     host.now().getTime(),
     false,
     inbound,
-    frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
   return { ok: false, reason: attempt.reason };
+}
+
+/**
+ * The re-send scheduler's adapter (rfc-event-comms E7b, R3.4; src/queue/resend.ts): one stamped,
+ * unsettled record offered once more through the receiving seat's current resolved delivery walk
+ * — the walk a reply and a client send take (`walkReplyDelivery`), with every leg's own rules: a
+ * Codex seat's native queue, the cross-session socket, the webhook (posted again), a headless
+ * resume, and the bus inbox under them. The watch binds the walk no pane writer: a re-send's typed
+ * wake is the watch's own guarded one (src/watch/unread.ts). Each leg that carries the body takes the next
+ * numbered copy itself (`legBody`, the socket frame); the drop leg carries nothing new, so a
+ * drop-only seat's next copy is its own next inbox read. The walk writes no second record (every
+ * leg finds the stored one at its id), waits for no receipt, and prints nothing; one history
+ * line names the leg that took the offer. Returns that leg, or null when none did.
+ */
+export async function resendStampedRecord(input: {
+  host: SendHost;
+  /** The receiving team's folder and root. */
+  dir: string;
+  root: string;
+  project: string;
+  session: string;
+  seat: string;
+  cli: string;
+  dropDir: string;
+  id: string;
+  /** The receiving team's file, for the walk's order and the display naming. */
+  team: TeamFile;
+  /** The typed leg's request to the watch's own guarded typed wake; absent, the typed leg is
+   *  passed over (this adapter never types). */
+  typedRequest?: () => boolean;
+  /** The walk goes on from the leg after this one (a typed request refused before any key). */
+  startAfter?: 'typed';
+}): Promise<string | null> {
+  const { dir, root, project, session, seat, cli, dropDir, id, team } = input;
+  const payload = verifiedPayloadOf(dropDir, id, input.host.home);
+  // The record must be bound to this checkout, seat and session: the message key is the home's,
+  // so a genuine record of another checkout could otherwise verify here under the same names.
+  if (payload === null || !isStampedPayload(payload) || payload.to !== seat || payload.session !== session || !sameFolder(payload.root, root)) return null;
+  // The offer waits for nothing: no receipt grace after a queue takes it, no channel push wait.
+  const host: SendHost = { ...input.host, inboxGraceMs: 0, channelGraceMs: 0 };
+  const quiet: Io = { stdout: () => {}, stderr: () => {}, cwd: root, env: {}, stdinIsTTY: false };
+  // The sender's team only when its signed agent id resolves; an unresolved sender is named by its
+  // signed spelling, never by a local seat or persona that shares the name.
+  const boundTeam = payload.from_id === null ? null : getAgent(host.home, payload.from_id)?.reach.team ?? null;
+  const fromTeam = boundTeam ?? teamIdOf(root);
+  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat, file: team });
+  const walk = await walkReplyDelivery({
+    io: quiet,
+    host,
+    dir,
+    root,
+    project,
+    session,
+    seat,
+    cli,
+    payload,
+    naming,
+    file: team,
+    sender: { teamId: fromTeam, project: team.project },
+    address: null,
+    who: 'watch',
+    resend: true,
+    typedRequest: input.typedRequest ?? (() => false),
+    ...(input.startAfter === undefined ? {} : { startAfter: input.startAfter }),
+  });
+  const via = walk.walked && walk.via !== 'drop' && walk.endpointBlocked === undefined ? walk.via : null;
+  // A typed request is no re-send yet: the watch's typed wake records it once the pointer was
+  // typed, with its token; until then nothing is recorded and the record stays due.
+  if (via === 'typed') return TYPED_REQUESTED;
+  // A continuation after a refused typed request that no later leg took is withdrawn, not a re-send.
+  if (via === null && input.startAfter !== undefined) return null;
+  appendHistory(project, root, host.home, {
+    ts: host.now().toISOString(),
+    from: payload.from,
+    to: seat,
+    body: payload.body,
+    id: payload.id,
+    thread: payload.thread,
+    outcome: 'awaiting receipt',
+    note: via === null ? 'not acknowledged; re-send offered, no leg took it' : `not acknowledged; re-sent on the ${via}`,
+    ...(via === null ? {} : { via }),
+    ...(walk.failures.length > 0 ? { failed: [...walk.failures] } : {}),
+  });
+  return via;
 }
 
 /** The address this walk tries, read by the shared choice (`socketAddressOf`): the registry's
@@ -6411,8 +7269,13 @@ export async function redeliverChannelOnSocket(input: {
  *  holder has one — so the recorded address is read against the primary folder exactly as this
  *  walk always read it. */
 function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | null {
+  if (to.cli !== 'claude-code') return null;
   const sockets = host.socketsDirAlt === undefined ? host.socketsDir : [host.socketsDir, host.socketsDirAlt];
-  return socketAddressOf(to.address, host.processInfo(to.session, pane), sockets);
+  const placed = livePlacement(host, { id: to.agentId ?? to.seat, cli: to.cli, reach: { session: to.session, seat: to.seat } });
+  if ('error' in placed || placed.pane !== pane) return null;
+  const processes = host.processInfo(to.session, pane);
+  if (processes === null) return null;
+  return socketAddressOf(to.address, processes, sockets);
 }
 
 /** The receiving seat's webhook row, read from its team file: an `Aim` carries the address, not
@@ -6484,6 +7347,7 @@ function classWithout(
       endpoint: lost.endpoint === true ? false : read.evidence.endpoint,
       ...(read.evidence.human ? { human: true } : {}),
       ...(webhookStanding ? { webhook: true } : {}),
+      ...(read.evidence.typedWake ? { typedWake: true } : {}),
     }),
     // The adapter is the only reason left for `push` when no direct route stands: a failed
     // socket or queue leaves it, and its wake belongs to the bus that announces the record.
@@ -6730,6 +7594,8 @@ export function admissionOf(
   reply?: ReplyContext,
   watch?: { principal: WatchSendPrincipal; root: string },
   daemon?: { principal: DaemonSendPrincipal; root: string },
+  live?: Pick<SendHost, 'agents'>,
+  stateDir?: string,
 ): Admission {
   if (caller.kind === 'owner') return { ok: true, rule: 'the owner', sender: 'owner' };
   if (caller.kind === 'watch') return watchAdmissionOf(caller, team, target, seatName, watch);
@@ -6741,7 +7607,7 @@ export function admissionOf(
   // name is not that seat, and a caller of the same name in another session is not either — so a
   // record the call does not stand as refuses instead of acting for it. Nobody is judged by it.
   if (record !== null) {
-    const identity = recordIdentityProblem(caller, record, at);
+    const identity = recordIdentityProblem(caller, record, at, live, stateDir);
     if (identity !== null) return { ok: false, why: identity };
   }
   const declared = record === null ? declaredSenderOf(caller, team, fileTeamId) : null;
@@ -6893,6 +7759,33 @@ function daemonAdmissionOf(
   if (seat === 'owner') {
     return { ok: false, why: 'owner: the daemon addresses a declared seat of a team it hosts, never the owner' };
   }
+  // A stuck-child notice is one message to the loaded team's lead. The recipient list still has
+  // to name that lead, so the principal cannot be reused for any other seat. The lead is who the
+  // notice is for, including when that seat is a person's: the seat's own delivery order decides
+  // the transport, and no other seat is admitted by this notice.
+  if (daemon.principal.notice === 'stuck-child' || daemon.principal.notice === 'seat-blocked' || daemon.principal.notice === 'drops-archived') {
+    const notice = daemon.principal.notice === 'stuck-child'
+      ? 'a stuck-child notice'
+      : daemon.principal.notice === 'seat-blocked' ? 'a blocked-episode notice' : 'a drops-archive notice';
+    if (team.orchestrator === '' || seat !== team.orchestrator) {
+      return { ok: false, why: `${seat}: ${notice} goes to this team's lead and to nobody else` };
+    }
+    const addressed = daemon.principal.recipients.some((entry) => samePath(entry.root, daemon.root) && entry.session === team.session && entry.seat === seat);
+    if (!addressed) {
+      return { ok: false, why: `${seat}: ${notice} names the lead in the checkout the daemon hosted` };
+    }
+    const declared = team.seats.find((entry) => entry.name === seat);
+    if (declared === undefined) {
+      return { ok: false, why: `${seat}: it is not a declared seat; the daemon addresses a seat of a team it hosts only` };
+    }
+    return {
+      ok: true,
+      rule: daemon.principal.notice === 'stuck-child'
+        ? "the daemon's stuck-child notice"
+        : daemon.principal.notice === 'seat-blocked' ? "the daemon's blocked-episode notice" : "the daemon's drops-archive notice",
+      sender: 'daemon',
+    };
+  }
   // The recipient list the due instant carries is the whole of what this principal may address:
   // a declared seat that is not on it was not due, and is refused before anything is staged.
   const addressed = daemon.principal.recipients.some((entry) => samePath(entry.root, daemon.root) && entry.session === team.session && entry.seat === seat);
@@ -6960,13 +7853,61 @@ function noAgentRecord(caller: Caller, declared: DeclaredSender | null): string 
   return `sender ${describeCaller(caller)} has no agent record on this machine, so no rule admits the send (${RULE_SUMMARY}); ${register}\`team up\` registers a seat it leaves standing`;
 }
 
+/** A reported conversation mismatch is never this record's sender. An integration with no
+ *  report, or a record-only path with no live reader, keeps its existing placement checks. */
+export function reportedConversationProblem(
+  record: Agent,
+  pane: string,
+  live?: Pick<SendHost, 'agents'> & { home?: string },
+  ancestors: () => readonly { pid: number }[] | null = readAncestors,
+  stateDir?: string,
+): string | null {
+  if (record.reach.agent_session == null) return null;
+  const panes = live?.agents(record.reach.session)?.filter((agent) => agent.pane === pane) ?? [];
+  const reported = panes.filter((agent) => agent.session !== undefined && agent.session !== record.reach.agent_session);
+  if (reported.length > 0) {
+    // The same CLI process with a new conversation: a compaction or a cleared conversation keeps
+    // the process and changes the id herdr reports (the orchestrator, 2026-11-12). The proof is
+    // the record's own socket address, `<folder>/<pid>.sock`, naming a process that is one of
+    // this call's own ancestors: the call runs inside the very CLI the record reaches, so the
+    // record follows the one conversation the pane reports, and the call stands.
+    const pid = /\/(\d+)\.sock$/.exec(record.reach.address ?? '')?.[1];
+    const fresh = reported.length === 1 && panes.length === 1 ? reported[0]!.session : undefined;
+    if (pid !== undefined && fresh !== undefined && live?.home !== undefined
+      && (ancestors() ?? []).some((process) => process.pid === Number(pid))) {
+      try {
+        const wrote = recordAgentSessionWhen(live.home, record.id, fresh, (current) =>
+          current.reach.agent_session === record.reach.agent_session && current.reach.address === record.reach.address
+            ? true : 'the record changed while this call read it');
+        if (wrote.kind === 'written') {
+          // The seat's state follows too, or the next `team up` copies the old conversation back
+          // over the record (seen 2026-11-12). Only a state that still names the old one moves.
+          if (stateDir !== undefined) {
+            try {
+              updateState(stateDir, (state) => {
+                const held = state.sessions[record.reach.session]?.seats[record.reach.seat];
+                if (held === undefined || held.agent_session !== record.reach.agent_session) return false;
+                held.agent_session = fresh;
+                return true;
+              }, { writeWhen: (moved) => moved });
+            } catch { /* the record moved; the state keeps its own until the next launch */ }
+          }
+          return null;
+        }
+      } catch { /* the refusal below stands */ }
+    }
+    return `the live conversation on pane ${pane} does not match the registry's conversation for seat ${record.reach.seat}; this call is not proven as that seat; run team up or team restart ${record.reach.seat}`;
+  }
+  return null;
+}
+
 /** Why a call may not act as the agent record its name found: null when it may — the call is a
  *  seat standing as the record holds it, on the pane the record names, in the record's session,
  *  with the record running, and the state recording that seat on that same pane (`callerVerdict`,
  *  the pane proof every admitted seat meets). Session and seat name alone bind nobody: a pane
  *  renamed to a registered seat's name is not that seat, and a caller of that name in another
  *  session is not it either. */
-function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding): string | null {
+function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding, live?: Pick<SendHost, 'agents'>, stateDir?: string): string | null {
   const name = record.reach.seat;
   if (caller.kind !== 'seat') {
     return `the registry holds agent ${record.id} for seat ${name}, and this call is ${describeCaller(caller)}: a record is its own seat's, never a placement beside it`;
@@ -6981,6 +7922,8 @@ function recordIdentityProblem(caller: Caller, record: Agent, at: SeatStanding):
     const on = record.reach.pane === null ? 'no pane' : `pane ${record.reach.pane}`;
     return `the registry records ${on} for seat ${name} in session ${record.reach.session}, and this call is on pane ${caller.pane}: a pane renamed to a seat's name is not that seat`;
   }
+  const conversation = reportedConversationProblem(record, caller.pane, live, readAncestors, stateDir);
+  if (conversation !== null) return conversation;
   const verdict = callerVerdict(caller, name, at);
   if (verdict.kind === 'no-pane') return noPaneRefusal(verdict.name);
   if (verdict.kind === 'another-pane') return anotherPaneRefusal(verdict.name, verdict.recordedPane);
@@ -7220,9 +8163,72 @@ function timedOut(io: Io, seat: string, seconds: number, report: Report): number
 /** The message is on disk — or, on the socket's path, in the frame the session's own
  *  held-message dialog keeps — and the pane was left untouched. Exit 1, always. The note names
  *  the path, in the delivery lines' own shape (`socket`). */
-function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): number {
+async function held(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report, note?: string): Promise<number> {
   const label = note === undefined ? 'held' : `held (${note})`;
-  const message = withId(`${seat}: ${label}: ${reason}`, report);
+  let reporting = '';
+  const scope = report.holdScope;
+  if (scope !== undefined && !scope.dry) {
+    const stored = report.sent !== null;
+    const result = reportHeldSend({
+      ...scope, home: host.home, seat, reason, at: host.now().toISOString(),
+      id: report.sent ?? host.sendId?.() ?? randomUUID(), stored, prepareOnly: true,
+    });
+    if (result.ok) {
+      if (result.existing) {
+        reporting = `; ${String(result.count)} held send${result.count === 1 ? '' : 's'}; lead notice already recorded`;
+      } else {
+        // A notice uses the sender's ordinary admission and delivery walk. Reporting recursion is
+        // disabled only for that notice; the drift and admission guards still run unchanged.
+        let output = '';
+        const noticeIo = { ...io, stdout: (text: string) => { output += text; }, stderr: (_text: string) => {} };
+        let code = 1;
+        let status = 'unconfirmed';
+        let failure = 'the notice send did not confirm delivery';
+        let admittedTransportFailure = false;
+        try {
+          code = await runSendWithSnapshot([scope.leadSpec, result.notice.body, '--json'], noticeIo,
+            { ...host, sendId: () => result.notice.id }, false);
+          const noticeResult = JSON.parse(output) as { status?: string; error?: { id?: string; message?: string }; delivery?: LegReport[] };
+          status = noticeResult.status ?? 'unconfirmed';
+          failure = noticeResult.error?.message ?? failure;
+          // These delivery errors are emitted only after ordinary send admission. Require an
+          // actual attempted leg too; refused legs, holds, malformed output and unknown errors
+          // prove no admitted transport failure and cannot authorize a runtime inbox write.
+          admittedTransportFailure = (noticeResult.error?.id === 'send.unreachable' || noticeResult.error?.id === 'send.not-delivered')
+            && Array.isArray(noticeResult.delivery)
+            && noticeResult.delivery.some((leg) => leg.state === 'attempted')
+            && !noticeResult.delivery.some((leg) => leg.state === 'refused');
+        } catch {
+          failure = 'the ordinary notice send could not complete';
+        }
+        if (code !== 0 && admittedTransportFailure) {
+          const queued = writeRuntimeNotice({
+            ...scope, home: host.home, id: result.notice.id, body: result.notice.body, at: result.notice.at,
+          });
+          if (queued.ok) await announceArrival(queued.payload);
+          status = queued.ok ? `not delivered (${failure}); queued for the lead reader` : `not delivered (${failure}); ${queued.reason}`;
+        } else if (code !== 0) {
+          status = `refused or admission unknown (${failure}); no runtime fallback written`;
+          // Report back inside the sender's team through the same admission path. A refusal
+          // here also writes no runtime copy: metadata does not confer send authority.
+          if (scope.senderLeadSpec !== '' && scope.senderLeadSpec !== scope.leadSpec) {
+            let ownOutput = '';
+            const ownIo = { ...io, stdout: (text: string) => { ownOutput += text; }, stderr: (_text: string) => {} };
+            try {
+              const ownCode = await runSendWithSnapshot([scope.senderLeadSpec,
+                `Held-send notice to ${scope.leadSpec} was refused or admission was unknown: ${failure}\n${result.notice.body}`, '--json'],
+                ownIo, { ...host, sendId: () => result.notice.id }, false);
+              const ownResult = JSON.parse(ownOutput) as { status?: string; error?: { message?: string } };
+              status += `; sender lead ${ownCode === 0 ? ownResult.status ?? 'notified' : `not notified (${ownResult.error?.message ?? 'send failed'})`}`;
+            } catch { status += '; sender lead notification could not complete'; }
+          }
+        }
+        reporting = `; ${String(result.count)} held send${result.count === 1 ? '' : 's'}; lead notice ${status}`;
+      }
+    } else reporting = `; held-send reporting failed: ${result.reason}`;
+    if (!stored) reporting += '; body not read or kept; retry after repair';
+  }
+  const message = withId(`${seat}: ${label}: ${reason}${reporting}`, report);
   logLine(dir, 'send', who, message, host.now());
   if (report.json) writeSendError(io, 'send.held', message, report);
   else io.stderr(`team send: ${message}\n`);
@@ -7266,6 +8272,30 @@ function refuseAdmission(io: Io, dir: string | null, who: string, admission: Ext
     return 1; // exit: send.grant-invalid
   }
   return refuse(io, dir, who, admission.why, host, report);
+}
+
+/** The detector refused the send, or a typed wake was not taken. The drop is already in the
+ *  recipient's inbox when this line is reached: the sentence says so, and nothing is typed.
+ *  Exit 1. */
+function notDelivered(
+  io: Io,
+  dir: string,
+  who: string,
+  seat: string,
+  reason: CantWorkReason | 'no live route',
+  host: SendHost,
+  report: Report,
+  /** The recipient's store is `none`: nothing was written, and the line says so. */
+  unstored = false,
+): number {
+  const kept = unstored
+    ? '; not kept (store none)'
+    : report.sent !== null && report.sent !== '' ? `; kept in ${seat}'s inbox` : '';
+  const message = withId(`${seat}: not delivered: ${reason}${kept}`, report);
+  logLine(dir, 'send', who, message, host.now());
+  if (report.json) writeSendError(io, 'send.not-delivered', message, report);
+  else io.stderr(`team send: ${message}\n`);
+  return 1; // exit: send.not-delivered
 }
 
 /** The seat's channel was not open, and nothing was sent. A dialog is the one unreachable the

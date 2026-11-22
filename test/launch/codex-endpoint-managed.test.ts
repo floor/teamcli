@@ -428,6 +428,7 @@ seats:
         '-c', 'approval_policy="never"',
         '-c', 'sandbox_mode="danger-full-access"',
         '-c', 'features.mcp_oauth_refresh_coordination=false',
+        // The profile's computer- and browser-use pins close every endpoint's config.
       ];
 
       // Scene B1: seat recorded remote does not match its own endpoint record.

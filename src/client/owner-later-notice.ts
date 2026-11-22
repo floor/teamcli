@@ -5,8 +5,10 @@
 // not who the owner is. No admission rule is added or relaxed for it; a lead's readers show it as
 // the owner page because that is the record's `from`, exactly as a seat's message names its seat.
 
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { recordDir } from '../commands/messages.ts';
 import { findTeam } from '../registry/teams.ts';
@@ -53,6 +55,10 @@ export function noteDeferral(
   };
   const folder = recordDir(team.root, team.session, lead.seat);
   mkdirSync(folder, { recursive: true });
-  writeFileSync(join(folder, id), recordTextOf(signRecord(payload, home)), { flag: 'wx' });
+  const signed = signRecord(payload, home);
+  appendDeliverySync({ dropDir: folder, record: signed }, () => {
+    writeFileSync(join(folder, id), recordTextOf(signed), { flag: 'wx' });
+    return { ok: true, value: null };
+  }, { home, log: queueLog(folder) });
   return { notice: `The lead of ${args.team} was told: ${args.requestId} waits until ${args.until}.`, wrote: true };
 }

@@ -4,9 +4,9 @@ import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner, type C
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findRoot, loadTeamText, TEAM_FILE } from '../file/load.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { admitOwnerAction, createOwnerActionRequest, OWNER_ACTION_TTL_MS } from '../client/owner-action.ts';
-import { headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { charterTargetOf, headOf, ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionRequestsFolder } from '../client/team-create.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
@@ -17,10 +17,12 @@ import { sha256 } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { Command, Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { runRootMigrate } from './migrate-root.ts';
 
 export const USAGE = `Usage: team migrate [--keep-file] [--dry-run] [--json]
        team migrate [--keep-file] --request [--reason <text>] [--json]
        team migrate [--keep-file] --approval <request-id> [--json]
+       team migrate --root [--dry-run] [--json]
 
 Moves this team's definition from .agents/team.yaml into the registry, once. The team
 is imported, read back from the registry and compared with the file by canonical record;
@@ -41,6 +43,12 @@ match writes nothing. No signer approves a request they asked for.
 Run again on a team the registry already holds, it moves a leftover file that says
 what the registry says, and refuses one that does not (team import replaces the record).
 
+--root rewrites, in this team's record, every full path inside its entity's projects root on
+this machine (team config set <entity>.root) as {root}/…, so the same record reads on every
+machine. With --dry-run it lists each line it would change and writes nothing; without it, the
+owner's run writes those lines and prints each one. Comments and every other line are kept byte
+for byte, and a rewrite that does not read back as the same team is refused.
+
   --keep-file  import and verify, and leave .agents/team.yaml where it is
   --dry-run    say what would be imported, and write nothing; anyone in the project may run it
   --reason <text>
@@ -48,6 +56,7 @@ what the registry says, and refuses one that does not (team import replaces the 
   --request    record this migrate for the owner seat and do not import yet
   --approval <request-id>
                run the migrate the owner seat signed for, once
+  --root       rewrite full paths inside the entity's projects root as {root}
   --json       the result as one JSON document on stdout
 
 Exits 0 when the team is in the registry (or would be, with --dry-run) or a request
@@ -70,7 +79,17 @@ export type ImportSources = {
 
 /** The command with its home and clock named, for tests that keep the registry in a temp home. */
 export async function runMigrate(argv: string[], io: Io, sources: ImportSources = {}): Promise<number> {
-  const ended = await runTeamImport('migrate', argv, readArgs(argv, ['approval', 'reason'], ['json', 'dry-run', 'keep-file', 'request']), io, sources);
+  const args = readArgs(argv, ['approval', 'reason'], ['json', 'dry-run', 'keep-file', 'request', 'root']);
+  // `--root` is its own step: the record's full paths inside the entity's projects root, as {root}.
+  if (args.flags.has('root') && args.error === undefined) {
+    const others = [
+      ...(['keep-file', 'request'] as const).filter((flag) => args.flags.has(flag)).map((flag) => `--${flag}`),
+      ...(['approval', 'reason'] as const).filter((name) => args.values[name] !== undefined).map((name) => `--${name}`),
+      ...args.rest.map((word) => `"${word}"`),
+    ];
+    return runRootMigrate({ dryRun: args.flags.has('dry-run'), json: args.flags.has('json'), others }, io, sources.home ?? homedir());
+  }
+  const ended = await runTeamImport('migrate', argv, args, io, sources);
   switch (ended) {
     case 'done':
       // exit: migrate.done
@@ -284,10 +303,33 @@ export async function runTeamImport(
   }
   const file = mode === 'import' ? args.rest[0] : undefined;
   const caller = callerOf(io);
+  // A request is recorded only when the named file can be imported. A dry read writes
+  // nothing; a file that cannot be read refuses here, so the owner gets no card.
+  if (mode === 'import' && args.flags.has('request')) {
+    const home = sources.home ?? homedir();
+    const looked = importTeamFile({
+      cwd: io.cwd,
+      home,
+      mode,
+      ...(file !== undefined ? { file } : {}),
+      dryRun: true,
+      now: sources.now?.() ?? new Date(),
+    });
+    if (!looked.ok) {
+      const message = looked.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
+      const where = looked.reason === 'invalid' && looked.from ? `${looked.from}: ` : '';
+      refuse(io, json, mode, {
+        id: `${mode}.${looked.reason}`,
+        message: `${where}${message}`,
+        repair: looked.reason === 'already-migrated' ? 'team import' : null,
+      });
+      return looked.reason;
+    }
+  }
   // The owner-seat door, for `import` (src/client/owner-action-step.ts): `--request` asks the owner
   // seat; `--approval <id>` runs the import the owner seat signed for, with no owner terminal.
   const seat = mode === 'import'
-    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources)
+    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json, reason: args.values.reason }, io, sources, [charterTargetOf(io.cwd)])
     : { kind: 'none' as const };
   if (seat.kind === 'requested') return 'approval-requested';
   if (seat.kind === 'refused') return 'approval-refused';
@@ -298,12 +340,21 @@ export async function runTeamImport(
   let charterAdmitted = false;
   // A dry run only reads. A blocking charter stops a real migrate before any card is written.
   if (mode === 'migrate' && !dryRun) {
-    const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd }, sources.ownerSeatStore);
-    if (gate.kind === 'block') {
+    const gate = charterGate(home, { operation: 'migrate', cwd: io.cwd, path: charterTargetOf(io.cwd) }, sources.ownerSeatStore);
+    // A charter block refuses a seat. The owner goes through with one warning and an audit line.
+    if (gate.kind === 'block' && !isOwner(caller)) {
       refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
       return 'not-owner';
     }
-    charterAdmitted = gate.kind === 'admit';
+    if (gate.kind === 'block') {
+      passCharterOwner(io, gate.message, {
+        dir: join(findRoot(io.cwd) ?? io.cwd, '.agents'),
+        command: mode,
+        caller: callerLabel(caller),
+        now: now(),
+      });
+    }
+    charterAdmitted = gate.kind === 'admit' && !isOwner(caller);
   }
   const ownerTerminal = isOwner(caller);
   let doorAdmitted = false;

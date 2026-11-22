@@ -19,6 +19,7 @@ import { listUnread, MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { readerLine } from '../src/send/frame.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { readHistory } from '../src/send/history.ts';
@@ -109,7 +110,7 @@ describe('what a run plans and what it installs', () => {
     const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as {
       hooks: Record<string, { hooks: { type: string; command: string }[] }[]>;
     };
-    expect(Object.keys(settings.hooks).sort()).toEqual(['Stop', 'UserPromptSubmit']);
+    expect(Object.keys(settings.hooks).sort()).toEqual(['PostModelSwitch', 'SessionStart', 'Stop', 'UserPromptSubmit']);
     const start = settings.hooks.UserPromptSubmit?.[0]?.hooks[0]?.command ?? '';
     const stop = settings.hooks.Stop?.[0]?.hooks[0]?.command ?? '';
     expect(start).toContain('"state":"working"');
@@ -134,7 +135,9 @@ describe('what a run plans and what it installs', () => {
   });
 
   test('a changed declaration is still written over the unchanged file', () => {
-    const landed = installCliHooks(dir, SESSION, [seat('worker')]);
+    // The generated file always carries a word now: the declaration starts at an explicit hold,
+    // and the wrapper's accept is the change the scene pins.
+    const landed = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'hold' }]);
     const path = landed.worker!;
     utimesSync(path, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
     const before = statSync(path).mtimeMs;
@@ -164,14 +167,15 @@ describe('what a run plans and what it installs', () => {
     expect(statSync(path).mtimeMs).toBe(before);
   });
 
-  test('a team-file inbound accept is written into the settings when the launch declares no word', () => {
+  test('a team-file inbound word is written into the settings: accept for no word, an explicit hold as itself', () => {
     // No pane messaging: the socket is a Claude seat's event adapter, so an owner who accepts
     // cross-session frames in the team file launches the seat able to take them.
     const landed = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' }]);
     const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as { crossSessionInbound?: string };
     expect(settings.crossSessionInbound).toBe('accept');
+    // An explicit hold is the owner's word against the default, and the generated file says so.
     const plain = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'hold' }]);
-    expect((JSON.parse(readFileSync(plain.worker!, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBeUndefined();
+    expect((JSON.parse(readFileSync(plain.worker!, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('hold');
   });
 
   test('a link where a settings file would go is refused and its target left alone', () => {
@@ -271,8 +275,9 @@ describe('the turn-start folder read', () => {
   const ID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const ID3 = '01234567-89ab-cdef-0123-456789abcdef';
   const HEADER = 'from the owner — admitted by: the owner\n\n';
-  /** A planted record whose verified from is `the owner` opens with that compact header. */
-  const MARK = 'from the owner (owner):\n\n';
+  /** A planted record whose verified from is `the owner` opens with the owner's own line,
+   *  stamped with the record's own time: the fixture's clock, pinned on the record below. */
+  const MARK = 'the owner · 2026-10-17 12:00Z · admitted: owner\n\n';
   const PANE = 'pane-worker';
 
   let project: string;
@@ -357,9 +362,10 @@ seats:
     expect(statSync(at).mode & 0o777).toBe(0o600);
   }
 
-  /** One drop as `team send` writes it: the signed record, through the command's own planter. */
+  /** One drop as `team send` writes it: the signed record, through the command's own planter.
+   *  The record's time is the fixture's clock, so the rendered header's stamp is this test's. */
   function plant(id: string, body: string): string {
-    return plantRecord(home, project, SESSION, SEAT, id, body, { from: 'the owner', rule: 'the owner' });
+    return plantRecord(home, project, SESSION, SEAT, id, body, { from: 'the owner', rule: 'the owner', at: NOW.toISOString() });
   }
 
   test('the install adds the read to the same turn start, run by this install’s own CLI', () => {
@@ -404,23 +410,26 @@ seats:
       home,
     };
 
-    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
-
-    // The bus inbox carried it: the seat's own drop-read trigger is never typed, and the
-    // sender's side has only the queued, not woken ending until the seat's own read writes
-    // the receipt. The drop leg wrote the record the trigger reads.
-    expect(io.out).toContain('queued, not woken');
+    const code1 = await runSend([SEAT, 'hello'], io, host);
+    // The drop ending: no live leg took the send, and the signed record kept in the seat's
+    // inbox is the whole delivery until the seat's own turn-start read writes the receipt.
+    // Nothing was typed, and the ending names the kept record by its id.
+    expect(code1).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain(`team send: ${SEAT}: not delivered: no live route; kept in ${SEAT}'s inbox (id `);
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');
 
-    // The hook takes the sender from the verified record. This send's claimed from is owner,
-    // so the header is `from owner (owner):`. The opening names "the owner", which is not that
-    // name, and the body is served verbatim under the header.
+    // The hook takes the sender from the verified record: one line naming the owner and the
+    // record's own time. The body's own opening line (`from the owner — admitted by: …`) names
+    // that same verified sender, so it is folded into the header, and the rest is served under
+    // it, ending with the reader line that names the record's id for `team reply`/`team ack`.
     const held = readRecord(join(dir, id), id);
     if (!held.ok || held.record === null) throw new Error('the drop record does not read');
-    expect(landing(run(command))).toBe(`from owner (owner):\n\n${held.record.payload.body}`);
+    expect(held.record.payload.body).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(landing(run(command))).toBe(`${MARK}hello\n\n${readerLine(id)}`);
     expectReadReceipt(dir, id);
     expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
     // The receipt is what says it was handed over: the next turn prints nothing.
@@ -451,12 +460,13 @@ seats:
       home,
     };
 
-    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
-
-    // The bus inbox is the channel: the drop file is written whole and nothing is typed, and
-    // the sender's side knows only the queued, not woken end. The reason the typed leg passed
-    // rides the one history line the drop leg wrote.
-    expect(io.out).toContain('queued, not woken');
+    const code2 = await runSend([SEAT, 'hello'], io, host);
+    // The bus inbox is the channel: the drop file is written whole and nothing is typed. No
+    // live leg took the send, so the ending is the not-delivered contract, naming the kept
+    // record; the reason the typed leg fell rides the one history line the drop leg wrote.
+    expect(code2).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain(`team send: ${SEAT}: not delivered: no live route; kept in ${SEAT}'s inbox (id `);
     expect(typed).toEqual([]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
@@ -476,7 +486,7 @@ seats:
     if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
     const entry = history.entries.filter((one) => one.id === id).at(-1);
     if (entry === undefined) throw new Error('the send wrote no history line');
-    expect(entry.outcome).toBe('queued, not woken');
+    expect(entry.outcome).toBe('not delivered');
     expect(entry.via).toBe('drop');
     const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
     expect(reason).toBe(`typed: ${NO_PANE_MESSAGING}`);
@@ -508,15 +518,30 @@ seats:
     };
 
     const retired = await runSend([SEAT, 'hello'], io, host);
-    expect(await retired).toBe(0);
+    // A typed-only order with no live agent is still unreachable: nothing is typed, and the
+    // ending is the not-delivered contract. The signed record the send staged is kept in the
+    // seat's inbox, which the ending names.
+    expect(await retired).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain(`team send: ${SEAT}: not delivered: no live route; kept in ${SEAT}'s inbox (id `);
     expect(typed).toEqual([]);
+    const kept = readdirSync(dropsAt()).filter((name) => MESSAGE_ID.test(name));
+    expect(kept).toHaveLength(1);
+    expect(io.err).toContain(`(id ${kept[0] as string})`);
+    // The kept record is the drop leg's, and the history line says the same as the ending.
+    const history = readHistory('acme', project, home);
+    if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
+    const entry = history.entries.filter((one) => one.id === kept[0]).at(-1);
+    if (entry === undefined) throw new Error('the send wrote no history line');
+    expect(entry.outcome).toBe('not delivered');
+    expect(entry.via).toBe('drop');
   });
 
   test('a waiting record is handed to the turn once, and its receipt is written beside it at 0600', () => {
     const dir = dropsAt();
     plant(ID1, 'hello');
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}hello`);
+    expect(landing(run(command))).toBe(`${MARK}hello\n\n${readerLine(ID1)}`);
     expectReadReceipt(dir, ID1);
     expect(run(command)).toBe('');
   }, 30_000);
@@ -569,7 +594,7 @@ seats:
     const body = `from the owner\n\n$(touch ${join(base, 'surprise')}) \`whoami\` "quoted"`;
     plant(ID1, body);
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}${body}`);
+    expect(landing(run(command))).toBe(`${MARK}${body}\n\n${readerLine(ID1)}`);
     expect(existsSync(join(base, 'surprise'))).toBe(false);
   }, 30_000);
 
@@ -577,7 +602,7 @@ seats:
     const body = 'a "quoted" line \\ with a backslash\tand a tab\x01 and \x1f\x08\x0c';
     plant(ID1, `${body}\nsecond line`);
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}${body}\nsecond line`);
+    expect(landing(run(command))).toBe(`${MARK}${body}\nsecond line\n\n${readerLine(ID1)}`);
   }, 30_000);
 
   test('two messages land as two paragraphs, newest first', () => {
@@ -586,10 +611,11 @@ seats:
     utimesSync(one, new Date(NOW.getTime() - 2_000), new Date(NOW.getTime() - 2_000));
     utimesSync(join(dropsAt(), ID2), new Date(NOW.getTime() - 1_000), new Date(NOW.getTime() - 1_000));
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}second\n\n${MARK}first`);
+    // Each served body ends with its own reader line, the shortest id prefix the mailbox keeps unique.
+    expect(landing(run(command))).toBe(`${MARK}second\n\n${readerLine(ID2, [ID1])}\n\n${MARK}first\n\n${readerLine(ID1, [ID2])}`);
   }, 30_000);
 
-  test('one turn reads ten messages at most, and the rest wait for the next', () => {
+  test('one turn reads five messages at most, counts the rest, and they wait for the next', () => {
     const dir = dropsAt();
     const ids = Array.from({ length: 12 }, (_, index) => `${String(index).padStart(8, '0')}-0000-4000-8000-${String(index).padStart(12, '0')}`);
     for (const [index, id] of ids.entries()) {
@@ -599,10 +625,13 @@ seats:
     }
     const command = dropCommand(install());
     const first = landing(run(command));
-    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(10);
-    expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(10);
+    expect(first.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(5);
+    expect(first).toContain('7 older unread message(s) wait in this inbox');
+    expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(5);
     const second = landing(run(command));
-    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
+    expect(second.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(5);
+    const third = landing(run(command));
+    expect(third.split('\n').filter((line) => line.startsWith('message '))).toHaveLength(2);
     expect(readdirSync(dir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
   }, 60_000);
 

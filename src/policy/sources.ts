@@ -6,7 +6,8 @@
 // - seat:    `<home>/.config/team/agents/<agentId>.yaml` under `policies`
 
 import type { KeyObject } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { entitiesPath, lockedEntities } from '../entities.ts';

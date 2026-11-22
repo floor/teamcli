@@ -11,6 +11,7 @@ import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import { ADD_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { approvalOf } from '../../src/approve/approval.ts';
@@ -45,6 +46,8 @@ seats:
     launch: claude --model claude-opus-5-5
   - role: implementer
     name: worker
+    # This fixture pins authority or the recorded recipe, independently of the channel.
+    channel: off
     label: worker
     cli: claude-code
     vendor: anthropic
@@ -171,6 +174,13 @@ beforeEach(() => {
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
 const owner = { kind: 'owner' } as const;
+
+/** The release default admits the team's own lead with no warning; `owner-asks` restores the
+ *  owner gate this file's dev-mode coverage needs. */
+function ownerAsks(): void {
+  const asked = writePolicySet(home, { level: 'team', target: project, teamRoot: project, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  if (!asked.ok) throw new Error(asked.why);
+}
 
 describe('team add --json', () => {
   test('a ready seat is one team.add document closing on its record', async () => {
@@ -299,7 +309,9 @@ describe('team add --json', () => {
   });
 
   test('the dev-mode warning rides in the document notes, and stderr stays empty', async () => {
-    // The caller gate's lift admits the team's own lead, placed on the pane its state records.
+    // The caller gate's lift admits the team's own lead, placed on the pane its state records;
+    // `owner-asks` restores the gate so the dev-mode lift is the one that admits it.
+    ownerAsks();
     updateState(join(project, '.agents'), (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'synthetic-pane-lead' };
     });
@@ -328,5 +340,22 @@ describe('team add --json', () => {
       'warning: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead; dev mode continues',
     );
     expect(dryDoc.notes.some((note) => note.startsWith('! '))).toBe(false);
+  });
+
+  test('the release default admits the own-team lead with no warning', async () => {
+    // The default `leads.authority: own-team` admits the team's lead with no dev-mode lift,
+    // so the document carries no caller warning at all.
+    updateState(join(project, '.agents'), (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'synthetic-pane-lead' };
+    });
+    const lead = { kind: 'seat' as const, name: 'lead', pane: 'synthetic-pane-lead', session: 'acme' };
+    const made = world();
+    const io = testIo(project, lead);
+    expect(await runAdd(['worker', '--json'], io, sources(made))).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{ status: string; notes: string[] }>(io.out, ADD_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.notes).toEqual([]);
+    expect(made.creates).toEqual(['worker']);
   });
 });

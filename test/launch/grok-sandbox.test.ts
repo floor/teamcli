@@ -68,6 +68,7 @@ function seatGrants(root: string, start: string): string[] {
   return [
     realpathSync(start),
     join(root, '.agents', 'send-drops', 'acme', 'grok-seat'),
+    join(root, '.agents', 'send-stamped', 'acme', 'grok-seat'),
     join(root, '.agents', 'messages', 'grok-seat'),
     join(root, '.agents', 'seat-state', 'acme', 'grok-seat'),
   ];
@@ -479,6 +480,20 @@ describe('the plan and the launch', () => {
     expect(existsSync(join(grokHome, 'sandbox.toml'))).toBe(false);
   });
 
+  // Floor's read-only Grok tester ran without its profile (20 Nov): a read-only seat on the shipped
+  // launcher was planned no sandbox at all. Every Grok seat takes one, whatever its role.
+  for (const role of ['tester', 'reviewer', 'builder']) test(`a ${role} on the shipped grok-build launcher runs inside its own profile`, () => {
+    const { home, root, sandbox } = world();
+    const checked = validateTeamFile(TEAM, { home, root });
+    if (!checked.ok) throw new Error('invalid synthetic team');
+    const plan = upPlan({ root, session: 'acme', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · acme', home, team: checked.team,
+      seats: [{ name: 'grok-seat', cli: 'grok', launch: 'grok', launcher: 'grok-build', role, cwd: 'seat', label: 'grok-seat', stopped: false, rules: 'Rules.', repairLine: 'repair' }] });
+    const launch = plan.find((step) => step.do?.do === 'launch')?.do;
+    if (launch?.do !== 'launch') throw new Error(`the plan has no launch step: ${JSON.stringify(plan.map((step) => step.do?.do))}`);
+    expect(launch.command).toContain('--sandbox team-seat-acme-grok-seat');
+    expect(launch.grokSandbox).toEqual(sandbox);
+  });
+
   test('a start at the shared project root is refused before a workspace is created', () => {
     const { home, root, grokHome } = world();
     const granted = grokSandboxOf({ home, root, project: 'acme', seat: 'grok-seat', session: 'acme', cwd: root });
@@ -840,7 +855,9 @@ describe('Grok start folders stay within the seat grants', () => {
   for (const cli of ['grok', 'cursor']) test(`${cli} fresh placement uses its recorded own worktree and never overrides an explicit lobby`, () => {
     const w = placement(), seat = { ...w.seat, cli, cwd: '.' };
     expect(seatStart(w.team, seat, w.root, w.home, undefined, w.start)).toEqual({ cwd: w.start });
-    const explicit = seatStart(w.team, { ...seat, cwd: w.lobby }, w.root, w.home, undefined, w.start);
+    // A written cwd carries no loader default mark (Seat.cwdDefaulted).
+    const { cwdDefaulted: _defaulted, ...written } = seat as typeof seat & { cwdDefaulted?: true };
+    const explicit = seatStart(w.team, { ...written, cwd: w.lobby }, w.root, w.home, undefined, w.start);
     expect('problem' in explicit).toBe(true);
   });
 

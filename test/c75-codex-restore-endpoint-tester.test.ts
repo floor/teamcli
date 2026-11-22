@@ -2,7 +2,7 @@
 // relaunched in its own pane (src/commands/up.ts, src/launch/execute.ts). The Codex binary, the
 // endpoint socket, the pid and the clock are synthetic. No live host, CLI, or process signal
 // is invoked.
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,12 +35,16 @@ const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.me
   .replace('gpt-5.6-terra', 'gpt-6.1-sol')
   .replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
 const UNSENT = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt', import.meta.url), 'utf8');
+const LOCKED = readFileSync(new URL('./fixtures/codex/0.167.0/thread-locked.txt', import.meta.url), 'utf8');
+/** The pane's own shell at an empty prompt, as it reads once the TUI has exited. */
+const SHELL = '~/work/acme main\n❯ ';
 
 let base: string;
 let root: string;
 let dir: string;
 let home: string;
 let lobby: string;
+let seatCwd: string | undefined;
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
@@ -57,7 +61,7 @@ session: ${SESSION}
 trust:
   - ${lobby}
   - ${root}
-workspace:
+${seatCwd !== undefined && seatCwd.startsWith('../') ? `  - ${join(root, seatCwd)}\n` : ''}workspace:
   mode: shared
 seats:
   - role: coordinator
@@ -77,7 +81,7 @@ seats:
     model: GPT Sol
     version: "6.1"
     launch: codex -m gpt-6.1-sol
-`;
+${seatCwd === undefined ? '' : `    cwd: ${seatCwd}\n`}`;
 }
 
 function ownedUrl(): string {
@@ -86,13 +90,13 @@ function ownedUrl(): string {
   return socket.url;
 }
 
-function record(opts: { session?: string | null; endpoint?: boolean } = {}): void {
+function record(opts: { session?: string | null; endpoint?: boolean; stage?: 'ready' | 'launched' } = {}): void {
   const session = opts.session === undefined ? THREAD : opts.session;
   const endpoint = opts.endpoint !== false;
   updateState(dir, (state) => {
     const held = (state.sessions[SESSION] ??= emptySession());
     held.seats[SEAT] = {
-      stage: 'ready',
+      stage: opts.stage ?? 'ready',
       id: HANDLE,
       pane: PANE,
       workspace: SPACE,
@@ -149,6 +153,8 @@ type Trace = {
   runs: { pane: string; command: string }[];
   renamed: { pane: string; name: string }[];
   managed: { dir: string; seat: string }[];
+  keys: string[];
+  waits: { sockets: string[]; threadId: string }[];
 };
 
 type Scene = {
@@ -161,19 +167,42 @@ type Scene = {
   alive?: boolean;
   startOf?: number | null;
   managed?: ManagedEndpointRead;
+  cwd?: string;
+  /** The conversation wait's answers, in order; absent: no wait is wired. */
+  threadWait?: ({ free: true; waitedMs: number } | { free: false; heldBy: string; waitedMs: number })[];
+  /** The shell's screen once the TUI exited. */
+  shell?: string;
+  /** Runs inside the conversation wait, before it answers: the world changing meanwhile. */
+  duringWait?: (world: { rename(name: string): void; setProcess(process: PaneProcesses): void; setShell(text: string): void }) => void;
+  /** Successive screens for the pane while the TUI runs; the last one stays. */
+  screens?: string[];
+  /** The recorded pane and workspace are gone: the seat is launched in a workspace the run creates. */
+  gone?: boolean;
+  /** The screen at the n-th read of the pane (1-based), or undefined for the scene's own. */
+  screenAt?: (read: number) => string | undefined;
 };
 
 function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
-  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [] };
+  const trace: Trace = { created: [], closed: [], typed: [], runs: [], renamed: [], managed: [], keys: [], waits: [] };
   let exited = false;
+  let exitTyped = false;
+  let paneReads = 0;
+  // After a relaunch the pane shows the fresh TUI's idle prompt.
+  let relaunched = false;
   let listedName = scene.name === undefined ? null : scene.name;
-  const agents = (): HerdrAgent[] | null => [{
+  const MADE = 'fixture-pane-made';
+  const MADE_SPACE = 'fixture-space-made';
+  let made = false;
+  const madeState = { process: { shell: 500, foreground: [500] } as PaneProcesses, screen: SHELL, name: null as string | null };
+  const agents = (): HerdrAgent[] | null => scene.gone === true
+    ? (made ? [{ name: madeState.name, agent: 'codex', pane: MADE, workspace: MADE_SPACE, status: 'idle', cwd: scene.cwd ?? root }] : [])
+    : [{
     name: listedName,
     agent: 'codex',
     pane: PANE,
     workspace: SPACE,
     status: scene.status ?? 'idle',
-    cwd: root,
+    cwd: scene.cwd ?? root,
     ...(scene.session === null ? {} : { session: scene.session ?? THREAD }),
   }];
   const launch: Launch = {
@@ -182,20 +211,42 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     sessionUp: () => true,
     createWorkspace(_session, _cwd, label) {
       trace.created.push(label);
-      return { pane: 'fixture-pane-made', workspace: 'fixture-space-made' };
+      made = true;
+      return { pane: MADE, workspace: MADE_SPACE };
     },
     paneRun(_session, pane, command) {
       trace.runs.push({ pane, command });
       exited = false;
+      relaunched = true;
       return true;
     },
     typeText(_session, pane, text) {
       trace.typed.push(text);
-      if (pane === PANE && text === '/exit') exited = true;
+      if (pane === PANE && text === '/exit') exitTyped = true;
       return true;
     },
-    pressEnter: () => true,
-    sendKey: () => true,
+    pressEnter: () => {
+      // The exit word runs on Enter: the TUI leaves and the shell is back.
+      if (exitTyped) { exited = true; exitTyped = false; }
+      return true;
+    },
+    sendKey(_session, pane, key) {
+      trace.keys.push(key);
+      // The lock screen's own exit key leaves the TUI.
+      if (pane === PANE && key === 'q' && scene.screen === LOCKED) exited = true;
+      return true;
+    },
+    ...(scene.threadWait === undefined ? {} : {
+      async codexThreadWait(input: { sockets: string[]; threadId: string }) {
+        trace.waits.push(input);
+        scene.duringWait?.({
+          rename: (name) => { listedName = name; madeState.name = name; },
+          setProcess: (process) => { scene.process = process; madeState.process = process; },
+          setShell: (text) => { scene.shell = text; madeState.screen = text; },
+        });
+        return scene.threadWait!.shift() ?? { free: true as const, waitedMs: 0 };
+      },
+    }),
     renameAgent(_session, pane, name) {
       trace.renamed.push({ pane, name });
       listedName = name;
@@ -207,10 +258,23 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
     },
     agentPanes: () => [PANE],
     agents,
-    workspacePanes: (_session, workspace) => (workspace === SPACE ? [PANE] : null),
-    paneText: () => scene.screen ?? IDLE,
+    workspacePanes: (_session, workspace) => (workspace === MADE_SPACE && made ? [MADE] : workspace === SPACE && scene.gone !== true ? [PANE] : null),
+    paneText: (_session, pane) => {
+      if (pane === MADE) return relaunched ? IDLE : madeState.screen;
+      paneReads += 1;
+      if (scene.screenAt !== undefined && !exited && !relaunched) {
+        const at = scene.screenAt(paneReads);
+        if (at !== undefined) return at;
+      }
+      if (relaunched) return IDLE;
+      if (exited) return scene.shell ?? SHELL;
+      if (scene.screens !== undefined && scene.screens.length > 0) return scene.screens.length > 1 ? scene.screens.shift()! : scene.screens[0]!;
+      return scene.screen ?? IDLE;
+    },
     foreground: () => (exited ? ['zsh'] : ['codex']),
     processInfo: (_session, pane) => {
+      if (pane === MADE) return relaunched ? RESTORED : madeState.process;
+      if (pane === PANE && scene.gone === true) return null;
       if (pane === PANE && scene.process !== undefined) return scene.process;
       if (pane === PANE && exited) return { shell: RESTORED.shell, foreground: [RESTORED.shell] };
       return RESTORED;
@@ -260,6 +324,7 @@ const seatRuns = (trace: Trace): Trace['runs'] => trace.runs.filter((run) => run
 const firstWord = (command: string): string => command.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*/, '').split(/\s/)[0] ?? '';
 
 beforeEach(() => {
+  seatCwd = undefined;
   base = realpathSync(mkdtempSync(join(shortSocketBase(), 'c75ep-')));
   root = join(base, 'acme');
   dir = join(root, '.agents');
@@ -435,4 +500,355 @@ test('a pane named for another seat is left untouched', async () => {
   expect(said(io)).toContain(`its pane is named ${OTHER}; team never adopts a pane another seat owns`);
   expect(seatState()?.pane).toBe(PANE);
   expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+// The machine restore pass (the daemon's sweep: `restoreMissingOnly`) keeps every live pane as it
+// is, but a Codex seat whose managed endpoint died with the machine is relaunched in its own pane:
+// a restored TUI otherwise runs its tools on an app-server another Codex process started, which
+// places the seat in no pane of its own (2026-11-17 reboot).
+const SWEEP = {
+  caller: { kind: 'owner' as const },
+  lockHeld: true,
+  nonInteractive: true,
+  restore: true,
+  restoreMissingOnly: true,
+  expectedSession: SESSION,
+};
+
+test('the restore pass relaunches a dead-endpoint Codex seat in its own pane, resuming it', async () => {
+  setup();
+  record();
+  const made = sources({ name: null });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.closed).toEqual([]);
+  expect(made.trace.created).toEqual([]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+  expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
+  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
+});
+
+test('the restore pass leaves a working dead-endpoint pane untouched', async () => {
+  setup();
+  record();
+  const made = sources({ name: null, status: 'working' });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources, SWEEP);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('the restore pass leaves unsent text in a dead-endpoint pane untouched', async () => {
+  setup();
+  record();
+  const made = sources({ name: null, screen: UNSENT });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources, SWEEP);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('the restore pass never relaunches a pane named for another seat', async () => {
+  setup();
+  record();
+  const made = sources({ name: OTHER });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources, SWEEP);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.renamed).toEqual([]);
+  expect(seatState()?.launched).toEqual(RECORDED);
+});
+
+test('the restore pass adopts a seat whose endpoint is still live, with no relaunch', async () => {
+  setup();
+  record({ session: null });
+  const made = sources({ name: null, session: null, socket: true, alive: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
+});
+
+// A pane resumed in another conversation of the seat, standing in the seat's own folder: re-tied,
+// and the record takes the conversation the pane runs (owner, 2026-11-17).
+const OTHER_THREAD = '019a0000-aaaa-7bbb-8ccc-000000000002';
+
+function seatFolder(): string {
+  const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  const seat = loaded.team.seats.find((candidate) => candidate.name === SEAT);
+  if (seat === undefined || seat.cwd === '.') throw new Error('the fixture seat has no folder of its own');
+  const folder = join(root, seat.cwd);
+  mkdirSync(folder, { recursive: true });
+  return realpathSync(folder);
+}
+
+test('a live-endpoint seat in another conversation, in its own folder, is re-tied to the new conversation', async () => {
+  seatCwd = 'worktrees/worker';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, socket: true, alive: true, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.renamed).toEqual([{ pane: PANE, name: SEAT }]);
+  expect(seatState()?.agent_session).toBe(OTHER_THREAD);
+  expect(said(io)).toContain(`its conversation moved from ${THREAD} to ${OTHER_THREAD}`);
+});
+
+test('the same pane outside the seat\'s folder is not re-tied', async () => {
+  seatCwd = 'worktrees/worker';
+  setup();
+  record();
+  seatFolder();
+  const made = sources({ name: null, session: OTHER_THREAD, socket: true, alive: true, cwd: root });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources);
+  expect(made.trace.renamed).toEqual([]);
+  expect(seatState()?.agent_session).toBe(THREAD);
+  expect(said(io)).toContain('its pane holds another conversation');
+});
+
+test('records naming A and a pane proven in B by its worktree, with a dead endpoint: the relaunch resumes B', async () => {
+  seatCwd = '../worker-tree';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${OTHER_THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+});
+
+test('the restore pass resumes B too', async () => {
+  seatCwd = '../worker-tree';
+  setup();
+  record();
+  const made = sources({ name: null, session: OTHER_THREAD, cwd: seatFolder() });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources, SWEEP), said(io)).toBe(0);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${OTHER_THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).not.toContain(THREAD);
+});
+
+// 17 Nov restart: material's operator had stopped at `launched` before the restart, so the
+// unready adoption re-tied it on the strong proof alone and left it on an endpoint whose socket
+// was gone (every push leg answered ENOENT). An unready record whose endpoint died is relaunched
+// in place like a ready one.
+test('an unready record whose endpoint died is relaunched in place, not adopted', async () => {
+  setup();
+  record({ stage: 'launched' });
+  const made = sources({ name: null });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.closed).toEqual([]);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+  expect(made.trace.managed).toEqual([{ dir, seat: SEAT }]);
+  expect(seatState()?.stage).toBe('ready');
+  expect(seatState()?.pane).toBe(PANE);
+});
+
+test('an unready record on a live endpoint is still adopted where it stands', async () => {
+  setup();
+  record({ stage: 'launched' });
+  const made = sources({ name: null, socket: true, alive: true });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(made.trace.managed).toEqual([]);
+});
+
+// 17 Nov: the restored TUI could not open its conversation because another app-server still held
+// it ("This conversation is open in another app"). The relaunch leaves that screen by its own
+// exit key, waits until no app-server lists the conversation, then resumes it on a fresh endpoint.
+test('a lock screen is exited by its key, and the resume waits for the conversation to be free', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, screen: LOCKED, threadWait: [{ free: true, waitedMs: 42_000 }] });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual([]);
+  expect(made.trace.keys).toEqual(['q']);
+  expect(made.trace.waits).toHaveLength(1);
+  expect(made.trace.waits[0]?.threadId).toBe(THREAD);
+  expect(made.trace.waits[0]?.sockets.some((socket) => socket.endsWith('app-server-control.sock'))).toBe(true);
+  expect(seatRuns(made.trace)).toHaveLength(1);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`resume ${THREAD}`);
+  expect(seatRuns(made.trace)[0]?.command).toContain(`--remote ${APP_URL}`);
+});
+
+test('a conversation still held past the wait is not resumed into a lock', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, screen: LOCKED, threadWait: [{ free: false, heldBy: '/fixture/shared.sock', waitedMs: 120_000 }] });
+  const io = testIo(root, { kind: 'owner' });
+  await runUp([], io, made.sources);
+  expect(made.trace.keys).toEqual(['q']);
+  expect(seatRuns(made.trace)).toEqual([]);
+  expect(said(io)).toContain('its conversation is still held by another Codex app-server (/fixture/shared.sock still lists it after 120 s)');
+});
+
+test('an idle restored Codex seat is still exited with its exit word, not the lock key', async () => {
+  setup();
+  record();
+  const made = sources({ name: SEAT, threadWait: [{ free: true, waitedMs: 0 }] });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), said(io)).toBe(0);
+  expect(made.trace.typed).toEqual(['/exit']);
+  expect(made.trace.keys).toEqual([]);
+  expect(made.trace.waits).toHaveLength(1);
+});
+
+// Review round 6: the wait can last up to two minutes, so the pane is proven again after it,
+// immediately before the launch line. Each change below happens inside the wait.
+describe('the world changing during the conversation wait', () => {
+  const changes: [string, Scene['duringWait']][] = [
+    ['the pane is named for another seat', (w) => w.rename(OTHER)],
+    ['another program runs in the shell', (w) => w.setProcess({ shell: RESTORED.shell, foreground: [RESTORED.shell, 777] })],
+    ['a line is typed at the shell prompt', (w) => w.setShell('~/work/acme main\n❯ echo hello')],
+  ];
+  for (const [name, change] of changes) {
+    test(`${name}: nothing is launched`, async () => {
+      setup();
+      record();
+      const made = sources({ name: SEAT, threadWait: [{ free: true, waitedMs: 60_000 }], duringWait: change });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      expect(made.trace.waits).toHaveLength(1);
+      expect(seatRuns(made.trace)).toEqual([]);
+      expect(said(io)).toContain('after the wait for its conversation; nothing launched');
+    });
+  }
+
+  test('the run closing during the wait launches nothing', async () => {
+    setup();
+    record();
+    let closing = false;
+    const made = sources({ name: SEAT, threadWait: [{ free: true, waitedMs: 60_000 }], duringWait: () => { closing = true; } });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources, { isClosing: () => closing });
+    expect(made.trace.waits).toHaveLength(1);
+    expect(seatRuns(made.trace)).toEqual([]);
+  });
+});
+
+// Review round 6: only the exact lock frame takes the lock key. A frame that quotes the lock words
+// in a dialog or above a live composer, or a lock frame that turns into a draft before the key,
+// gets nothing.
+describe('the lock key needs the exact lock frame', () => {
+  const lockRows = LOCKED.split('\n').filter((row) => row.trim() !== '').slice(-4).join('\n');
+  const QUESTION = readFileSync(new URL('./fixtures/codex/0.167.0/question.txt', import.meta.url), 'utf8');
+  const UNSENT_167 = readFileSync(new URL('./fixtures/codex/0.167.0/unsent.txt', import.meta.url), 'utf8');
+  const frames: [string, string][] = [
+    ['the lock rows quoted above a dialog', `${lockRows}\n${QUESTION}`],
+    ['the lock rows quoted above a live composer with a draft', `${lockRows}\n${UNSENT_167}`],
+  ];
+  for (const [name, screen] of frames) {
+    test(`${name}: no lock key`, async () => {
+      setup();
+      record();
+      const made = sources({ name: SEAT, screen, threadWait: [{ free: true, waitedMs: 0 }] });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      expect(made.trace.keys).toEqual([]);
+      expect(seatRuns(made.trace)).toEqual([]);
+    });
+  }
+
+  test('a lock frame that becomes a draft before the key gets nothing', async () => {
+    setup();
+    record();
+    const draft = `${LOCKED}\n› half a sentence`;
+    // The seventh read of the pane is the fresh frame taken immediately before the key (counted
+    // on the scene above): the plan and every earlier executor reading see the lock frame.
+    const made = sources({ name: SEAT, screen: LOCKED, screenAt: (read) => (read >= 7 ? draft : undefined), threadWait: [{ free: true, waitedMs: 0 }] });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(made.trace.keys).toEqual([]);
+    expect(seatRuns(made.trace)).toEqual([]);
+    expect(said(io)).toContain('its screen or its process changed before the exit key; nothing typed');
+  });
+});
+
+// Review round 7: the post-wait proof covers a pane the run itself created, not only a recorded one.
+describe('a seat launched in a workspace the run creates, resuming its conversation', () => {
+  test('nothing changes during the wait: it is launched there, resumed', async () => {
+    setup();
+    record();
+    const made = sources({ gone: true, threadWait: [{ free: true, waitedMs: 30_000 }] });
+    const io = testIo(root, { kind: 'owner' });
+    await runUp([], io, made.sources);
+    expect(made.trace.waits).toHaveLength(1);
+    const runs = made.trace.runs.filter((run) => run.pane === 'fixture-pane-made');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.command).toContain(`resume ${THREAD}`);
+  });
+
+  const changes: [string, Scene['duringWait']][] = [
+    ['the new pane is named for another seat', (w) => w.rename(OTHER)],
+    ['another program starts in the new shell', (w) => w.setProcess({ shell: 500, foreground: [500, 777] })],
+    ['a line is typed at the new shell prompt', (w) => w.setShell('~/work/acme main\n❯ echo hello')],
+  ];
+  for (const [name, change] of changes) {
+    test(`${name}: nothing is launched`, async () => {
+      setup();
+      record();
+      const made = sources({ gone: true, threadWait: [{ free: true, waitedMs: 30_000 }], duringWait: change });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      expect(made.trace.waits).toHaveLength(1);
+      expect(made.trace.runs.filter((run) => run.pane === 'fixture-pane-made')).toEqual([]);
+      expect(said(io)).toContain('after the wait for its conversation; nothing launched');
+    });
+  }
+
+  // A reading that settles a moment later — a process beside the shell that ends, or a process
+  // read the host could not give — is taken again before the seat is left out: one reading after
+  // the wait left a restarted seat out whose new pane was a bare shell an instant later.
+  const settling: [string, () => { shell: number; foreground: number[] }][] = [
+    ['a process beside the new shell that ends', () => ({ shell: 500, foreground: [500, 777] })],
+    ['a process read the host could not give', () => ({ shell: 500, foreground: [] })],
+  ];
+  for (const [name, first] of settling) {
+    test(`${name}: read again, then launched there, resumed`, async () => {
+      setup();
+      record();
+      let reads = 0;
+      const settled = { shell: 500, foreground: [500] };
+      const flaky = {
+        get shell() { return 500; },
+        get foreground() { reads += 1; return reads <= 3 ? first().foreground : settled.foreground; },
+      };
+      const made = sources({ gone: true, threadWait: [{ free: true, waitedMs: 30_000 }], duringWait: (w) => w.setProcess(flaky) });
+      const io = testIo(root, { kind: 'owner' });
+      await runUp([], io, made.sources);
+      const runs = made.trace.runs.filter((run) => run.pane === 'fixture-pane-made');
+      expect(runs, said(io)).toHaveLength(1);
+      expect(runs[0]?.command).toContain(`resume ${THREAD}`);
+      expect(said(io)).not.toContain('after the wait for its conversation');
+    });
+  }
 });

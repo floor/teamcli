@@ -13,6 +13,7 @@ import { STATE_FILE, updateState } from '../src/state.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import * as passModule from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const NOW = Date.parse('2026-11-02T09:00:00.000Z');
 
@@ -113,7 +114,7 @@ describe('a watch pass runs with the state lock free', () => {
   });
 
   function sources(): WatchSources {
-    return {
+    return withHostedLoop({
       live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
       machine: () => fine,
       standing: () => ({ kind: 'none' }),
@@ -132,7 +133,7 @@ describe('a watch pass runs with the state lock free', () => {
       pid: 4242,
       home: root,
       ownPane: () => ({ pane: 'watch:pane', workspace: 'watch' }),
-    };
+    });
   }
 
   test('another caller takes the lock during the pass, and its budget write survives the merge', async () => {

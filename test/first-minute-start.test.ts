@@ -271,7 +271,8 @@ describe('setup file writer', () => {
       expect(lstatSync(join(root, '.agents')).mode & 0o777).toBe(0o700);
       expect(lstatSync(join(root, '.agents', 'start.json')).mode & 0o777).toBe(0o600);
       expect(lstatSync(join(root, '.agents', 'team.yaml')).mode & 0o777).toBe(0o600);
-      expect(readdirSync(join(root, '.agents'))).toEqual(['start.json', 'team.yaml']);
+      // readdir order is the file system's own (ext4 hashes names; APFS sorts them): compare as a set.
+      expect(readdirSync(join(root, '.agents')).sort()).toEqual(['start.json', 'team.yaml']);
     } finally { files.close(); }
   });
 });

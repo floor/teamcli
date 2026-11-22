@@ -6,8 +6,8 @@ import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // confirm line — and `team send --confirm <id>` writes the one history line. A sender that cannot
 // make the leg walks on to the inbox and the typed trigger. `--wait` to a Claude Code seat is
 // refused while the socket is not the channel. No live pane.
-import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
@@ -16,13 +16,16 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readTriggerLine } from '../src/send/native.ts';
-import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { signReceiptPayload, signRecord, stampedPayload, writeReceipt, writeRecord, type RecordPayload } from '../src/send/record.ts';
+import { takeCopyNumber } from '../src/queue/handover.ts';
 import {
   PENDING_NATIVE_CONFIRM_WINDOW_MS,
   PENDING_NATIVE_TTL_MS,
   pendingDir,
   pendingPath,
   sweepPendingNative,
+  writePending,
+  type PendingNative,
 } from '../src/send/pending.ts';
 import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
@@ -30,6 +33,9 @@ import type { RetryScene } from '../src/watch/retry.ts';
 import { dropNames, recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
 import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
 import { withoutSendId } from './helpers/output.ts';
+import { activate, deactivate } from '../src/queue/floor.ts';
+import { forgetStampedIds, nativePendingDir, seatMailDirs } from '../src/queue/mail-tree.ts';
+import { level2Tree } from './e7a-fixture.ts';
 
 let cleanup: () => void = () => {};
 
@@ -83,7 +89,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
-  expect(code).toBe(0);
+  expect(code).toBe(1);
   expect(host.frames).toEqual([]);
   expect(pane.typed.length).toBe(0);
   expect(pane.typed).toEqual([]);
@@ -115,11 +121,11 @@ test('a registered recipient with model drift is held before any send leg writes
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-  expect(io.err).toContain('model drift: DeepSeek Flash 4.1 vs Claude Opus 4.6');
+  expect(io.err).toContain('model drift: record says DeepSeek Flash 4.1, runs Claude Opus 4.6');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+  expectNoHeldNotice(made, io);
 });
 
 test('a registered recipient behind a provider wrapper is not held for the family its screen shows', async () => {
@@ -145,7 +151,7 @@ test('a registered recipient behind a provider wrapper is not held for the famil
   });
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
   expect(io.err).not.toContain('model drift');
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -174,6 +180,18 @@ function registerLeadWith(made: World, host: Fake, signing: { model: string; ver
   });
 }
 
+/** Model drift under the default `model-drift: deliver` policy (2026-11-13): the drift is named
+ *  and the message is kept in the recipient's inbox, never refused; nothing is typed while the
+ *  screen contradicts the record. `rule` and `hold` have their own scenes
+ *  (test/model-drift-policy.test.ts). */
+function expectNoHeldNotice(made: World, io: TestIo): void {
+  const dir = dropDir(made.dir, 'lead');
+  const records = existsSync(dir) ? readdirSync(dir).filter((name) => !name.includes('.')) : [];
+  expect(records.length).toBeGreaterThan(0);
+  expect(io.err).toContain('model drift: record says');
+  expect(io.err).not.toContain('not kept or delivered');
+}
+
 // A path, an `env` prefix, or quotes spell the CLI's own binary; no launcher there selects a
 // model, so the Claude family its screen names is the contradiction the signing needs. (At the
 // round-1 head these three forms counted as wrappers and the send was delivered.)
@@ -186,8 +204,8 @@ test('the CLI reached by a path, through env, or quoted is the CLI: a foreign si
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs Claude Opus 4.6');
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    expect(io.err).toContain('model drift: record says DeepSeek Flash V4.1, runs Claude Opus 4.6');
+    expectNoHeldNotice(made, io);
     made.cleanup();
   }
 });
@@ -203,8 +221,8 @@ test('a Claude family spelled in lower case is read off the CLI screen, never as
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-  expect(io.err).toContain('model drift: claude fable 5.1 vs Claude Opus 4.6');
-  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+  expect(io.err).toContain('model drift: record says claude fable 5.1, runs Claude Opus 4.6');
+  expectNoHeldNotice(made, io);
 });
 
 // A launcher this reader cannot follow proves nothing about the model: the provider id on its
@@ -217,7 +235,7 @@ test('an unrecognized launcher leaves a foreign model unread: its banner is not 
   registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'unknown-wrapper');
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
   expect(io.err).not.toContain('model drift');
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -241,7 +259,7 @@ test('a wrapper banner naming the signed model in its own words is not a drift',
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).not.toContain('model drift');
     const drops = dropDir(made.dir, 'lead');
     const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -260,8 +278,8 @@ test('a wrapper banner naming another version is still held', async () => {
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-  expect(io.err).toContain('model drift: GLM 5.3 vs glm 5.4');
-  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+  expect(io.err).toContain('model drift: record says GLM 5.3, runs glm 5.4');
+  expectNoHeldNotice(made, io);
 });
 
 // The provider's words are not a bag of tokens: a version is the order its parts are written in,
@@ -269,10 +287,10 @@ test('a wrapper banner naming another version is still held', async () => {
 // round-2 head the sorted comparison called these matches, and the send walked.)
 test('a wrapper banner holding the signed version in another order is held', async () => {
   const cases = [
-    { signing: { model: 'GLM', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-3.5', drift: 'GLM 5.3 vs glm 3.5' },
+    { signing: { model: 'GLM', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-3.5', drift: 'record says GLM 5.3, runs glm 3.5' },
     {
       signing: { model: 'DeepSeek Flash', version: 'V4.1' }, launch: 'claude-deepseek.sh',
-      banner: 'deepseek-v1.4-flash', drift: 'DeepSeek Flash V4.1 vs deepseek v1.4.flash',
+      banner: 'deepseek-v1.4-flash', drift: 'record says DeepSeek Flash V4.1, runs deepseek v1.4.flash',
     },
   ];
   for (const one of cases) {
@@ -284,7 +302,7 @@ test('a wrapper banner holding the signed version in another order is held', asy
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).toContain(`model drift: ${one.drift}`);
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    expectNoHeldNotice(made, io);
     made.cleanup();
   }
 });
@@ -306,7 +324,7 @@ test('a declaration that spells the family inside its model matches the banner',
     registerLeadWith(made, host, one.signing, one.launch);
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     expect(io.err).not.toContain('model drift');
     const drops = dropDir(made.dir, 'lead');
     expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
@@ -330,10 +348,10 @@ test('a declaration that spells the family inside its model holds another versio
     registerLeadWith(made, host, { model: 'Kimi K2.5', version: '2.5' }, 'claude-kimi.sh');
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     if (one.held) {
-      expect(io.err).toContain('model drift: Kimi K2.5 2.5 vs');
-      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+      expect(io.err).toContain('model drift: record says Kimi K2.5 2.5, runs');
+      expectNoHeldNotice(made, io);
     } else {
       expect(io.err).not.toContain('model drift');
       const drops = dropDir(made.dir, 'lead');
@@ -362,10 +380,10 @@ test('a number inside a model word is model identity, never part of the version'
     registerLeadWith(made, host, one.signing, 'claude-glm.sh');
     const io = owner(made.root);
 
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
     if (one.held) {
-      expect(io.err).toContain('model drift: GLM 2B');
-      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+      expect(io.err).toContain('model drift: record says GLM 2B');
+      expectNoHeldNotice(made, io);
     } else {
       expect(io.err).not.toContain('model drift');
       const drops = dropDir(made.dir, 'lead');
@@ -390,8 +408,8 @@ test('a version the id spells with a different run is another version', async ()
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('model drift: Kimi');
-    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    expect(io.err).toContain('model drift: record says Kimi');
+    expectNoHeldNotice(made, io);
     made.cleanup();
   }
 });
@@ -404,7 +422,7 @@ test('the direct typed leg names the signed sender and the team it wrote from', 
 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
-  expect(code).toBe(0);
+  expect(code).toBe(1);
   expect(pane.typed).toEqual([]);
 });
 
@@ -661,8 +679,9 @@ test('a handoff with no socket falls back to the typed drop and records the skip
 
   const code = await runSend(['lead', 'hello'], io, host);
 
-  expect(code).toBe(0);
-  expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+  expect(code).toBe(1);
+  expect(io.out).toBe('');
+  expect(withoutSendId(io.err)).toBe('team send: lead: not delivered: no live route; kept in lead\'s inbox\n');
   expect(pane.typed.length).toBe(0);
   expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
@@ -676,7 +695,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       body: HELPER_BODY,
       id: expect.any(String),
       thread: expect.any(String),
-      outcome: 'queued, not woken',
+      outcome: 'not delivered',
       ms: 0,
       via: 'drop',
       failed: [
@@ -1467,8 +1486,9 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
 
   // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
   const sendIo = helperCaller(made.root);
-  expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
-  expect(withoutSendId(sendIo.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
+  expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(1);
+  expect(sendIo.out).toBe('');
+  expect(withoutSendId(sendIo.err)).toBe('team send: lead: not delivered: no live route; kept in lead\'s inbox\n');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 
@@ -1558,4 +1578,74 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       ],
     },
   ]);
+});
+
+// E7b revision 3, code round 2: a handoff taken from the stamped tree is stamped by that origin
+// alone. Its completion (confirm, or expiry's fallback) writes a body-free history line after a
+// rollback to dark, in a process that remembers no stamp and with the canonical record moved out
+// of reach, and the real level-2 reader (E7a) reads no body.
+describe('revision 3: a stamped native handoff completed after a rollback', () => {
+  const daemonActor = { kind: 'daemon' as const, name: 'daemon', pid: 1, build: 'b', level: 3 };
+  async function handedThenRolledBack(made: World, host: Fake): Promise<void> {
+    void host;
+    expect(activate(made.root, { home: made.home, build: 'b', actors: () => [daemonActor] }).kind).toBe('activated');
+    // The Claude adapter: this build makes no native handoff to a Claude receiver on an active
+    // root (its walk is the channel or the drop, then the pointer). A stamped handoff an earlier
+    // build left is planted as that build wrote it: the stamped record, its copy number, and the
+    // stamped pending handoff.
+    const body = `from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator [${NONCE}]\n\nhello`;
+    const payload: RecordPayload = { kind: 'message', id: ID, to: 'lead', to_id: null, root: made.root, session: 'acme', at: NOW.toISOString(), body, from: 'helper', from_id: null, rule: "a seat to its own team's orchestrator", thread: ID };
+    const signed = signRecord(stampedPayload(payload, made.home), made.home);
+    expect(writeRecord(dropDir(made.dir, 'lead'), signed).ok).toBe(true);
+    takeCopyNumber(seatMailDirs(made.root, 'acme', 'lead').stamped, ID, 'native');
+    expect(writePending('acme', made.root, made.home, {
+      v: 1, id: ID, nonce: NONCE, ts: NOW.toISOString(), from: 'helper', from_id: null, to: 'lead', to_id: null, team: teamIdOf(made.root), session: 'acme',
+      cli: 'claude-code', pane: 'pane-lead-1', address: `uds:${join(made.sockets, '222.sock')}`, rule: "a seat to its own team's orchestrator", project: 'acme', root: made.root,
+      thread: ID, fallback: ['drop'], body,
+    } as PendingNative, true).ok).toBe(true);
+    expect(existsSync(join(nativePendingDir(made.root), `${ID}.json`))).toBe(true);
+    expect(deactivate(made.root, made.home).kind).toBe('dark');
+    // A fresh process: no stamp remembered, and the canonical stamped record out of reach.
+    forgetStampedIds();
+    const canonical = join(seatMailDirs(made.root, 'acme', 'lead').stamped, ID);
+    if (existsSync(canonical)) renameSync(canonical, join(made.root, `moved-${ID}`));
+  }
+  async function bodyFree(made: World): Promise<void> {
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    const line = history.entries.find((entry) => entry.id === ID);
+    expect(line).toMatchObject({ id: ID, body: '', stamped: true });
+    const e7a = level2Tree();
+    if (e7a !== null) {
+      const old = (await import(`${e7a}/send/history.ts`)).readHistory('acme', made.root, made.home);
+      expect(old.ok && old.entries.filter((entry: { id: string }) => entry.id === ID).map((entry: { body: string }) => entry.body)).toEqual(['']);
+    }
+  }
+
+  test('the real confirm writes a body-free line', async () => {
+    const made = nativeWorld();
+    cleanup = made.cleanup;
+    placeHelper(made);
+    writeFileSync(join(made.sockets, '222.sock'), '');
+    const host = fake(made, { native: scripted(['idle', 'working'], `Cross-session message [${NONCE}]: hello`), newId: () => ID });
+    await handedThenRolledBack(made, host);
+    expect(await runSend(['--confirm', ID], helperCaller(made.root), host)).toBe(0);
+    await bodyFree(made);
+  });
+
+  test('the real expiry and its fallback write body-free lines', async () => {
+    const made = nativeWorld();
+    cleanup = made.cleanup;
+    placeHelper(made);
+    writeFileSync(join(made.sockets, '222.sock'), '');
+    const host = fake(made, { native: scripted(['idle', 'working']), newId: () => ID, delivery: { seat: ['native', 'drop'] } });
+    await handedThenRolledBack(made, host);
+    const { scene } = watchScene(made, new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1));
+    await expirePendingNative(scene);
+    expect(existsSync(join(nativePendingDir(made.root), `${ID}.json`))).toBe(false);
+    await bodyFree(made);
+    // The fallback rebuilt the record with its stamp: it sits in the stamped tree, never the legacy one.
+    expect(existsSync(join(seatMailDirs(made.root, 'acme', 'lead').legacy, ID))).toBe(false);
+  });
 });

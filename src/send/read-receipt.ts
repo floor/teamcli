@@ -1,18 +1,20 @@
 // Publishing the signed `read` receipt for one message record, without printing it.
 //
-// The receipt is the per-id gate every reader shares — `team messages`, `team drops --read`,
-// `inbox_read`, and `team ack`, which marks a message read without serving its body. It is
-// published with `link` — exclusive and no-clobber — and flushed before any body is shown, so at
-// most one reader wins the name and the receipt that proves the exposure survives a crash that
-// follows it. This module holds only that ordered act and returns what happened, in words the
-// callers turn into their own refusals: `team messages` says a body was not shown, `team ack` says
-// the message was not marked read. A `replied` receipt is the read that came before an answer and
-// serves the id exactly as a `read` receipt does.
+// One read writes one file: the signed `<id>.read.json`. It is the per-id gate every reader
+// shares — `team messages`, `team drops --read`, `inbox_read`, and `team ack`, which marks a
+// message read without serving its body. It is published with `link` — exclusive and no-clobber —
+// and flushed before any body is shown, so at most one reader wins the name and the receipt that
+// proves the exposure survives a crash that follows it. A stamped record (E7b) is settled only by
+// its recipient's confirmation, so only a confirming read (an ack, a reply, a clearance) writes
+// its receipt; a writer-side read of one is an unconfirmed copy, whose trace is its copy number in
+// the delivery history, and writes none. This module holds only that ordered act and returns what
+// happened, in words the callers turn into their own refusals. A `replied` receipt is the read
+// that came before an answer and serves the id exactly as a `read` receipt does.
 import { type KeyObject } from 'node:crypto';
+import { dirname } from 'node:path';
 import { heldAt, type Held } from '../launch/rules-file.ts';
 import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
-import { isRead, leadAckReceiptAt, receiptFile, signReceiptPayload, type ReceiptPayload } from './record.ts';
-import { clearUnread } from './unread-hint.ts';
+import { ackedFile, clearedFile, isLeadAckReadBy, leadAckActorOf, isConfirmedReadBy, stampedSettled, isRead, leadAckReceiptAt, readVerifiedReceipt, receiptFile, recordStampAt, signReceiptPayload, type ReceiptPayload } from './record.ts';
 
 /** The message whose read is being recorded: its folder, its id, the seat it was addressed to,
  *  and the binding the receipt carries. `root` and `session` are the record's own — a message a
@@ -45,22 +47,59 @@ export type RecordReadOutcome =
   | { kind: 'unwritten'; reason: 'changed' | 'write' | 'durable' };
 
 export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
-  const outcome = publish(input);
-  // The message is read, however the receipt got there: its sender's entry in the recipient's
-  // unread index can no longer be the newest unread record, so it is cleared here, at the one
-  // sink every reader passes. A hint that cannot be cleared is settled by the sweep it feeds:
-  // the sweep verifies the record it names and marks nothing when it is already read.
-  if (outcome.kind === 'published' || outcome.kind === 'served') clearUnread(input.dropDir, input.id);
-  return outcome;
-}
-
-function publish(input: RecordReadInput): RecordReadOutcome {
   const { dropDir, id, to, root, session, home, key, at, readBy, epoch, lead } = input;
   const context = { to, root, session, ...(lead === undefined ? {} : { lead }) };
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
   // The caller's own filter may already have asked `isRead`; this re-check is the race with every
   // other reader.
-  if (servedNow()) return { kind: 'served' };
+  const stamped = recordStampAt(dropDir, id) !== false;
+  // A stamped record is served only on a positively confirming receipt (the strict rule); a
+  // legacy record keeps the hot predicate.
+  if (stamped ? stampedSettled(dropDir, id, context, key) : servedNow()) return { kind: 'served' };
+  // rfc-event-comms E7b: a stamped record is settled only by its recipient (`stampedSettled`
+  // above). A writer-side read of one is an unconfirmed copy: no receipt is written (its copy
+  // number is its trace), so the body can be served again, numbered.
+  if (stamped && !isConfirmedReadBy(readBy)) return { kind: 'published' };
+  // A lead's or the owner's clearance (the Claude adapter §3): its authority is checked before
+  // anything is written, so a clearer without it never holds the read name.
+  const clearing = isLeadAckReadBy(readBy) ? leadAckActorOf(readBy) : null;
+  if (stamped && clearing !== null && clearing !== 'owner' && clearing !== lead) return { kind: 'held', status: 'read', entry: 'file' };
+  if (stamped) {
+    // Before this build a copy wrote `read_by: copy` at the read name. A confirmation that finds
+    // one standing is published as the acknowledgement note beside it, as that build did, so an
+    // old copy receipt never blocks the one confirming write.
+    const standing = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+    if (standing !== null) {
+      const acked = ackedFile(dropDir, id);
+      // A clearance's intent, the clearance note with the actor, is written and made durable
+      // before the ack note every level-3 reader settles by (`ack`), and the ack takes the
+      // intent's own time, so a reader never sees the ack without the actor, and accepts the note
+      // only beside that exact ack (`leadAckReceiptAt`). A retry finds the intent and finishes the
+      // same pair; an ack name another act already holds (the recipient's own ack) is never
+      // claimed for the clearer.
+      let ackAt = at;
+      if (clearing !== null) {
+        const cleared = clearedFile(dropDir, id);
+        const intent: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at, read_by: readBy as string };
+        const wrote = publishReadReceipt(cleared, `${JSON.stringify(signReceiptPayload(intent, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
+        if (wrote === 'failed') return { kind: 'unwritten', reason: 'write' };
+        if (wrote === 'exists') {
+          // An earlier clearance of this message began here: finish that pair, at its time.
+          const standingIntent = readVerifiedReceipt(cleared, id, 'read', context, key);
+          if (standingIntent === null || !isLeadAckReadBy(standingIntent.payload.read_by)) return { kind: 'held', status: 'read', entry: 'file' };
+          ackAt = standingIntent.payload.at;
+        } else if (!flushReceipt(cleared, dirname(cleared))) {
+          return { kind: 'unwritten', reason: 'durable' };
+        }
+      }
+      const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at: ackAt, read_by: 'ack' };
+      const made = publishReadReceipt(acked, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
+      if (made === 'failed') return { kind: 'unwritten', reason: 'write' };
+      if (made === 'exists') return stampedSettled(dropDir, id, context, key) ? { kind: 'served' } : { kind: 'held', status: 'read', entry: 'file' };
+      if (!flushReceipt(acked, dirname(acked))) return { kind: 'unwritten', reason: 'durable' };
+      return { kind: 'published' };
+    }
+  }
   // A lead already cleared this message: its receipt holds the one read name, and the message is
   // settled for the seat. A second sweep, or the seat's own later ack, finds the id served; the
   // clearance is never rewritten as the seat's own read.
@@ -98,6 +137,6 @@ function publish(input: RecordReadInput): RecordReadOutcome {
   if (published === 'failed') return { kind: 'unwritten', reason: 'write' };
   // The receipt must survive a crash before any body is shown. A receipt that cannot be flushed is
   // not proof: the id stays spent, and the caller shows nothing.
-  if (!flushReceipt(readName, dropDir)) return { kind: 'unwritten', reason: 'durable' };
+  if (!flushReceipt(readName, dirname(readName))) return { kind: 'unwritten', reason: 'durable' };
   return { kind: 'published' };
 }

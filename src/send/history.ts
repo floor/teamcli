@@ -1,18 +1,10 @@
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { hostedCommit } from '../host/request-scope.ts';
+import { createHash } from 'node:crypto';
+import { floorState } from '../queue/floor.ts';
+import { mailTreeOf, nativePendingDir, seatMailDirs, stampedHereId } from '../queue/mail-tree.ts';
+import { folderOfDrop } from './drop-folder.ts';
+import { closeSync, constants, existsSync, fstatSync, readdirSync, readSync, statSync } from 'node:fs';
+import { chmodSync, fchmodSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join, sep } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { folderProblemAt } from '../held.ts';
@@ -38,6 +30,7 @@ export type HistoryOutcome =
   | 'sent (channel)'
   | 'held'
   | 'queued (receiver busy)'
+  | 'not delivered'
   | 'not-submitted'
   | 'unreachable'
   | 'answered'
@@ -81,6 +74,10 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** E7b revision 3 (carrier 3): on a root not proven dark, the line carries no body (`body` is
+   *  empty) but its sha256, and says so here. The body lives only in the stamped record. */
+  stamped?: true;
+  body_sha256?: string;
   /** The team the sender sits in, by team id, written by the send that made the line. The feed
    *  needs it to read a sender from another team by its address: without it a seat name shared
    *  with a local seat would read as the local nickname. A line written before this field (or by
@@ -113,6 +110,13 @@ export type HistoryEntry = {
   thread?: string;
   /** On a reply's line, the id of the record it answers. */
   in_reply_to?: string;
+  /** The rule that admitted the pair, on a first-leg delivery's line: `team trace` reads that
+   *  walk's staging from this line, since the walk wrote no step of its own. */
+  rule?: string;
+  /** Written when this send ran a typed wake that did not deliver: whether any key reached the
+   *  pane. The watch reads it to tell a wake refused before any key from one submitted and not
+   *  taken; absent, the send made no typed attempt it did not deliver. */
+  wake_keys_sent?: boolean;
 };
 
 export type HistoryWrite =
@@ -190,7 +194,7 @@ export function ensureStoreLadder(storeDir: string, home: string): string | null
   return null;
 }
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 
 /**
  * Creates `path` as a real folder of this user's at mode 0700, one level at a time so no parent
@@ -279,7 +283,31 @@ function rotateHistory(path: string): string | null {
  * Appends one JSONL record `{ts, from, to, body, id, outcome}` to `<storeDir>/messages.jsonl`
  * at mode 0600 without following symbolic links. Rotates at 1 MB keeping 3 files at mode 0600.
  */
+/** Whether a stamped record of `id` for seat `to`, or a stamped native handoff of `id`, stands
+ *  under `root` (any session; the live folder or its month archive). */
+function stampedOnDisk(root: string, to: string, id: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(to)) return false;
+  if (heldAt(join(nativePendingDir(root), `${id}.json`)).kind !== 'missing') return true;
+  let sessions: string[];
+  try {
+    sessions = readdirSync(mailTreeOf(root, 'stamped'));
+  } catch (error) {
+    // No stamped tree: nothing stamped stands. A tree that stands but cannot be read is treated
+    // as holding the message (fail closed: the line goes body-free).
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  for (const session of sessions) {
+    if (session.startsWith('.')) continue;
+    const seatDir = seatMailDirs(root, session, to).stamped;
+    if (heldAt(join(seatDir, id)).kind !== 'missing') return true;
+    // An archived stamped record: its month folder sits inside the stamped seat folder.
+    if (folderOfDrop(seatDir, id).startsWith(`${seatDir}/`)) return true;
+  }
+  return false;
+}
+
 export function appendHistory(project: string, root: string, home: string, entry: HistoryEntry): HistoryWrite {
+  hostedCommit('appendHistory');
   const record: HistoryEntry = {
     ts: entry.ts,
     from: entry.from,
@@ -288,6 +316,17 @@ export function appendHistory(project: string, root: string, home: string, entry
     id: entry.id,
     outcome: entry.outcome,
   };
+  // E7b revision 3 (carrier 3): history is read by older watches, so a line never carries the body
+  // of a stamped message: the id and a digest only. The era rides with the message, not the
+  // floor at write time: the line is body-free when it says it is stamped, when this process
+  // stamped that id, when a stamped record or stamped native handoff of that id stands under the
+  // root, or when the root is not proven dark (an unreadable floor counts as not dark). A dark
+  // root's line for an unstamped message keeps its exact older shape.
+  if (entry.body !== '' && (entry.stamped === true || stampedHereId(entry.id) || stampedOnDisk(root, entry.to, entry.id) || floorState(root, home).kind !== 'dark')) {
+    record.body = '';
+    record.stamped = true;
+    record.body_sha256 = createHash('sha256').update(entry.body, 'utf8').digest('hex');
+  }
   // Written only when the run recorded them, so a plain line keeps its exact older shape.
   if (entry.from_team !== undefined) record.from_team = entry.from_team;
   if (entry.spec !== undefined) record.spec = entry.spec;
@@ -299,6 +338,8 @@ export function appendHistory(project: string, root: string, home: string, entry
   if (entry.note !== undefined) record.note = entry.note;
   if (entry.thread !== undefined) record.thread = entry.thread;
   if (entry.in_reply_to !== undefined) record.in_reply_to = entry.in_reply_to;
+  if (entry.rule !== undefined) record.rule = entry.rule;
+  if (entry.wake_keys_sent !== undefined) record.wake_keys_sent = entry.wake_keys_sent;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
 
@@ -316,6 +357,7 @@ export function appendStoreLine(
   record: Record<string, unknown>,
   options: { rotate?: boolean; label?: string } = {},
 ): HistoryWrite {
+  hostedCommit('appendStoreLine');
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };
@@ -418,6 +460,8 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     outcome: obj.outcome,
   };
   // `from_team`, `spec`, `resolved`, `ms`, `via`, `session`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  if (obj.stamped === true) entry.stamped = true;
+  if (typeof obj.body_sha256 === 'string' && /^[0-9a-f]{64}$/.test(obj.body_sha256)) entry.body_sha256 = obj.body_sha256;
   if (typeof obj.from_team === 'string' && obj.from_team !== '') {
     entry.from_team = obj.from_team;
   }
@@ -448,6 +492,10 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   if (typeof obj.in_reply_to === 'string' && obj.in_reply_to !== '') {
     entry.in_reply_to = obj.in_reply_to;
   }
+  if (typeof obj.rule === 'string' && obj.rule !== '') entry.rule = obj.rule;
+  if (typeof obj.wake_keys_sent === 'boolean') {
+    entry.wake_keys_sent = obj.wake_keys_sent;
+  }
   return entry;
 }
 
@@ -455,7 +503,25 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
  * Reads one state folder's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
  * in chronological order without following symbolic links.
  */
-export function readStoreHistory(storeDir: string, home: string): HistoryRead {
+/** Whether a raw history line can be skipped without parsing when only `wanted` ids matter.
+ *  An id of letters, digits and hyphens is written in JSON either as itself or through a `\u`
+ *  escape, so a line holding neither the id's text nor any `\u` cannot parse to an entry with
+ *  that id. Any other id shape keeps every line. Exported for tests. */
+export function historyLineSkippable(line: string, wanted: readonly string[]): boolean {
+  if (line.includes('\\u')) return false;
+  for (const id of wanted) {
+    if (!SKIPPABLE_ID.test(id) || line.includes(id)) return false;
+  }
+  return true;
+}
+
+const SKIPPABLE_ID = /^[A-Za-z0-9-]{1,128}$/;
+
+/**
+ * The project history's entries, oldest first. With `wanted`, only the entries whose id is one
+ * of those, read the same way: a line that cannot name one of them is passed over unparsed.
+ */
+export function readStoreHistory(storeDir: string, home: string, wanted?: ReadonlySet<string>): HistoryRead {
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
   for (const level of [configDir, stateRoot, storeDir]) {
@@ -477,9 +543,11 @@ export function readStoreHistory(storeDir: string, home: string): HistoryRead {
     if (heldAt(candidate).kind === 'missing') continue;
     const text = readNoFollow(candidate);
     if (text === null) return { ok: false, reason: 'the history log could not be read' };
+    const ids = wanted === undefined ? null : [...wanted];
     for (const line of text.split('\n')) {
+      if (ids !== null && historyLineSkippable(line, ids)) continue;
       const entry = parseHistoryLine(line);
-      if (entry !== null) entries.push(entry);
+      if (entry !== null && (wanted === undefined || wanted.has(entry.id))) entries.push(entry);
     }
   }
   return { ok: true, entries, path };
@@ -489,8 +557,8 @@ export function readStoreHistory(storeDir: string, home: string): HistoryRead {
  * Reads the project's history log (`messages.jsonl.2`, `messages.jsonl.1`, `messages.jsonl`)
  * in chronological order without following symbolic links.
  */
-export function readHistory(project: string, root: string, home: string): HistoryRead {
-  return readStoreHistory(storePath(project, root, home), home);
+export function readHistory(project: string, root: string, home: string, wanted?: ReadonlySet<string>): HistoryRead {
+  return readStoreHistory(storePath(project, root, home), home, wanted);
 }
 
 /**

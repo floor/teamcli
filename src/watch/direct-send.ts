@@ -1,5 +1,5 @@
 // The watch's own direct-work send: the one entry a hosted watch uses to wake an idle seat
-// without a keystroke. It is internal — no command line reaches it and no `io.caller` stands in
+// through its event adapters, or its profile's guarded typed wake. It is internal — no command line reaches it and no `io.caller` stands in
 // for it. The run's caller is the watch principal this module establishes after the actual
 // `verifyWatchAuthority` proves this process holds the watch, and the verifier is asked again
 // after preparation and immediately before every direct transport the walk could take. A refusal
@@ -67,8 +67,9 @@ export async function sendWatchDirect(
  *  sender: an infrastructure pane is not a worker and is not registered as one.
  *
  *  This authority gate preserves the release's delivery policy: `sendDirect` uses event adapters
- *  and excludes pane typing under `src/send/no-pane-messaging.ts`. Authority never enables a
- *  typed fallback. */
+ *  and, for a seat whose profile declares one, the typed wake — the single exemption of
+ *  `src/send/no-pane-messaging.ts`, with its own guards. Authority never enables any other
+ *  typing. */
 export function watchPushWork(context: WatchDirectContext | null, host: SendHost = realHost): WorkPush {
   if (context === null) {
     return async () => ({

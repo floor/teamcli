@@ -1,6 +1,6 @@
 // The settings registry at its approved 0.5.3 minimum: the five keys the
 // decision names for a seat — `model`, `effort`, `nickname`, `delivery_order`, `human` — and
-// nothing the decision leaves open. The keys a level above a seat may set, bulk changes and the
+// `desktop_control`, the one key a team may also set; nothing the decisions leave open. The keys a level above a seat may set, bulk changes and the
 // team file's retirement are not decided here and are not in this table; the table says what a
 // setting is, where it may be set, what limits it, and how a change applies.
 //
@@ -20,7 +20,7 @@ export const CONFIG_LEVELS = ['entity', 'project', 'team', 'seat'] as const;
 export type ConfigLevel = (typeof CONFIG_LEVELS)[number];
 
 /** The approved minimum, in the order a read shows them. */
-export const CONFIG_KEYS = ['model', 'effort', 'nickname', 'delivery_order', 'human'] as const;
+export const CONFIG_KEYS = ['model', 'effort', 'nickname', 'delivery_order', 'human', 'desktop_control'] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 
 /** A setting's value: the words a launch takes, a delivery order's words, or a boolean. An
@@ -97,6 +97,18 @@ export const CONFIG_REGISTRY: Readonly<Record<ConfigKey, ConfigSpec>> = {
     allowed: 'true or false',
     fallback: false,
     applies: 'at-once',
+  },
+  // Whether the seat may control the computer: computer use, the user's browser, desktop apps and
+  // the connectors acting under the user's accounts. On by default; a team or a seat sets it false
+  // for a seat that must not touch the user's apps, and the seat's own word wins over the team's.
+  // Read at launch, so a change takes the seat's next launch.
+  desktop_control: {
+    key: 'desktop_control',
+    levels: ['team', 'seat'],
+    type: 'boolean',
+    allowed: 'true or false',
+    fallback: true,
+    applies: 'restart-resume',
   },
 };
 

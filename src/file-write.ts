@@ -1,7 +1,8 @@
 // Plain-runtime state-file publication: check parents and leaves, use a private exclusive
 // temporary, flush its descriptor, then publish one complete file.
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeSync } from './host/guarded-fs.ts';
 import { basename, dirname, join, parse, relative, resolve, sep } from 'node:path';
 
 export class FileWriteRefusal extends Error {}

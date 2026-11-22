@@ -36,9 +36,13 @@ import {
   withLaunchSession,
   withResume,
 } from '../src/profiles/profile.ts';
+import { seatPins, seatPinWords } from '../src/launch/features.ts';
 
 const claude = profileFor('claude-code')!;
 const codex = profileFor('codex')!;
+/** The profile's computer- and browser-use pins a seat on the default desktop_control carries:
+ *  none. */
+const PIN_ARGV = seatPinWords(seatPins(codex, true));
 const antigravity = profileFor('antigravity')!;
 const HOOK = '/synthetic/hook.json';
 const RULES = 'Rules for this session';
@@ -173,9 +177,8 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    // The profile pins its feature set on every Codex launch: the line's own safety words and
-    // the pin are the words the CLI reads, inside the script where the launch puts them.
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    // No fixed false pair; every CLI safety word keeps its exact place, the feature pins last.
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', ...PIN_ARGV]);
   });
 
   test('the short attached forms inside the script suppress the defaults just the same', () => {
@@ -183,7 +186,7 @@ describe('a wrapped CLI line that sets its own safety flags is never widened', (
     const argv = cliArgv(command, { binary: 'codex' });
     expect(argv).not.toContain('danger-full-access');
     expect(argv).not.toContain('never');
-    expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    expect(argv).toEqual(['-s', 'read-only', '-aon-request', '--no-alt-screen', ...PIN_ARGV]);
   });
 });
 
@@ -217,8 +220,9 @@ describe("a delimiter inside a quoted script is the CLI's, not the outer shell's
       expect(argv.slice(at)).toEqual(['--', 'prompt', RULES_LINE]);
       const options = argv.slice(0, at);
       expect(options).toContain('--no-alt-screen');
-      expect(options).toContain('-c');
-      expect(options).toContain('features.mcp_oauth_refresh_coordination=false');
+      // The profile's feature pins stand before the delimiter; the retired pair does not.
+      expect(options.slice(options.length - PIN_ARGV.length)).toEqual(PIN_ARGV);
+      expect(options).not.toContain('features.mcp_oauth_refresh_coordination=false');
       expect(options).toContain('-a');
       expect(options).toContain('never');
       expect(options).toContain('-s');
@@ -1088,13 +1092,13 @@ describe('the words a launch line hides from a plain text scan are read as the C
   test("an escaped newline inside the script does not hide the line's own sandbox and approval", () => {
     const line = '/bin/sh -c "codex --sand\\\nbox read-only --ask-for-approval on-request"';
     const argv = cliArgv(launchCommand(codex, line, RULES), { binary: 'codex' });
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', ...PIN_ARGV]);
   });
 
   test('a quoted flag name is still the flag the CLI reads', () => {
     const line = `/bin/sh -c 'codex "--sandbox" read-only "--ask-for-approval" on-request'`;
     const argv = cliArgv(launchCommand(codex, line, RULES), { binary: 'codex' });
-    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', '-c', 'features.mcp_oauth_refresh_coordination=false']);
+    expect(argv).toEqual(['--sandbox', 'read-only', '--ask-for-approval', 'on-request', '--no-alt-screen', ...PIN_ARGV]);
   });
 });
 

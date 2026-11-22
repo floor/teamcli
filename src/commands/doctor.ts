@@ -1,15 +1,30 @@
 import { spawnSync } from 'node:child_process';
+import { permittedEventLegs } from './send.ts';
+import { channelUnproven } from '../queue/resend.ts';
+import { unreachableAfterRestore } from '../launch/restore-relaunch.ts';
+import { socketSuppressed } from '../queue/floor.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
+import { channelPairNamesRuntimeCopy, channelPairPinsEpoch, channelPairPresent, samePlace } from '../mcp/launch-config.ts';
+import { messageKeyState } from '../store/keys.ts';
+import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { personaCollision, registryIdentityView, type PersonaCollision } from '../comms/identity.ts';
+import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
+import { daemonStateAlive, readDaemonState } from '../daemon/state.ts';
+import { tempFolderRow, type DaemonTempDir, type TempFolderRow } from '../temp-folders.ts';
+import { daemonHostsNoWatch, hostedWatchRunning } from '../daemon/watch_display.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, isOwner, type Caller } from '../caller.ts';
 import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { shownTeamFile } from '../check/team.ts';
 import { generalGrantChainNotes, widenedGrantNotes } from '../client/general-grant.ts';
+import { staleRegistryRoots, startFolderProblems } from '../client/records.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
 import { isParseError } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -18,16 +33,18 @@ import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { declaredModel } from '../file/model.ts';
 import type { BudgetAccount, Deprecation, Seat, TeamFile } from '../file/types.ts';
-import { HERDR_TESTED, herdrVersion, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent } from '../herdr.ts';
+import { HERDR_TESTED, herdrVersion, paneProcesses, paneRead, sessionRunning, agentList, workspaceList, workspacePanes, type HerdrAgent, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { verifyLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
-import { featureMismatch } from '../launch/features.ts';
+import { DESKTOP_PIN_GAP, pinMismatch, seatPins } from '../launch/features.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, workSettingsFor, type RulesOrigin } from '../launch/rules.ts';
+import { foldersUnsigned, hasRootWord, ROOT_WORD, rootPathUses, rootPathWarning, setRootCommand } from '../file/root-word.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { cliWordList, versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
@@ -57,6 +74,8 @@ export type DoctorSources = {
   // The approval store's one read, overridable so a test can count it or swap the record
   // after the gate. Absent: the real read.
   standing?(root: string): Standing;
+  /** A pane's process identity (its shell and the pids in front). Absent: not read. */
+  paneProcesses?(session: string, pane: string): PaneProcesses | null;
   /** A pane's visible text. Absent in a test that does not read panes; the real command reads them. */
   paneText?(session: string, pane: string): string | undefined;
   /** Whether the watch's pid is alive. Absent: a fresh heartbeat is read as running, as before. */
@@ -69,7 +88,22 @@ export type DoctorSources = {
    *  remote, the Jules CLI). Absent in a test: "could not be run", never consent to touch the
    *  machine. */
   command?(binary: string, args: string[]): CommandRead | null;
+  /** The machine daemon's health. Absent: doctor does not probe, and a session with no pane
+   *  watch record is still reported missing. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
+  /** The temporary folder the running daemon recorded at its start. Absent: the temp-folder row
+   *  is not reported, so a test that does not read the machine prints none. */
+  daemonTempDir?(home: string): DaemonTempDir;
+  /** The temporary folder this process answers (`os.tmpdir()`). Absent: the system's. */
+  ownTempDir?(): string;
 };
+
+/** The running daemon's recorded temp folder, read from its state record. */
+export function readDaemonTempDir(home: string): DaemonTempDir {
+  const read = readDaemonState(home);
+  if (read.kind !== 'ok' || !daemonStateAlive(read.state)) return { kind: 'none' };
+  return read.state.tempDir === undefined ? { kind: 'unrecorded' } : { kind: 'recorded', dir: read.state.tempDir };
+}
 
 export type CommandRunner = (binary: string, args: string[]) => { status: number | null; stdout: string } | null;
 
@@ -79,6 +113,7 @@ export type CommandRunner = (binary: string, args: string[]) => { status: number
 export type CommandRead = { status: number | null; stdout: string; stderr: string };
 
 export function run(binary: string, args: string[]): { status: number | null; stdout: string } | null {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync(binary, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 });
   return result.error ? null : { status: result.status, stdout: result.stdout };
 }
@@ -95,11 +130,16 @@ export const realCommandRunner = run;
  *  not a single token is unreadable — a path's directory and a command line are not the name. */
 export function processComm(pid: number): string | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  const result = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 2_000,
-  });
+  let result;
+  try {
+    result = spawnProcessToolSync('ps', ['-p', String(pid), '-o', 'comm='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2_000,
+    });
+  } catch {
+    return null;
+  }
   if (result.error || result.status !== 0) return null;
   const base = result.stdout.trim().split('/').pop() ?? '';
   return /^[A-Za-z0-9._+-]+$/.test(base) ? base : null;
@@ -113,6 +153,7 @@ export function checkLogin(profile: Profile, runner: CommandRunner = run): boole
 }
 
 export const realSources: DoctorSources = {
+  paneProcesses: (session, pane) => paneProcesses(pane, session),
   version(binary) {
     const result = run(binary, ['--version']);
     return result && result.status === 0 ? result.stdout.trim() : null;
@@ -160,13 +201,20 @@ export const realSources: DoctorSources = {
     if (panes === null) return null;
     return panes.includes(pane);
   },
+  daemonHealth,
+  daemonTempDir: readDaemonTempDir,
 };
 
 export const USAGE =
   "Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]\nExits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can't be read.\n";
 
 export type Level = 'ok' | 'warn' | 'miss' | 'note';
-export type Finding = { level: Level; text: string };
+export type Finding = {
+  level: Level;
+  text: string;
+  /** A failed process-side version probe, not proof that the terminal host cannot launch it. */
+  cliVersionUnavailable?: { binary: string; seats: string[] };
+};
 
 // A missing or stale watch is not a reason for `up` to refuse: `up` starts the watch itself.
 export function blocksLaunch(finding: Finding): boolean {
@@ -175,7 +223,11 @@ export function blocksLaunch(finding: Finding): boolean {
   return !finding.text.startsWith('no watch has run')
     && !finding.text.startsWith("the watch's heartbeat")
     && !finding.text.startsWith("the watch's pane is gone")
-    && !finding.text.startsWith('the watch ended with its pane');
+    && !finding.text.startsWith('the watch ended with its pane')
+    // A restored seat's missing reach is repaired by its own restart: it never blocks one.
+    && !finding.text.includes(': unreachable after restore: ')
+    // A seat missing its computer and browser pins is repaired by its own relaunch.
+    && !finding.text.includes(DESKTOP_PIN_GAP);
 }
 
 export const doctor: Command = (argv, io) => runDoctor(argv, io, realSources);
@@ -305,7 +357,11 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Findin
   }
   const printed = sources.version(profile.binary);
   if (printed === null) {
-    return [{ level: 'miss', text: `install \`${profile.binary}\`: it is not on the PATH (${cli}: ${names})` }];
+    return [{
+      level: 'miss',
+      text: `install \`${profile.binary}\`: it is not on the PATH (${cli}: ${names})`,
+      cliVersionUnavailable: { binary: profile.binary, seats: seats.map((seat) => seat.name) },
+    }];
   }
   const findings = [versionFinding(profile.binary, printed, profile.tested, true)];
   const loggedIn = sources.loggedIn(profile);
@@ -379,25 +435,40 @@ export function holdFindings(dir: string, sources: DoctorSources): Finding[] {
   return hold === null ? [] : [{ level: 'note', text: `${holdText(hold)} (\`team hold --release\` clears it)` }];
 }
 
+/** The repair a doctor line names for a missing or stale watch, in the doctor's own backquoted
+ *  words: the daemon's `--watch` when its reading proves it hosts none. */
+function doctorWatchRepair(health: DaemonHealth | null): string {
+  return health !== null && daemonHostsNoWatch(health)
+    ? 'the machine daemon runs without `--watch`, so no watch runs for any team: the owner runs `team daemon install --watch`, naming again every opt-in the unit runs with (such as `--presence`)'
+    : 'run `team daemon status`, or the lead runs `team daemon install`';
+}
+
 // `watch` is the watch values in force — the live file's under a verified standing — so a standing
 // move the verdict either way.
 function watchFindings(
   watch: TeamFile['watch'],
   dir: string,
+  root: string,
   session: string,
   running: boolean | null,
   now: Date,
   sources: DoctorSources,
+  health: DaemonHealth | null,
 ): Finding[] {
   const recorded = readState(dir).sessions[session]?.watch;
   if (!running) return [];
-  if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: start \`team watch\`` }];
+  // `up` writes no pane-watch record once the daemon carries the session. The same reading
+  // the status note uses: a hosted watch in phase `running` for this session is the watch.
+  if (!recorded && health !== null && hostedWatchRunning(health, root, session)) {
+    return [{ level: 'ok', text: 'the watch is running in the daemon' }];
+  }
+  if (!recorded) return [{ level: 'miss', text: `no watch has run for session ${session}: ${doctorWatchRepair(health)}` }];
   const age = (now.getTime() - Date.parse(recorded.heartbeat)) / 1000;
   if (!(age <= 2 * watch.interval)) {
     return [
       {
         level: 'miss',
-        text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): start \`team watch\``,
+        text: `the watch's heartbeat is ${Math.round(age / 60)} min old (two intervals are ${(2 * watch.interval) / 60} min): ${doctorWatchRepair(health)}`,
       },
     ];
   }
@@ -520,7 +591,7 @@ export const relaunch = (team: Pick<TeamFile, 'orchestrator' | 'operator'>, name
 // lead's own seat draws neither note: it is the seat reading this line, and the register repair
 // is never shown to it. A seat the state doesn't record was not left running by this session,
 // and a stopped seat is never started by `up`: neither is told.
-function identityFindings(team: TeamFile, dir: string, session: string): Finding[] {
+function identityFindings(team: TeamFile, dir: string, session: string, sources?: Pick<DoctorSources, 'paneProcesses'>): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
   for (const seat of team.seats) {
@@ -536,6 +607,25 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
       });
       continue;
     }
+    if (seat.cli === 'claude-code' && held.pane !== undefined && held.pane_shell === undefined && held.pane_shell_start === undefined) {
+      findings.push({ level: 'note', text: `${seat.name}: shell anchors absent; typed pointers require the recorded conversation until relaunch` });
+    }
+    // The launch recorded the process but not its CLI's start time (a launch before E7b's re-send
+    // fix): the watch's typed wake proves the pane by the older check (pane, shell pid and start,
+    // a recorded CLI pid in front) until the seat is relaunched, which records the CLI's start.
+    if (held.launched.cli_start === undefined) {
+      findings.push({
+        level: 'note',
+        text: `${seat.name}: launched before team recorded its CLI's start time; typed wakes use the older pane proof until it is relaunched`,
+      });
+    } else if (held.pane !== undefined) {
+      // The typed wake's full proof needs every recorded process in front; one that exited (a
+      // helper that ended normally) fails it closed, and no typed wake reaches the seat.
+      const live = sources?.paneProcesses?.(session, held.pane) ?? null;
+      if (live !== null && !held.launched.cli.every((pid) => live.foreground.includes(pid))) {
+        findings.push({ level: 'note', text: `${seat.name}: typed proof incomplete: relaunch` });
+      }
+    }
     // The launch recorded the process and not the seat's id, so the registry row shows `-` where
     // the id goes. `team register` writes the id from the same reads, with nothing relaunched.
     if (held.id === undefined) {
@@ -548,6 +638,100 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
   return findings;
 }
 
+// The Claude adapter §5: on an E7b-active root, each Claude seat whose channel is not proven,
+// with the reason, and each stale piece a relaunch would repair — a checkout pair that names a
+// retained daemon runtime copy or pins an `--epoch`, a lead with no pair in its folder, a launch
+// line that pins `--resume`. A lead restarts the listed seats. A person's pane takes no
+// keys: it is named as waiting. A dark root has nothing here.
+/** Whether every `--resume` on the line names the seat's own recorded conversation (the state's
+ *  `agent_session`): the resume TeamCLI writes at a restart, never a pin. Unreadable: a pin. */
+export function resumesRecordedConversation(launch: string, dir: string, session: string, seat: string): boolean {
+  let recorded: string | undefined;
+  try {
+    recorded = readState(dir).sessions[session]?.seats[seat]?.agent_session;
+  } catch {
+    return false;
+  }
+  if (recorded === undefined || recorded === '') return false;
+  const named = [...launch.matchAll(/(?:^|\s)--resume(?:=|\s+)(\S+)/g)].map((match) => match[1]!.replace(/^["']|["']$/g, ''));
+  return named.length > 0 && named.every((id) => id === recorded);
+}
+
+function claudeChannelFindings(team: TeamFile, dir: string, root: string, session: string, home: string, now: Date): Finding[] {
+  const findings: Finding[] = [];
+  if (!socketSuppressed(root, home)) return findings;
+  const key = messageKeyState(home);
+  for (const seat of team.seats) {
+    if (seat.stopped || seat.cli !== 'claude-code' || seat.webhook !== undefined) continue;
+    const dropDir = seatMailDirIn(dir, session, seat.name);
+    const reasons: string[] = [];
+    const unproven = key.kind !== 'key'
+      ? 'no message key'
+      : channelUnproven({ dropDir, root, session, seat: seat.name, context: { to: seat.name, root, session, ...(team.orchestrator === '' ? {} : { lead: team.orchestrator }) }, key: key.key, nowMs: now.getTime() });
+    if (unproven !== null) reasons.push(unproven);
+    const folder = resolve(root, seat.cwd);
+    if (samePlace(folder, root)) {
+      if (!channelPairPresent(folder, seat.name)) {
+        if (isLeadSeat(team, seat.name)) reasons.push('no pair');
+      } else {
+        if (channelPairNamesRuntimeCopy(folder)) reasons.push('stale pair (a daemon-runtime/ server path)');
+        if (channelPairPinsEpoch(folder)) reasons.push('stale pair (a pinned --epoch)');
+      }
+    }
+    // The file's own launch line: a resume a restart adds to the running line is not a pin. A
+    // registry-held team file carries the line the last launch ran, so a `--resume` naming the
+    // seat's own recorded conversation is TeamCLI's, not the owner's pin.
+    if (/(^|\s)--resume(\s|=|$)/.test(seat.launch) && !resumesRecordedConversation(seat.launch, dir, session, seat.name)) reasons.push('a pinned --resume on the launch line');
+    // A seat the restore brought back and that is still not reachable past the relaunch's bound
+    // (src/launch/restore-relaunch.ts) fails, whatever its pane: it has no working push.
+    const unreachable = unreachableAfterRestore(dir, session, seat.name, unproven, now);
+    if (unreachable !== null) {
+      findings.push({ level: 'miss', text: plainLine(unreachable) });
+      continue;
+    }
+    if (reasons.length === 0) continue;
+    // A protected pane takes no pointer: a person's pane, or one whose declared order leaves the
+    // `typed` word out (the same answer the watch asks, src/commands/send.ts permittedEventLegs).
+    const legs = permittedEventLegs({ dir, root, home, session, seat: seat.name, team, now: () => now });
+    if (seat.human === true || legs.pointer !== true) {
+      if (unproven !== null) findings.push({ level: 'note', text: plainLine(`${seat.name}: waiting: protected pane, no proven channel`) });
+      continue;
+    }
+    findings.push({ level: 'warn', text: plainLine(`${seat.name}: no proven channel (${reasons.join('; ')}); messages reach it by typed pointer until a lead restarts it`) });
+  }
+  return findings;
+}
+
+// A seat whose own written label persona is a name another seat carries — its nickname or its
+// persona, in any registered team: the sender line never prints it (src/comms/identity.ts), and
+// the seat reads as its seat name until the label or the other seat changes. One note per seat.
+function personaFindings(team: TeamFile, root: string, home: string): Finding[] {
+  const findings: Finding[] = [];
+  let roster: ReadonlyArray<{ agent: string; seat: string }> = [];
+  try {
+    roster = readTeams(home)[teamIdOf(root)]?.roster ?? [];
+  } catch {
+    return findings;
+  }
+  const view = registryIdentityView(home);
+  for (const seat of team.seats) {
+    const line = roster.find((entry) => entry.seat === seat.name);
+    if (line === undefined) continue;
+    let collision: PersonaCollision | null = null;
+    try {
+      collision = personaCollision(view, line.agent);
+    } catch {
+      collision = null;
+    }
+    if (collision === null) continue;
+    findings.push({
+      level: 'note',
+      text: plainLine(`${seat.name}: label persona "${collision.persona}" is another seat's name; messages name it as ${seat.name}`),
+    });
+  }
+  return findings;
+}
+
 // A seat recorded as running whose launch line does not carry the one feature set its profile
 // pins: the launch that wrote the record predates the pin, or the file names its own feature
 // words. Every seat of such a CLI joins one background server, and a front end whose settings
@@ -556,21 +740,26 @@ function identityFindings(team: TeamFile, dir: string, session: string): Finding
 // the RECORDED launch line in team's own state, never a running process's command line; a
 // record that holds no line says unknown rather than a guess. A seat the state does not record
 // was not left running by this session and is not named.
-function featureFindings(team: TeamFile, dir: string, session: string): Finding[] {
+//
+// The pins follow the seat's `desktop_control` word. A seat on the default (on) is asked for none
+// of the pins the setting lifts. A seat set false whose line lacks the computer, browser and
+// connector pins is a miss, not a warning: it may be driving the user's apps. It never blocks the
+// relaunch that repairs it (`blocksLaunch`).
+function featureFindings(team: TeamFile, dir: string, session: string, home?: string, root?: string): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
   for (const seat of team.seats) {
     if (seat.stopped) continue;
-    const features = profileFor(seat.cli)?.features ?? [];
-    if (features.length === 0) continue;
+    const pins = seatPins(profileFor(seat.cli), seatDesktopControl({ team, seat: seat.name, home: home ?? null, ...(root === undefined ? {} : { root }) }));
+    if (pins.features.length === 0 && pins.config.length === 0) continue;
     const held = recorded[seat.name];
     if (!held) continue;
     // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
     // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
     // than as carrying a pin written after a script the CLI never receives.
-    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
+    const said = pinMismatch(held.launch_line, pins, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
-    findings.push({ level: 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
+    findings.push({ level: pins.config.length > 0 ? 'miss' : 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
   }
   return findings;
 }
@@ -667,6 +856,9 @@ export function doctorFindings(
   launchLines: Finding[] = [],
   /** Registry wording when the team was read from the registry; file wording for a real team.yaml. */
   rulesOrigin: RulesOrigin = 'file',
+  /** The daemon health `runDoctor` already probed. Absent for a caller that did not probe:
+   *  a missing pane record is then still a miss. */
+  health: DaemonHealth | null = null,
 ): Finding[] {
   const findings: Finding[] = warnings.map((warning) => ({
     level: 'warn',
@@ -719,12 +911,14 @@ export function doctorFindings(
 
   findings.push(...launchLines);
 
-  findings.push(...identityFindings(team, dir, session));
+  findings.push(...identityFindings(team, dir, session, sources));
   findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
-  findings.push(...featureFindings(team, dir, session));
+  findings.push(...featureFindings(team, dir, session, sources.home, root));
+  findings.push(...personaFindings(team, root, sources.home));
+  findings.push(...claudeChannelFindings(team, dir, root, session, sources.home, sources.now()));
 
-  findings.push(...watchFindings(watchInForceOf(standing, team), dir, session, running, sources.now(), sources));
+  findings.push(...watchFindings(watchInForceOf(standing, team), dir, root, session, running, sources.now(), sources, health));
   findings.push(...trustFindings(team, root, dir, session, sources));
 
   const lobby = lobbyOf(sources.home, root, { ...team, session });
@@ -828,7 +1022,8 @@ export function doctorFindings(
 
   for (let index = 0; index < findings.length; index++) {
     const finding = findings[index]!;
-    findings[index] = { level: finding.level, text: plainLine(finding.text) };
+    // Sanitize only display text: restore consumes the typed CLI-probe metadata.
+    findings[index] = { ...finding, text: plainLine(finding.text) };
   }
 
   // The legacy note is told only while the file really is legacy: once the owner has written the
@@ -862,6 +1057,20 @@ function saidLine(read: CommandRead): string | null {
     if (line !== undefined) return line.length > 160 ? `${line.slice(0, 157)}...` : line;
   }
   return null;
+}
+
+/** The temp-folder row: the daemon's recorded folder against the seats'. A seat's folder is
+ *  this process's own when doctor runs in one of the terminal host's panes, where the seats' own
+ *  environment is; otherwise it is the folder a pane `team up` starts gets. Nothing is reported
+ *  without a running daemon, or on a source that does not read the daemon's record. */
+export function tempFolderFindings(sources: DoctorSources, caller: Caller | null): Finding[] {
+  if (sources.daemonTempDir === undefined) return [];
+  const inPane = caller !== null && (caller.kind === 'seat' || caller.kind === 'pane');
+  const row: TempFolderRow | null = tempFolderRow({
+    daemon: sources.daemonTempDir(sources.home),
+    ...(inPane ? { measured: sources.ownTempDir?.() ?? tmpdir() } : {}),
+  });
+  return row === null ? [] : [row];
 }
 
 /**
@@ -936,6 +1145,38 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
 import { firstRunLine, firstRunVerdicts, codexOwnServerArgv } from '../launchers/first-run.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderFinding, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from '../permissions/must-not-pretend.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+
+/**
+ * The projects-root findings (src/file/root-word.ts): each value of the team's text that writes
+ * this machine's projects root of its entity in full, where `{root}` would read the same on every
+ * machine; and the entity's or project's rules that write `{root}` where this machine names no root
+ * for the entity, which a seat would read as written. Warnings: none blocks a launch.
+ */
+export function rootWordFindings(text: string, team: TeamFile, root: string, home: string): Finding[] {
+  const findings: Finding[] = rootPathUses(text, home).map((use) => ({
+    level: 'warn',
+    text: plainLine(`the file, line ${use.line}: ${rootPathWarning(use)}`),
+  }));
+  const work = workSettingsFor(team, root, home);
+  // With no charter the entities file's folders are filled as written: say they are unsigned,
+  // wherever a word stands — the team file, the entity's or project's rules, the vault.
+  const words = hasRootWord(text) || work?.ruleWords === true || work?.vaultWords === true;
+  if (team.entity !== null && words && foldersUnsigned(home)) {
+    findings.push({ level: 'warn', text: plainLine(`the team's words ${ROOT_WORD} or {worktrees} are filled on this machine, and it has no owner charter: entity "${team.entity}"'s folders are filled from the entities file as written, bound to no signature; \`team setup\` signs one`) });
+  }
+  if (work?.vaultProblem !== undefined) findings.push({ level: 'warn', text: plainLine(`${work.vaultProblem}: seats get no vault rule`) });
+  if (work !== null && team.entity !== null) {
+    const held = [...(work.entityRules ?? []), ...(work.projectRules ?? [])].some(hasRootWord);
+    if (held) {
+      findings.push({
+        level: 'warn',
+        text: plainLine(`the entity's or project's rules write ${ROOT_WORD} or {worktrees}, and entity "${team.entity}" names no such folder on this machine: seats read the word as written; run \`${setRootCommand(team.entity)}\``),
+      });
+    }
+  }
+  return findings;
+}
 
 export async function runDoctor(argv: string[], io: Io, sources: DoctorSources): Promise<number> {
   const out = cleanedIo(io);
@@ -997,6 +1238,10 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   const julesOnly = !loginOnly && args.flags.has('jules');
   // A focused report (`--login`, `--jules`) carries only its own findings.
   const focused = loginOnly || julesOnly;
+  const health = sources.daemonHealth === undefined || focused ? null : await sources.daemonHealth(sources.home);
+  // The caller is placed once: the budget checks read it, and so does the temp-folder row, which
+  // measures a seat's own folder when it runs in one of the terminal host's panes.
+  const caller = focused ? null : callerOf(io);
   const findings = loginOnly
     ? doctorLoginFindings(team, sources)
     : args.flags.has('jules')
@@ -1014,15 +1259,24 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           ],
           standing,
           undefined,
-          budgetCheckFindings(team, standing, root, sources, callerOf(io)),
+          budgetCheckFindings(team, standing, root, sources, caller ?? callerOf(io)),
           launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home, state: readState(dirname(loaded.path)).sessions[session] }),
           rulesOriginOf(loaded.source),
+          health,
         ),
+        // Full paths inside the entity's projects root, and rules whose {root} cannot be filled.
+        ...rootWordFindings(loaded.text, team, root, sources.home),
+        // A seat record whose start folder is no path stops every client send on the machine.
+        ...startFolderProblems(root).map((text): Finding => ({ level: 'warn', text: plainLine(text) })),
+        // A registry entry whose root is gone stops every client send on the machine too.
+        ...staleRegistryRoots(sources.home).map((text): Finding => ({ level: 'warn', text: plainLine(text) })),
         // Each verified general grant's chain, one note, in neither count, blocking nothing.
         ...generalGrantChainNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
         // A wildcard general grant signed before the release that first shipped an op reaches that
         // op without a new approval: one `note` finding per grant, in neither count, blocking nothing.
         ...widenedGrantNotes(sources.home, sources.now()).map((text): Finding => ({ level: 'note', text })),
+        // Whether the daemon and the seats keep their temporary files in one folder.
+        ...tempFolderFindings(sources, caller),
         // The team's hold, when one stands: the last line before the summary.
         ...holdFindings(dirname(loaded.path), sources),
       ];

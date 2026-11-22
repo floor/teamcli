@@ -77,6 +77,14 @@ function buildGates(): Record<string, Gate> {
       why: 'marking a message read is the record\'s addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat\'s folder',
       terminal: { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' },
     },
+    git: {
+      kind: 'owner-or-own-team',
+      why: 'git push, fetch and pull with the entity\'s GitHub identity: the token is read for that one command and handed to that process only; force pushes, pushes to main or master, deletes and mirrors are refused before anything runs',
+    },
+    gh: {
+      kind: 'owner-or-own-team',
+      why: 'the gh CLI with the entity\'s GitHub identity, the token held by that one process; merges, releases, repository deletes and renames, API writes, and credential, secret, key, variable and settings commands are refused before anything runs',
+    },
     init: {
       kind: 'owner-only',
       why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it (`team init --general <grant> --key <client.key>`), and a grant that lists entities is refused until 0.5.11',
@@ -112,6 +120,16 @@ function buildGates(): Record<string, Gate> {
     reload: {
       kind: 'owner-or-leads',
       why: 'the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act',
+    },
+    launchers: {
+      kind: 'owner-or-leads',
+      why: 'rewriting a team\'s launch lines off repo and temp scripts is the owner, or a lead of that team',
+      terminal: { who: 'the owner or a lead of this team', where: 'a terminal outside herdr or its own pane' },
+    },
+    'launchers:migrate': {
+      kind: 'owner-or-leads',
+      why: 'rewriting a team\'s launch lines off repo and temp scripts is the owner, or a lead of that team',
+      terminal: { who: 'the owner or a lead of this team', where: 'a terminal outside herdr or its own pane' },
     },
     order: {
       kind: 'owner-or-leads',
@@ -196,7 +214,7 @@ function buildGates(): Record<string, Gate> {
     },
     daemon: {
       kind: 'owner-only',
-      why: 'the one machine daemon is the owner\'s: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager\'s no-terminal start is the owner\'s own login session',
+      why: 'the one machine daemon is the owner\'s: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner\'s signed answer to that exact install or uninstall, and the system service manager\'s no-terminal start is the owner\'s own login session',
     },
     'daemon:status': {
       kind: 'any-caller',
@@ -208,7 +226,7 @@ function buildGates(): Record<string, Gate> {
     },
     'daemon:install': {
       kind: 'owner-only',
-      why: 'registering the user service unit is the owner\'s act; a verified general grant whose ops name `daemon`, or the owner\'s dev-mode admission for a placed lead, is the other way',
+      why: 'registering the user service unit is the owner\'s act; a verified general grant whose ops name `daemon`, the owner\'s dev-mode admission for a placed lead, or the owner\'s signed answer to that exact install (`--request`, `--approval`) are the other ways',
     },
     'daemon:restart': {
       kind: 'owner-only',
@@ -220,7 +238,7 @@ function buildGates(): Record<string, Gate> {
     },
     'daemon:uninstall': {
       kind: 'owner-only',
-      why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
+      why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead, or the owner\'s signed answer to that exact removal (`--request`, `--approval`), are the other ways',
     },
     'daemon:chores': {
       kind: 'owner-only',
@@ -286,6 +304,18 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it serves the owner page on 127.0.0.1 behind a per-run token; every act on it needs an owner-device passkey or Touch ID signature',
     },
+    'owner-seat:export': {
+      kind: 'any-caller',
+      why: 'an agent may start it, but the export is written only once the owner signs it on the owner\'s device; it carries the seat\'s public keys and no private key',
+    },
+    'owner-seat:install': {
+      kind: 'any-caller',
+      why: 'with --dry-run it prints the steps and changes nothing; a real run changes the machine only as the system\'s administrator, which on a shared Linux machine is the owner\'s own account alone, and asks for no team file, seat or terminal',
+    },
+    'owner-seat:pin': {
+      kind: 'owner-only',
+      why: 'the first pin is the owner\'s, from a terminal outside the terminal host on a machine with no pin yet (trust on first use); a changed seat is pinned only from a newer export signed by a signer already pinned there',
+    },
     setup: {
       kind: 'any-caller',
       why: 'an agent may start it, but nothing is written until the owner signs the charter; the owner-device signature is the authority',
@@ -298,9 +328,37 @@ function buildGates(): Record<string, Gate> {
       kind: 'seat-only',
       why: 'a drop folder is one seat\'s mailbox: the seat the team declares, on the pane the state records for it, and never the owner; --read is the launch line\'s own invocation and asks for no caller',
     },
+    'drops:archive': {
+      kind: 'team-change',
+      why: 'the owner, the orchestrator or the operator archives every seat folder; a seat on its own pane archives only its own',
+    },
     help: {
       kind: 'any-caller',
       why: 'the help text reads no team file and asks for no caller',
+    },
+    queues: {
+      kind: 'owner-only',
+      why: 'every verb but status changes what every seat of the root does: the owner, or the owner\'s dev-mode admission for a placed lead, as the daemon\'s rows; status states its own row',
+    },
+    'queues:status': {
+      kind: 'any-caller',
+      why: 'the report reads the root\'s floor state, the reader switch and each seat queue\'s check; it drains, signs and moves nothing and asks for no caller',
+    },
+    'queues:activate': {
+      kind: 'owner-only',
+      why: 'turning on at-least-once delivery changes every seat of the root: the owner, or the owner\'s dev-mode admission for a placed lead',
+    },
+    'queues:prove': {
+      kind: 'owner-only',
+      why: 'a channel proof probe is placed in another seat\'s delivery: the owner, or the owner\'s dev-mode admission for a placed lead, as activate',
+    },
+    'queues:deactivate': {
+      kind: 'owner-only',
+      why: 'the rollback to dark changes every seat of the root: the owner, or the owner\'s dev-mode admission for a placed lead, as activate',
+    },
+    'queues:reader': {
+      kind: 'owner-only',
+      why: 'the reader switch moves every seat\'s reader at once: the owner, or the owner\'s dev-mode admission for a placed lead, as activate',
     },
     hold: {
       kind: 'team-change',
@@ -316,12 +374,16 @@ function buildGates(): Record<string, Gate> {
     },
     mcp: {
       kind: 'any-caller',
-      why: 'status and doctor write nothing and ask for no caller; serve is the launch line\'s own invocation for a declared seat, and its own row says who it admits',
+      why: 'status and doctor write nothing and ask for no caller; setup and serve state their own gates in their subcommand rows',
     },
     pause: {
       kind: 'team-pause',
       why: 'a pause stops every seat\'s intake of new work, the orchestrator\'s own lever on the team: the owner or the orchestrator\'s seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`',
       terminal: { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' },
+    },
+    ping: {
+      kind: 'admission',
+      why: 'each message is an ordinary team send from the caller\'s own folder, decided by the send admission; the acknowledgement is the seat\'s own read receipt, so this map admits no one to it',
     },
     peek: {
       kind: 'team-read',
@@ -424,11 +486,11 @@ function buildGates(): Record<string, Gate> {
     },
     'config:set': {
       kind: 'owner-only',
-      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
+      why: 'the team\'s record, and an entity\'s record in the owner\'s entities file, are the owner\'s: editing either is the owner\'s act, as editing the team file was, from a terminal outside herdr, or the owner\'s signed answer to that exact edit (`--request`, `--approval`)',
     },
     'config:unset': {
       kind: 'owner-only',
-      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
+      why: 'the team\'s record, and an entity\'s record in the owner\'s entities file, are the owner\'s: editing either is the owner\'s act, as editing the team file was, from a terminal outside herdr, or the owner\'s signed answer to that exact edit (`--request`, `--approval`)',
     },
     'config:edit': {
       kind: 'owner-only',
@@ -475,6 +537,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'seat-only',
       why: 'the launch line starts it for its own seat: the process it starts must place as the seat --seat names, on the pane the state records for it in the team\'s own session, and never the owner; the seat\'s current claim, when there is one, must be the --epoch the server carries',
     },
+    'mcp:setup': {
+      kind: 'owner-only',
+      why: 'the owner or the named seat itself may request setup; the existing config editor must admit its launch change, and register must admit its calling pane before the scoped project pair is published',
+    },
     'mcp:status': {
       kind: 'any-caller',
       why: 'the report writes nothing and asks for no caller',
@@ -491,6 +557,18 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'removing an always rule is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that revoke',
       terminal: { who: 'the owner', where: 'a terminal outside herdr' },
+    },
+    'approvals:export': {
+      kind: 'any-caller',
+      why: 'it writes a waiting request of a machine whose owner seat is pinned to a file; the request grants nothing until the owner signs an answer on the machine that holds the signers',
+    },
+    'approvals:sign': {
+      kind: 'any-caller',
+      why: 'an agent may start it, but the answer is written only once the owner signs it (on the owner\'s device, or with a passkey); the request it answers runs only on the machine it names',
+    },
+    'approvals:answer': {
+      kind: 'any-caller',
+      why: 'it records an answer carried from another machine, and only one that verifies against this machine\'s pinned owner seat and is bound to a request of this machine; the command still runs with --approval and is checked again there',
     },
     forget: {
       kind: 'owner-only',

@@ -1,14 +1,21 @@
-import { execFileSync } from 'node:child_process';
+import { hostedFallbackPoint } from './host/request-scope.ts';
+import { hostedRequest } from './host/request-scope.ts';
+import { execProcessToolSync } from './process-tools-adapter.ts';
+import { kernelProcess, runsInSeatbelt } from './process-kernel.ts';
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
 import { syncChildTimeout } from './child.ts';
 import type { TeamFile } from './file/types.ts';
-import { activeHerdrSnapshotId, agentList, paneRootPid, paneProcesses } from './herdr.ts';
+import { activeHerdrSnapshotId, agentList, paneForeground, paneRootPid, paneProcesses } from './herdr.ts';
+import { reapplyHerdrName, recordedCliAtPane } from './placement/recorded-cli.ts';
 import type { HerdrAgent, PaneProcesses } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
 import { processStartOf, seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
+import { ownerSetupNoteOnThisAccount, ownerSignsElsewhereOnThisAccount } from './client/owner-pin-path.ts';
+import { confinedSeatAt, type ConfinedSeat } from './placement/confined.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -21,7 +28,9 @@ export type Caller =
   // `session` is the session the placement was made in: the command passed it to `callerOf` and
   // the caller's pane root was found in that session's agent list. Absent when no session was
   // asked about (the caller's own server answered) and on callers a test hands in.
-  | { kind: 'seat'; name: string; pane: string; session?: string }
+  // `confined` marks a seat placed by its sandbox grant (src/placement/confined.ts): it cannot
+  // write outside its own folders, so its sends and replies go through its outbox.
+  | { kind: 'seat'; name: string; pane: string; session?: string; confined?: true }
   // An agentless herdr pane whose root process is among the caller's ancestors. The pane id
   // comes from the hint; the pid is what places it. `session` is recorded when the placement
   // was asked about one, and absent when none was.
@@ -39,7 +48,15 @@ export type Caller =
   // seat, it never falls back to the owner label, and it may never address the owner or a
   // person's pane.
   | { kind: 'daemon' }
-  | { kind: 'unplaced'; reason: string };
+  // `pinned` marks the one unplaced reading that stands where the owner stood: a process outside
+  // herdr with no agent parent, on a machine whose owner seat is pinned from another machine
+  // (`PINNED_TERMINAL_REASON`). Dev mode lifts nothing for it (src/dev_mode.ts).
+  | { kind: 'unplaced'; reason: string; pinned?: true };
+
+/** Why a terminal is not the owner on a machine whose owner seat is pinned from another machine:
+ *  that machine holds no owner signer, so the owner's word there is a signed answer carried from
+ *  the machine that holds one (`team approvals export`, then `team approvals answer`). */
+export const PINNED_TERMINAL_REASON = "this machine's owner signs on another machine, and a terminal here is not the owner";
 
 export type Process = { pid: number; name: string };
 
@@ -70,9 +87,26 @@ export type CallerSources = {
   seatAtPane?(pane: string): SeatAtPane | null;
   /** A pane's own shell and foreground pids, as herdr reports them; null when it can't be read. */
   paneProcesses?(pane: string): PaneProcesses | null;
+  /** argv0 of each foreground process, in herdr's order; null when the pane can't be read.
+   *  The unnamed-pane placement reads these the way `team register` does. */
+  foreground?(pane: string): string[] | null;
+  /** The registry home. When it is set, an unnamed pane whose record holds it and whose
+   *  process is that seat's CLI is placed as the seat, and the host name is re-applied. */
+  home?: string;
   /** The instant a process started, in epoch milliseconds; null when it is gone or its start
    *  line is unreadable. */
   processStartOf?(pid: number): number | null;
+  /** Whether this machine's owner seat is pinned from another machine, so a terminal here is not
+   *  the owner. The process's own sources read the account (`ownerSignsElsewhereOnThisAccount`);
+   *  sources a test hands in that leave it out place as a machine with a local owner. */
+  ownerSignsElsewhere?(): boolean;
+  /** The seat a sandbox confines this caller to, proved by what the confinement lets it write
+   *  (src/placement/confined.ts); null when no record holds `pane` or the proof fails. Read only
+   *  when the parent walk could not be read at all. Absent: such a caller stays unplaced. */
+  confinedSeat?(pane: string, session: string | undefined): ConfinedSeat | null;
+  /** Whether this process runs inside a sandbox profile (macOS Seatbelt). It only words the
+   *  refusal for a walk that already failed: it never places a caller. Absent: false. */
+  sandboxed?(): boolean;
 };
 
 /** Whether a pane herdr lists without a name is the pane the seat's record holds. The proof is
@@ -108,9 +142,25 @@ function placedAtRecordedPane(
 // of that pane, under the same pid proof: the hint names the pane, the root pid decides.
 export function placeCaller(sources: CallerSources, session?: string): Caller {
   const ancestors = sources.ancestors();
-  // A walk that stopped early may have stopped below a herdr server: it places nobody.
-  if (!ancestors?.length) return { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
+  // A walk that stopped early may have stopped below a herdr server: it places nobody, unless the
+  // caller is a confined seat whose sandbox hides every process outside it. That seat is placed
+  // by its own grant, never by the variable that names its pane.
+  if (!ancestors?.length) return confinedCaller(sources, session)
+    ?? { kind: 'unplaced', reason: unreadWalkReason(sources) };
   const pids = new Set(ancestors.map((process) => process.pid));
+
+  // A Codex app-server one Codex process started for itself serves every Codex TUI that attaches
+  // to it, in any pane (codex-cli 0.169's per-user app-server daemon, measured 2026-11-17: after a
+  // machine restart every resumed Codex pane ran its tools under the daemon the first resumed TUI
+  // had spawned, so each seat walked up into that first pane). Its tools are not the pane's: a
+  // pane reading through it would name the TUI that happened to start the server, another seat or
+  // no seat. Such a caller is placed only by a managed endpoint record, never by a pane.
+  const shared = sharedCodexServer(ancestors);
+  if (shared) {
+    const served = endpointSeat(ancestors, sources, session);
+    if (served !== null) return served;
+    return { kind: 'unplaced', reason: SHARED_CODEX_REASON };
+  }
 
   // A herdr server is normally one of the caller's ancestors. A live handoff re-parents every
   // pane's root process to the system's first process, so the server leaves the chain while the
@@ -147,6 +197,31 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
           ? { kind: 'seat', name: agent.name, pane: agent.pane }
           : { kind: 'seat', name: agent.name, pane: agent.pane, session };
       }
+      // The host listed the pane and dropped its name. The seat's record (its reach pane, in
+      // this session) plus the pane's own CLI place the caller, and the name is put back.
+      // A bare shell or another CLI on that pane stays unplaced: the shell anchor below must
+      // not adopt it. No record, or a process that cannot be read, keeps the shell anchor,
+      // which is the window a seat's MCP server starts in before the record exists.
+      if (sources.home !== undefined && session !== undefined) {
+        const proved = recordedCliAtPane({
+          home: sources.home,
+          session,
+          pane: agent.pane,
+          agentSession: agent.session,
+          processes: sources.paneProcesses?.(agent.pane) ?? null,
+          foreground: sources.foreground?.(agent.pane) ?? null,
+        });
+        if (proved.kind === 'seat') {
+          // The warm send host never repairs a placement: the line goes back to the client, whose
+          // in-process run puts the name back exactly as it always has (rfc-bus-send-server §2.5).
+          hostedFallbackPoint('the seat pane lost its herdr name; the in-process run repairs it');
+          reapplyHerdrName({ session, pane: agent.pane, name: proved.name, root: proved.root });
+          return { kind: 'seat', name: proved.name, pane: agent.pane, session };
+        }
+        if (proved.kind === 'refused') {
+          return { kind: 'unplaced', reason: `it runs in pane ${agent.pane}, whose agent has no herdr name` };
+        }
+      }
       // The pane is listed with no agent name: herdr has not detected the CLI yet, which is the
       // window a seat's MCP server starts in. A seat record that anchors this pane's shell places
       // the caller as that seat; anything else keeps the refusal it had before this reading.
@@ -175,6 +250,54 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
   const served = endpointSeat(ancestors, sources, session);
   if (served !== null) return served;
   return walkOutside(ancestors, sources);
+}
+
+/** Why a caller under a Codex app-server another Codex process started is not placed by its pane. */
+export const SHARED_CODEX_REASON = 'its Codex tools run in an app-server another Codex process started, which serves more than one pane; team cannot tell which seat it is (a lead runs team restart <seat>, which attaches the seat to its own endpoint)';
+
+/** Whether a shared Codex server stands anywhere among the caller's parents: a Codex process
+ *  started directly by another Codex process (an app-server a TUI spawned for itself, which
+ *  serves other panes' TUIs too). Every ancestor is checked, not only the nearest CLI: a tool
+ *  that starts another CLI under the shared server (`codex exec`, `claude -p`) puts that CLI
+ *  between the caller and the server, and the server still decides nothing about the pane above
+ *  it. A Codex the seat runs from a shell has that shell between the two and is not this case. */
+export function sharedCodexServer(ancestors: readonly Process[]): boolean {
+  return ancestors.some((process, at) => {
+    const parent = ancestors[at + 1];
+    return basename(process.name) === 'codex' && parent !== undefined && basename(parent.name) === 'codex';
+  });
+}
+
+export const UNREAD_WALK_REASON = 'its parent processes can\'t be read to the top';
+export const SANDBOXED_WALK_REASON = 'it runs inside a command sandbox that hides its parent processes, so no seat can be proved; '
+  + 'run the team command as a command of its own, not chained with other shell commands, so the CLI runs it outside its sandbox';
+
+/** Why a caller whose parent walk could not be read stays unplaced. Inside a sandbox the walk is
+ *  refused by design and the remedy is different, so the reason says so; the caller is unplaced
+ *  either way. */
+function unreadWalkReason(sources: Pick<CallerSources, 'sandboxed'>): string {
+  return sources.sandboxed?.() === true ? SANDBOXED_WALK_REASON : UNREAD_WALK_REASON;
+}
+
+/** The confined-seat reading (src/placement/confined.ts) for a caller whose parent walk could not
+ *  be read. The pane variable only names which record to test. When the terminal host answers,
+ *  a pane it lists under another seat's name refuses the reading. */
+function confinedCaller(sources: CallerSources, session?: string): Caller | null {
+  const hint = sources.env.HERDR_PANE_ID;
+  if (hint === undefined || hint === '' || sources.confinedSeat === undefined) return null;
+  const seat = sources.confinedSeat(hint, session);
+  if (seat === null) return null;
+  // When the terminal host answers, it must not contradict the record: the pane listed under
+  // another seat's name, or this seat listed on another pane, refuses the reading.
+  const agents = sources.agents();
+  if (agents !== null) {
+    const listed = agents.find((agent) => agent.pane === hint);
+    if (listed !== undefined && listed.name && listed.name !== seat.name) return null;
+    if (agents.some((agent) => agent.name === seat.name && agent.pane !== hint)) return null;
+  }
+  return session === undefined
+    ? { kind: 'seat', name: seat.name, pane: hint, confined: true }
+    : { kind: 'seat', name: seat.name, pane: hint, session, confined: true };
 }
 
 /** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the
@@ -232,7 +355,7 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
   const ancestors = sources ? sources.ancestors() : readAncestors();
   const env = sources ? sources.env : io.env;
   const stdinIsTTY = sources ? sources.stdinIsTTY : io.stdinIsTTY;
-  if (!ancestors?.length) return { kind: 'unplaced', reason: 'its parent processes can\'t be read to the top' };
+  if (!ancestors?.length) return { kind: 'unplaced', reason: unreadWalkReason(sources ?? { sandboxed: runsInSeatbelt }) };
   if (ancestors.some((process) => process.name === 'herdr')) {
     return { kind: 'unplaced', reason: 'it runs under herdr' };
   }
@@ -247,10 +370,12 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
       return { kind: 'unplaced', reason: 'it runs under herdr' };
     }
   }
-  return walkOutside(ancestors, { env, stdinIsTTY });
+  // The process's own walk reads the account; sources a test hands in answer for themselves.
+  const signsElsewhere = sources ? sources.ownerSignsElsewhere : ownerSignsElsewhereOnThisAccount;
+  return walkOutside(ancestors, { env, stdinIsTTY, ...(signsElsewhere !== undefined ? { ownerSignsElsewhere: signsElsewhere } : {}) });
 }
 
-function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY'>): Caller {
+function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY' | 'ownerSignsElsewhere'>): Caller {
   const cli = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
   if (cli) {
     // An agent whose environment still names a herdr pane, but with no herdr server among its
@@ -266,12 +391,27 @@ function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 
     return { kind: 'unplaced', reason: `it is run by an agent (${cli.name}) outside herdr` };
   }
   if (sources.env.AGENT_UNATTENDED) return { kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' };
+  // A machine whose owner seat is pinned from another machine holds no owner signer. A terminal
+  // there may be any agent that opened a shell on the account, so it is never the owner, with a
+  // terminal or without one: the owner's word on that machine is a signed answer. No mode, policy
+  // or variable changes this reading.
+  if (sources.ownerSignsElsewhere?.() === true) {
+    // On a machine whose accounts share one owner and that is not set up (or not pinned yet), the
+    // reason also names the one step that sets it up.
+    const note = ownerSetupNoteOnThisAccount();
+    return { kind: 'unplaced', reason: note === null ? PINNED_TERMINAL_REASON : `${PINNED_TERMINAL_REASON}: ${note}`, pinned: true };
+  }
   if (!sources.stdinIsTTY) return { kind: 'owner-no-tty' };
   return { kind: 'owner' };
 }
 
 export function isOwner(caller: Caller): boolean {
   return caller.kind === 'owner';
+}
+
+/** Whether `caller` is the terminal a machine whose owner seat is pinned refuses as the owner. */
+export function isPinnedTerminal(caller: Caller): boolean {
+  return caller.kind === 'unplaced' && caller.pinned === true;
 }
 
 /** Who may run a command and where from, for the no-terminal refusal. A command the map admits
@@ -586,7 +726,7 @@ function processName(raw: string): string {
 
 export const readWithPs: ReadProcess = (pid) => {
   try {
-    const line = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
@@ -618,7 +758,7 @@ export function parsePsSnapshot(text: string): ReadonlyMap<number, { ppid: numbe
 }
 
 function readPsSnapshot(): ReadonlyMap<number, { ppid: number; name: string }> {
-  const out = execFileSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
+  const out = execProcessToolSync('ps', ['-ax', '-o', 'pid=,ppid=,comm='], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: syncChildTimeout(2_000),
@@ -662,7 +802,13 @@ function ancestorReadFailure(error: unknown): string {
     ? 'snapshot unread (timeout)' : 'snapshot unread (reader failed)';
 }
 
-function noteAncestorFailure(cause: string): void {
+const notedAncestorFailures = new Set<string>();
+
+/** One line per cause per process. Inside a sandbox the refusal reason already says why the walk
+ *  is unread, so the reader's own failures are not repeated on stderr. */
+export function noteAncestorFailure(cause: string): void {
+  if (notedAncestorFailures.has(cause) || runsInSeatbelt()) return;
+  notedAncestorFailures.add(cause);
   console.error(`team caller: ${cause}`);
 }
 
@@ -676,8 +822,31 @@ function readProcForWalk(pid: number): ReturnType<ReadProcess> {
   }
 }
 
+// The same walk from the kernel's own table (macOS under Bun): every step read with
+// `kernelProcess`, the name taken from argv[0] exactly as `ps -o comm=` prints it. Undefined when
+// any step cannot be read that way, so the caller walks the `ps` snapshot instead and a partial
+// kernel chain is never used.
+function walkKernelAncestors(pid: number): Process[] | undefined {
+  const out: Process[] = [];
+  let at = pid;
+  for (let depth = 0; depth < 64; depth++) {
+    if (at <= 1) return out;
+    const found = kernelProcess(at);
+    if (found === undefined) return undefined;
+    const name = processName(found.argv0);
+    if (!name) return undefined;
+    out.push({ pid: at, name });
+    at = found.ppid;
+  }
+  return undefined;
+}
+
 function walkAncestors(pid: number, read: ReadProcess, note: (cause: string) => void): Process[] | null {
   if (pid <= 1) { note(`start pid ${pid}`); return []; }
+  if (read === readWithPs) {
+    const kernel = walkKernelAncestors(pid);
+    if (kernel !== undefined) return kernel;
+  }
   try {
     const step: ReadProcess = read === readWithPs
       ? (() => {
@@ -710,10 +879,17 @@ export function readAncestors(
   note: (cause: string) => void = noteAncestorFailure,
 ): Process[] | null {
   const followsParent = pid === undefined;
-  const startPid = pid ?? process.ppid;
+  // In the warm send host the walk starts where the client's own walk would: its kernel parent
+  // (src/host/request-scope.ts). The parent-changed check then reads the client's parent again.
+  const hosted = hostedRequest();
+  const startPid = pid ?? hosted?.startPid ?? process.ppid;
   const parentMatches = (chain: Process[] | null): Process[] | null => {
     if (followsParent && chain !== null && chain.length > 0) {
-      const liveParent = process.ppid;
+      const liveParent = hosted !== null ? hosted.currentParent() : process.ppid;
+      if (liveParent === null) {
+        note('the client process is gone');
+        return null;
+      }
       const walkedParent = chain[0]!.pid;
       if (liveParent !== walkedParent) {
         note(`parent pid changed ${walkedParent} to ${liveParent}`);
@@ -731,7 +907,7 @@ export function readAncestors(
     cachedAncestorsSnapshotId = snapId;
     cachedDefaultAncestors = undefined;
   }
-  if (snapId !== null && startPid === process.ppid && read === processReader()) {
+  if (hosted === null && snapId !== null && startPid === process.ppid && read === processReader()) {
     if (cachedDefaultAncestors === undefined) cachedDefaultAncestors = fresh();
     const checked = parentMatches(cachedDefaultAncestors);
     if (checked === null) cachedDefaultAncestors = null;
@@ -768,7 +944,7 @@ export function callerOf(
     cachedCallerSourcesRef = sources;
     cachedCurrentCallers.clear();
   }
-  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? process.cwd()}`;
   if (snapId !== null) {
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
@@ -781,7 +957,7 @@ export function callerOf(
 }
 
 export function currentCaller(
-  io: { env: Record<string, string | undefined>; stdinIsTTY: boolean },
+  io: { env: Record<string, string | undefined>; stdinIsTTY: boolean; cwd?: string },
   session?: string,
   extra?: Partial<CallerSources>,
 ): Caller {
@@ -793,7 +969,12 @@ export function currentCaller(
     stdinIsTTY: io.stdinIsTTY,
     managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
     paneProcesses: (pane) => paneProcesses(pane, session),
+    foreground: (pane) => paneForeground(pane, session),
+    home: homedir(),
     processStartOf: (pid) => processStartOf(pid),
+    ownerSignsElsewhere: ownerSignsElsewhereOnThisAccount,
+    confinedSeat: (pane, asked) => confinedSeatAt(io.cwd ?? process.cwd(), pane, asked),
+    sandboxed: runsInSeatbelt,
   };
   if (extra !== undefined) return placeCaller({ ...sources, ...extra }, session);
   const snapId = activeHerdrSnapshotId();
@@ -801,7 +982,7 @@ export function currentCaller(
     cachedCallerSnapshotId = snapId;
     cachedCurrentCallers.clear();
   }
-  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}`;
+  const key = `${session ?? ''}\0${io.stdinIsTTY ? '1' : '0'}\0${io.env.HERDR_PANE_ID ?? ''}\0${io.env.AGENT_UNATTENDED ?? ''}\0${(io as { cwd?: string }).cwd ?? process.cwd()}`;
   if (snapId !== null) {
     const hit = cachedCurrentCallers.get(key);
     if (hit !== undefined) return hit;
@@ -809,4 +990,17 @@ export function currentCaller(
   const placed = placeCaller(sources, session);
   if (snapId !== null) cachedCurrentCallers.set(key, placed);
   return placed;
+}
+
+/** Forgets every placement and ancestor walk this process remembers. The warm send host calls it
+ *  before and after each request, so no request ever sees another's placement. */
+export function resetCallerCaches(): void {
+  cachedAncestorsSnapshotId = null;
+  cachedDefaultAncestors = undefined;
+  cachedCallerSnapshotId = null;
+  cachedCallerSourcesRef = undefined;
+  cachedCurrentCallers.clear();
+  // Noted once per cause per run: the warm send host forgets them between requests, so each
+  // hosted line says what an in-process run of it would.
+  notedAncestorFailures.clear();
 }

@@ -17,6 +17,7 @@ import { readEvents, type EventPayload } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { readHistory } from '../src/send/history.ts';
 import { stagedStep } from '../src/send/steps.ts';
 import { fake, owner, world, type World } from './send-native-fixtures.ts';
 
@@ -88,7 +89,7 @@ function idOf(text: string): string {
 }
 
 describe('the send files its steps under the id it prints', () => {
-  test('a socket send prints its id on the last line and files staging and the leg under it', async () => {
+  test('a socket send prints its id on the last line; its first-leg delivery is its history line alone', async () => {
     made = world(null);
     declareEntity(made);
     declareSocket(made);
@@ -101,16 +102,14 @@ describe('the send files its steps under the id it prints', () => {
     expect(id).toMatch(UUID);
     expect(io.out.trimEnd().split('\n').at(-1)!.startsWith('lead: delivered (socket)')).toBe(true);
 
-    const steps = stepsOf(made, id);
-    expect(steps.map((step) => [step.kind, step.record_id])).toEqual([
-      ['message.staged', `${id}:staged`],
-      ['leg.tried', `${id}:leg.tried:socket`],
-    ]);
-    // The step carries the record's own pair, session and thread, and the record's signed instant.
-    expect(steps[0]).toMatchObject({ session: 'acme', from: 'owner', to: 'lead', thread: id, ts: expect.any(String) });
-    expect(steps[1]).toMatchObject({ via: 'socket', outcome: 'delivered' });
-    expect(typeof steps[1]!.ms).toBe('number');
-    expect(steps[1]!.ms!).toBeGreaterThanOrEqual(0);
+    // The send path diet (step 3): no step event; the history line carries what `team trace`
+    // reads as the staging and the leg (test/trace.test.ts).
+    expect(stepsOf(made, id)).toEqual([]);
+    const history = readHistory('acme', made.root, made.home, new Set([id]));
+    if (!history.ok) throw new Error(history.reason);
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({ from: 'owner', to: 'lead', thread: id, via: 'socket', outcome: 'delivered', rule: 'the owner' });
+    expect(history.entries[0]!.ms!).toBeGreaterThanOrEqual(0);
   });
 
   test('the --json face names the same id in its action summary and its ids', async () => {
@@ -125,7 +124,8 @@ describe('the send files its steps under the id it prints', () => {
     const doc = JSON.parse(io.out) as { ids: { sent: string }; action_summary: string };
     expect(doc.ids.sent).toMatch(UUID);
     expect(doc.action_summary).toBe(`lead: delivered (socket) (id ${doc.ids.sent})`);
-    expect(stepsOf(made, doc.ids.sent).map((step) => step.kind)).toContain('message.staged');
+    const history = readHistory('acme', made.root, made.home, new Set([doc.ids.sent]));
+    expect(history.ok && history.entries.map((entry) => entry.via)).toEqual(['socket']);
   });
 
   test("the sender's own webhook post is one step with its status and cost", async () => {

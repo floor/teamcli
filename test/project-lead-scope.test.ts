@@ -6,6 +6,7 @@
 // same project, by its own name, and the one thing that holds is admission: `team send` admits
 // the project lead to a lead of its teams, and to nobody else. Every sentence here is a
 // command's own, from runs this test makes against the real registries the launch writes.
+import { cwdTargetForReach } from './helpers/cwd-reach.ts';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -279,6 +280,8 @@ describe('the project lead changes nothing outside its own team', () => {
 
   test('down refuses the project lead on another team of its project', async () => {
     const io = leadIo(bravoRoot);
+    // This refusal targets bravo deliberately, rather than the lead's pane-proven alpha team.
+    cwdTargetForReach(home, bravoRoot, io, SESSION);
     const code = await runDown(['--dry-run'], io, downSources());
     expect(io.err).toBe('');
     expect(io.out).toContain('! down would refuse: only the owner or `leads` stops the team; this call is lead\n');
@@ -287,6 +290,8 @@ describe('the project lead changes nothing outside its own team', () => {
 
   test('add refuses the project lead on another team of its project', async () => {
     const io = leadIo(bravoRoot);
+    // This refusal targets bravo deliberately, rather than the lead's pane-proven alpha team.
+    cwdTargetForReach(home, bravoRoot, io, SESSION);
     const code = await runAdd(['helper'], io, addSources());
     expect(io.err).toBe('team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is lead\n');
     expect(code).toBe(1);
@@ -294,6 +299,8 @@ describe('the project lead changes nothing outside its own team', () => {
 
   test('remove refuses the project lead on another team of its project', async () => {
     const io = leadIo(bravoRoot);
+    // This refusal targets bravo deliberately, rather than the lead's pane-proven alpha team.
+    cwdTargetForReach(home, bravoRoot, io, SESSION);
     const code = await runRemove(['helper'], io, removeSources());
     expect(io.err).toBe('team remove: only the owner or `leads` removes a seat; this call is lead\n');
     expect(code).toBe(1);

@@ -125,6 +125,11 @@ export type SeatObservation = {
   // Parked or stopped: watched for attention, unsent text and model drift; idle is skipped.
   parked: boolean;
   stopped: boolean;
+  // The team's `.agents` folder when this pass records the out-of-tokens mark. Absent, the
+  // check reports and writes no mark.
+  agentsDir?: string;
+  // The file's role, when the seat is declared. A reviewer was holding a review.
+  role?: string;
   attention: Attention;
   // The dialog's own question, read off the pane when the profile places one: what the seat waits
   // to be asked about, quoted in the report. Null for every other screen.
@@ -136,6 +141,12 @@ export type SeatObservation = {
   // the seat's own word, resolved in the one `stateThresholds` call the pass makes for it. The
   // idle check reports at these windows, and every seat is handed its own answer.
   liveness: LivenessThresholds;
+  /** A drop is still queued for this seat. With unsent text held past `unsent_after`, the
+   *  seat is `blocked: unsent input`. Absent a caller that listed the folder, false. */
+  queued: boolean;
+  /** Unsent text held past `unsent_after` with mail still queued. The idle row and the idle
+   *  count both leave this seat out. Absent when the pass did not decide it. */
+  blocked?: boolean;
 };
 
 // Everything a team check may read about the team it is handed, built after the seat loop.
@@ -213,6 +224,7 @@ export const CHECK_NAMES = [
   'model-rule',
   'attention',
   'provider-error',
+  'out-of-tokens',
   'unsent',
   'idle',
   'extra',

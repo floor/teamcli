@@ -619,7 +619,7 @@ describe('team doctor', () => {
     await approve([], OWNER);
     writeRulesFiles();
     const none = await doctor({ sessionRunning: () => true });
-    expect(none.out).toContain('MISS  no watch has run for session acme-web: start `team watch`\n');
+    expect(none.out).toContain('MISS  no watch has run for session acme-web: run `team daemon status`, or the lead runs `team daemon install`\n');
     // The watch is the only missing thing and it blocks nothing: the line ends with the counts.
     expect(none.out).toContain('team doctor: 1 missing, 3 warnings\n');
     expect(none.out).not.toContain('block `up` and `add`');
@@ -637,7 +637,7 @@ describe('team doctor', () => {
     state('2026-10-03T13:50:00Z');
     const stale = await doctor({ sessionRunning: () => true });
     expect(stale.out).toContain(
-      "MISS  the watch's heartbeat is 12 min old (two intervals are 4 min): start `team watch`\n",
+      "MISS  the watch's heartbeat is 12 min old (two intervals are 4 min): run `team daemon status`, or the lead runs `team daemon install`\n",
     );
     expect(stale.out).toContain('team doctor: 1 missing, 3 warnings\n');
     expect(stale.code).toBe(1);
@@ -701,6 +701,9 @@ describe('team up', () => {
   });
 
   test("--dry-run prints the plan for the approved file, with each seat's rules and signature", async () => {
+    // This scene pins rules/profile bytes, not the default channel insertion.
+    edit((text) => text.replace('    name: claude-coordinator-acme\n', '    name: claude-coordinator-acme\n    channel: off\n')
+      .replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    channel: off\n'));
     await approve([], OWNER);
     const run = await up(['--dry-run'], OWNER);
     expect(run.out).not.toContain('the file is legacy');
@@ -726,11 +729,10 @@ describe('team up', () => {
     expect(run.out).not.toContain('pane send-text');
     expect(run.out).toContain('+ team rules --with-launch ');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
-    // The plan's last steps: the watch's own workspace, then its command in that pane.
-    expect(run.out).toContain(`+ herdr --session acme-web workspace create --cwd ${root} --label 'Watch · acme-web' --no-focus\n`);
-    expect(run.out).toContain("+ herdr --session acme-web pane run <pane of Watch · acme-web> '");
-    expect(run.out).toContain('watch --session acme-web');
-    expect(run.out).toContain('    (a desktop notification follows when the watch exits)\n');
+    // The daemon hosts the watch: the plan creates no Watch workspace and runs no watch command.
+    expect(run.out).not.toContain('Watch · acme-web');
+    expect(run.out).not.toContain('watch --session acme-web');
+    expect(run.out).not.toContain('a desktop notification follows when the watch exits');
     expect(run.out).toEndWith('dry run: nothing was run\n');
   });
 

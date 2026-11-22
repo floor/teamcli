@@ -30,14 +30,16 @@
 // busy-waits; `withLock` itself is untouched. A start whose wait
 // outlasts the deadline answers `locked`: refused, nothing cleared, nothing bound. The lock is
 // released when the listen lands and on every other way out of the section.
-import { closeSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createServer, connect, type Socket } from 'node:net';
+import { closeSync, fstatSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { dialing, serving, socketRuntime, type Conn, type ConnEvents, type SocketError } from '../runtime/bun-socket.ts';
 import { basename, dirname, join } from 'node:path';
 import { anotherPaneRefusal, callerVerdict, noPaneRefusal, standingOf, type Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { TaskRead, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { applyPolicy, bareRefusalId, type TaskPolicy } from './policy.ts';
 import { MAX_ANSWER_BYTES, MAX_REQUEST_BYTES, brokerSocket, encodeLine, parseRequest, type BrokerAnswer, type BrokerRequest } from './protocol.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** What one dispatch of the read produced: the adapter's read (with its notice, when the read
  *  was not the whole tracker), or a failure the broker keeps to its own terminal. */
@@ -440,25 +442,26 @@ async function startWalk(input: StartBrokerInput, path: string): Promise<StartBr
     } else {
       confirmed = undefined;
     }
-    const sockets = new Set<Socket>();
-    const server = createServer((socket) => {
-      sockets.add(socket);
-      socket.once('close', () => sockets.delete(socket));
-      serve(socket, input);
-    });
-    const failure = await new Promise<{ code?: string } | null>((done) => {
-      server.once('error', (error) => done({ code: (error as NodeJS.ErrnoException).code }));
-      server.listen(path, () => done(null));
-    });
-    if (failure) return { kind: 'bind-failed', code: failure.code };
-    // A later server-level error must not take the broker down silently.
-    server.on('error', (error) => input.stderr(`team broker: ${error.message}\n`));
-    const handle: BrokerHandle = {
-      close: () =>
-        new Promise<void>((done) => {
-          for (const socket of sockets) socket.destroy();
-          server.close(() => done());
+    const sockets = new Set<Conn>();
+    hostedCommit('Bun.listen');
+    const Bun = socketRuntime();
+    let server: ReturnType<typeof Bun.listen>;
+    try {
+      server = Bun.listen(
+        serving(path, (socket) => {
+          sockets.add(socket);
+          socket.onClose(() => sockets.delete(socket));
+          return serve(socket, input);
         }),
+      );
+    } catch (error) {
+      return { kind: 'bind-failed', code: (error as SocketError).code };
+    }
+    const handle: BrokerHandle = {
+      close: async () => {
+        for (const socket of sockets) socket.destroy();
+        server.stop(true);
+      },
     };
     return { kind: 'serving', cleared, handle };
   }
@@ -472,24 +475,26 @@ type Probe = 'live' | 'stale' | 'none';
  *  what turns that into a concrete answer. */
 function probeSocket(path: string): Promise<Probe> {
   return new Promise((done) => {
-    const socket = connect(path);
-    socket.once('connect', () => {
+    let settled = false;
+    const settle = (probe: Probe): void => {
+      if (settled) return;
+      settled = true;
       socket.destroy();
-      done('live');
+      done(probe);
+    };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(path, {
+      open: () => settle('live'),
+      close: (error) => settle(error?.code === 'ECONNREFUSED' ? 'stale' : 'none'),
     });
-    socket.once('error', (error) => {
-      socket.destroy();
-      done((error as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? 'stale' : 'none');
-    });
+    Bun.connect(options).catch(refused);
   });
 }
 
-function serve(socket: Socket, input: StartBrokerInput): void {
-  socket.on('error', () => socket.destroy());
+function serve(socket: Conn, input: StartBrokerInput): ConnEvents {
   socket.setTimeout(REQUEST_IDLE_MS, () => socket.destroy());
-  socket.setEncoding('utf8');
   let buffer = '';
-  socket.on('data', (chunk: string) => {
+  const text = (chunk: string): void => {
     buffer += chunk;
     const at = buffer.indexOf('\n');
     if (at < 0) {
@@ -500,10 +505,11 @@ function serve(socket: Socket, input: StartBrokerInput): void {
     buffer = '';
     socket.pause();
     void dispatch(socket, line, input);
-  });
+  };
+  return { text };
 }
 
-async function dispatch(socket: Socket, line: string, input: StartBrokerInput): Promise<void> {
+async function dispatch(socket: Conn, line: string, input: StartBrokerInput): Promise<void> {
   const request = parseRequest(line);
   if (!request) {
     answer(socket, { ok: false, at: 'caller', message: UNKNOWN_REQUEST });
@@ -611,7 +617,7 @@ function sourceIndex(position: number, taken: Set<number>): number {
   return index;
 }
 
-function answer(socket: Socket, value: BrokerAnswer): void {
+function answer(socket: Conn, value: BrokerAnswer): void {
   const line = encodeLine(value);
   if (line.length > MAX_ANSWER_BYTES) {
     socket.end(encodeLine({ ok: false, at: 'read', message: FAILED_READ }));

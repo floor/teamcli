@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import type { Caller, CallerSources } from '../src/caller.ts';
 import { standingOf } from '../src/caller.ts';
 import { runTeamCheck } from '../src/check/team.ts';
@@ -22,16 +22,19 @@ import { markStopped, seatIsStopped } from '../src/file/lines.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { agentsDir, findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
+import { CHANNEL_FLAG } from '../src/mcp/channel.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { placedCallerTeam, teamBinding } from '../src/registry/binding.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalOf } from '../src/approve/approval.ts';
 import { unverifiedRecordSentence } from '../src/approve/unverified-record.ts';
 import { recordedGeneration } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
-import { emptySession, readState, updateState } from '../src/state.ts';
+import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { intoRegistry, storedTeam, underRegistry, unreadableRegistryFolder } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -106,7 +109,9 @@ seats:
 // exactly as the entity's main orchestrator is. A restart of that seat, run from the main
 // orchestrator, is the pair a name comparison refuses.
 function crossTeamTargetYaml(entity: string): string {
-  return TEAM_YAML
+  // These admission scenes opt out of the channel so their exact diagnostic assertions keep their purpose.
+  return TEAM_YAML.split('\n  - role:').map((part, index) => index === 0 || /\n    channel:/.test(part)
+    ? part : part.replace('\n    launch: claude', '\n    channel: off\n    launch: claude')).join('\n  - role:')
     .replace('coordinator: lead', 'coordinator: orchestrator')
     .replace('    name: lead\n', '    name: orchestrator\n')
     .replace('workspace:\n', `entity: ${entity}\nworkspace:\n`);
@@ -284,6 +289,33 @@ function makeFixture(rawYaml = TEAM_YAML): Fixture {
   return { base, root, home, file, dir, yaml };
 }
 
+/** Admission, sign-off and output scenes opt out explicitly so channel setup adds no unrelated notice. */
+function withoutChannel(seat: string, rawYaml = TEAM_YAML): string {
+  const block = `    name: ${seat}\n`;
+  if (rawYaml.includes(block)) return rawYaml.replace(block, `${block}    channel: off\n`);
+  const flow = `name: ${seat},`;
+  if (rawYaml.includes(flow)) return rawYaml.replace(flow, `${flow} channel: off,`);
+  throw new Error(`the fixture declares no seat ${seat}`);
+}
+
+/** Resume and fresh-launch scenes keep the default channel with one registered root and roster. */
+function registerDefaultChannel(fixture: Fixture): void {
+  const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+  if (!loaded.ok) throw new Error('fixture team does not validate');
+  const agent = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+  if (agent === null || agent === undefined) throw new Error('the fixture has no worker record');
+  const lobby = join(fixture.home, '.config', 'team', 'lobby');
+  mkdirSync(lobby, { recursive: true, mode: 0o700 });
+  upsertTeam(fixture.home, teamIdOf(fixture.root), {
+    project: loaded.team.project,
+    session: loaded.team.session,
+    root: fixture.root,
+    lobby,
+    lobbies: { [loaded.team.session]: lobby },
+    roster: [{ agent: agent.id, seat: 'worker', role: 'implementer', leads: false }],
+  });
+}
+
 /** The team before its implementer seats were added: the file a session launched earlier still
  *  points at. `worker` is undeclared there, as today's seats are in a retired file. */
 function olderTeamYaml(yaml: string): string {
@@ -313,6 +345,22 @@ function recordMainOrchestrator(dir: string, session: string, pane: string): voi
     const held = (state.sessions[session] ??= emptySession());
     held.seats.orchestrator = { stage: 'ready', pane, workspace: 'ws-main' };
   });
+}
+
+/** The reach proof stays real; two recorded placements deliberately leave pane targeting unproven. */
+function cwdTargetForReach(fixture: Fixture, head: { session: string }, io: ReturnType<typeof testIo>): void {
+  // Pane-first falls back to cwd only when no unique team records this caller; this scene targets the other team.
+  const root = join(fixture.base, 'placement-shadow');
+  const dir = join(root, '.agents');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'team.yaml'), headTeamYaml('placement-shadow', 'other-entity'));
+  recordMainOrchestrator(dir, head.session, 'pane-main');
+  upsertTeam(fixture.home, teamIdOf(root), {
+    project: 'placement-shadow', entity: 'other-entity', session: head.session, root, at: NOW.toISOString(),
+  });
+  expect(placedCallerTeam(fixture.home, io)).toBeNull();
+  const target = teamBinding(fixture.home, fixture.root, undefined, io);
+  expect(target.kind === 'bound' ? target.team.root : null).toBe(fixture.root);
 }
 
 /**
@@ -466,6 +514,9 @@ function makeHarness(
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
+    // The fake panes' pids name no process of this scene: the machine's own table may hold a
+    // real one at that pid (low pids are system processes on Linux), so no birth reads here.
+    processStartOf: () => null,
     createWorkspace() {
       did.created += 1;
       if (opts.createFails) return null;
@@ -620,6 +671,81 @@ describe('the fixture temp folder', () => {
 });
 
 describe('team restart <seat>', () => {
+  test('a seat whose CLI exits back to its shell is relaunched in the same pane, keeping its sidebar place', async () => {
+    // Owner, 2026-11-13: a restarted seat moved to the end of the sidebar, because the restart
+    // closed its workspace and opened a new one. A clean exit now leaves the pane at its shell and
+    // the launch runs there: nothing is closed and no workspace is created.
+    const fixture = makeFixture();
+    // The pane is reused only where its record names the folder today's launch plans: the
+    // worker's own folder in the lobby.
+    const folder = join(fixture.home, '.config', 'team', 'lobby', 'worker');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab', start_cwd: folder };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    // Before the exit the CLI is in front; after it only the shell (pid 300) is, until the
+    // relaunch runs in the same pane and a new CLI (302) is in front again.
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    expect(did.typed).toContain('/exit');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
+  });
+
+  test('a legacy relative folder on record is read against the team root before it is compared', async () => {
+    // The record holds the lobby folder relative to the team root, as an older version wrote it.
+    // The runner's own working folder is not the root, so read against it the folder would differ.
+    const fixture = makeFixture();
+    const folder = join(fixture.home, '.config', 'team', 'lobby', 'worker');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab', start_cwd: relative(realpathSync(fixture.root), folder) };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(process.cwd()).not.toBe(realpathSync(fixture.root));
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(folder);
+  });
+
+  test('a pane with no folder on record is not reused: where it runs is unknown, so the seat starts fresh', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    let exited = false;
+    const typeText = sources.launch!.typeText;
+    sources.launch!.typeText = (session, pane, text) => { if (text === '/exit') exited = true; return typeText(session, pane, text); };
+    sources.upLaunch.processInfo = () => (exited && did.runs.length === 0 ? { shell: 300, foreground: [300] } : { shell: 300, foreground: [exited ? 302 : 301] });
+    sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, sources), io.err).toBe(0);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd?.startsWith('/')).toBe(true);
+  });
+
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
@@ -639,7 +765,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(1);
     expect(io.out).toContain('worker: input box: empty\n');
     expect(io.out).toContain('worker: turn: not working (free)\n');
-    expect(io.out).toContain('worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; no recorded conversation\n');
+    expect(io.out).toContain('worker: context: relaunch runs "claude --model claude-opus-5-5" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; no recorded conversation\n');
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
     expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
 
@@ -661,7 +787,7 @@ describe('team restart <seat>', () => {
   // whose native delivery was never written.
   test('a ready restart says pull-only when the final binding could not be written', async () => {
     function blocked(): { fixture: Fixture; io: ReturnType<typeof testIo> } {
-      const fixture = makeFixture();
+      const fixture = makeFixture(withoutChannel('worker'));
       updateState(fixture.dir, (state) => {
         const session = (state.sessions.acme ??= emptySession());
         session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
@@ -770,7 +896,7 @@ describe('team restart <seat>', () => {
   });
 
   test('a dev-mode restart records the mark and the caller it admitted', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('worker'));
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
       session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
@@ -852,7 +978,7 @@ describe('team restart <seat>', () => {
     // The shape the power-loss note measured: the session's launched pointer names a team file
     // that no longer holds today's seats, while the registry's roster still places the seat on
     // this team. The pointer is a place, not a frozen definition: the seat is declared, so the
-    // restart proceeds, and the fallback is spoken aloud.
+    // restart proceeds from the pane-proven team without a pointer fallback.
     const fixture = makeFixture();
     const lobby = join(fixture.home, '.config', 'team', 'lobby');
     mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
@@ -882,7 +1008,9 @@ describe('team restart <seat>', () => {
     expect(code).toBe(0);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(did.created).toBe(1);
-    expect(io.err).toContain('reading the team registered for session acme');
+    // Pane-first reads the proven team directly, so the retired-pointer fallback notice is absent.
+    expect(placedCallerTeam(fixture.home, io)?.root).toBe(fixture.root);
+    expect(io.err).not.toContain('reading the team registered for session acme');
   });
 
   test('real process sources place the caller in the registry team\'s own session', async () => {
@@ -919,7 +1047,9 @@ describe('team restart <seat>', () => {
     expect(code).toBe(0);
     expect(did.created).toBe(1);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
-    expect(io.err).toContain(`reading the team registered for session acme (${fixture.root})`);
+    // Pane-first reads the proven team directly, so the retired-pointer fallback notice is absent.
+    expect(placedCallerTeam(fixture.home, io)?.root).toBe(fixture.root);
+    expect(io.err).not.toContain(`reading the team registered for session acme (${fixture.root})`);
   });
 
   test('a seat name on two sessions\' teams resolves by placement, not by the shared name', async () => {
@@ -965,7 +1095,9 @@ describe('team restart <seat>', () => {
     expect(code).toBe(0);
     expect(did.created).toBe(1);
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
-    expect(io.err).toContain(`reading the team registered for session acme (${fixture.root})`);
+    // Pane-first reads the proven team directly, so the retired-pointer fallback notice is absent.
+    expect(placedCallerTeam(fixture.home, io)?.root).toBe(fixture.root);
+    expect(io.err).not.toContain(`reading the team registered for session acme (${fixture.root})`);
     expect(io.err).not.toContain(beta.root);
   });
 
@@ -1001,10 +1133,21 @@ describe('team restart <seat>', () => {
     upsertTeam(fixture.home, otherId, { project: 'beta', session: 'acme', root: otherRoot, at: NOW.toISOString() });
     setRoster(fixture.home, otherId, [{ agent: 'agt_444444444444', seat: 'worker', role: 'implementer' }]);
 
+    // A third team records the caller but not worker: pane-first is unproven while the two worker candidates stay ambiguous.
+    const shadowRoot = join(fixture.base, 'placement-shadow');
+    const shadowDir = join(shadowRoot, '.agents');
+    mkdirSync(shadowDir, { recursive: true });
+    writeFileSync(join(shadowDir, 'team.yaml'), olderTeamYaml(fixture.yaml));
+    updateState(shadowDir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-shadow-lead' };
+    });
+    upsertTeam(fixture.home, teamIdOf(shadowRoot), { project: 'placement-shadow', session: 'acme', root: shadowRoot, at: NOW.toISOString() });
+
     const { sources, did } = makeHarness(fixture, { initialRunning: false });
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
     const io = testIo(lobby, leadCaller);
 
+    expect(placedCallerTeam(fixture.home, io)).toBeNull();
     const code = await runRestart(['worker'], io, sources);
     expect(code).toBe(1);
     expect(did.created).toBe(0);
@@ -1161,14 +1304,14 @@ describe('team restart <seat>', () => {
     expect(checkIo.out).not.toContain('team add');
 
     // The gate behind the printed command, in the registry-listed shape: the roster's `leads`
-    // mark admits the lead, the map refuses a plain seat, and `team add` stays the owner's.
+    // mark admits the lead, and the default rule also admits the placed operator and `team add`.
     const loaded = loadTeamFile(fixture.root, { home: fixture.home });
     if (!loaded.ok) throw new Error('fixture team does not validate');
     const standingOfLead = standingOf(fixture.dir, 'acme', leadCaller);
     const standingOfOps = standingOf(fixture.dir, 'acme', opsCaller);
     expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfLead, () => NOW)).toEqual({ kind: 'ok' });
-    expect(gateVerdict(opsCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfOps, () => NOW)).toEqual({ kind: 'refused' });
-    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'add', standingOfLead, () => NOW)).toEqual({ kind: 'refused' });
+    expect(gateVerdict(opsCaller, loaded.team, fixture.root, fixture.home, 'restart', standingOfOps, () => NOW)).toEqual({ kind: 'ok' });
+    expect(gateVerdict(leadCaller, loaded.team, fixture.root, fixture.home, 'add', standingOfLead, () => NOW)).toEqual({ kind: 'ok' });
     expect(gateVerdict({ kind: 'owner' }, loaded.team, fixture.root, fixture.home, 'add', { session: 'acme' }, () => NOW)).toEqual({ kind: 'ok' });
 
     // And the lead runs the line as printed: the seat starts where nothing was closed.
@@ -1195,7 +1338,7 @@ describe('team restart <seat>', () => {
     expect(did.created).toBe(0);
   });
 
-  test('a lead --abandon closes a blocked non-lead seat, but refuses a working seat or a lead seat; a plain seat is refused by the map', async () => {
+  test('a lead --abandon closes a blocked non-lead seat, refuses a working seat and the orchestrator, and the operator may restart', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -1205,12 +1348,11 @@ describe('team restart <seat>', () => {
     });
     const leadCaller: Caller = { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' };
 
-    // 1. Refuses --abandon on the operator's seat: the map admits the lead, and the abandon rule
-    //    keeps a seat caller off the orchestrator's and the operator's seat.
+    // 1. Refuses --abandon on the orchestrator's seat. The operator seat is the lead's.
     const leadRun = makeHarness(fixture, { workerScreen: 'permission' });
-    const ioLead = testIo(fixture.root, leadCaller);
-    expect(await runRestart(['ops', '--abandon'], ioLead, leadRun.sources)).toBe(1);
-    expect(ioLead.err).toContain("does not abandon the orchestrator's or the operator's seat");
+    const ioOpsOnLead = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' });
+    expect(await runRestart(['lead', '--abandon'], ioOpsOnLead, leadRun.sources)).toBe(1);
+    expect(ioOpsOnLead.err).toContain("does not abandon the orchestrator's seat");
 
     // 2. Refuses --abandon on a working seat from a lead caller
     const workingRun = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
@@ -1227,13 +1369,12 @@ describe('team restart <seat>', () => {
     expect(blockedRun.did.closed).toEqual(['ws-old']);
     expect(ioBlocked.out).toContain('team restart: restarted worker; pane pane-old -> pane-new\n');
 
-    // 4. A plain seat of the team is refused by the map's `restart` row before any of that: it
-    //    admits the owner and the team's `leads`, and `ops` holds no `leads`.
+    // 4. The placed operator is admitted to restart another seat. The map row still names `leads`;
+    //    the default rule admits the operator at the gate.
     const opsRun = makeHarness(fixture);
     const ioOps = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-ops', session: 'acme' });
-    expect(await runRestart(['worker'], ioOps, opsRun.sources)).toBe(1);
-    expect(ioOps.err).toBe('team restart: only the owner or `leads` restarts a seat; this call is ops\n');
-    expect(opsRun.did.closed).toEqual([]);
+    expect(await runRestart(['worker'], ioOps, opsRun.sources)).toBe(0);
+    expect(ioOps.out).toContain('team restart: restarted worker');
   });
 
   test('a seat holding unsent text is restarted: the text is copied, the pane closed without typing, and the text pasted back', async () => {
@@ -1400,7 +1541,7 @@ describe('team restart <seat>', () => {
   // clears is the registry's own — in the same write that records the launch — and the stale
   // file beside it is left exactly as it was launched.
   test('a team\'s lead revives a registry team\'s stopped seat, clearing the registry mark the pointer leads to', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('worker'));
     intoRegistry(fixture.root, fixture.home);
     const stored = storedTeam(fixture.root, fixture.home);
     if (stored === null) throw new Error('the fixture team is not in the registry');
@@ -1463,7 +1604,7 @@ describe('team restart <seat>', () => {
   // then relaunches; a launch that does not reach ready puts the mark back. Every scene below
   // runs with dev mode off, except where it says otherwise.
   test('a team\'s lead restarts its own team\'s stopped seat: the mark is cleared in the run that launches it', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('parked-seat'));
     updateState(fixture.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
     });
@@ -1494,7 +1635,7 @@ describe('team restart <seat>', () => {
     name: parked-seat`,
     );
     expect(validateTeamFile(yaml).ok).toBe(true);
-    const fixture = makeFixture(yaml);
+    const fixture = makeFixture(withoutChannel('parked-seat', yaml));
     updateState(fixture.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
     });
@@ -1538,7 +1679,7 @@ describe('team restart <seat>', () => {
 `,
     );
     expect(validateTeamFile(yaml).ok).toBe(true);
-    const fixture = makeFixture(yaml);
+    const fixture = makeFixture(withoutChannel('parked-seat', yaml));
     updateState(fixture.dir, (state) => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
     });
@@ -1622,6 +1763,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
     expect(did.typed).toEqual(['/exit']);
@@ -1642,6 +1785,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['parked-seat'], io, sources), io.err).toBe(0);
     expect(io.err).toBe('');
@@ -1670,6 +1815,8 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['orchestrator'], io, sources), io.err).toBe(0);
     expect(did.typed).toEqual(['/exit']);
@@ -1724,11 +1871,183 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
     const io = testIo(fixture.root);
     io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
 
     expect(await runRestart(['orchestrator'], io, sources)).toBe(1);
     expect(io.err).toContain('not the pane this call is on');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(0);
+  });
+
+  // A `<seat>@<team>` address: the main orchestrator's own pane places it in its head team, so a
+  // bare `orchestrator` names its own seat and is refused as a self restart (2026-11-16, run from
+  // another team's folder). The address names the other team's seat, and the reach proof admits it.
+  describe('restart by <seat>@<team> address', () => {
+    function addressWorld(targetEntity = 'floor'): { fixture: Fixture; head: { root: string; dir: string; session: string } } {
+      const fixture = makeFixture(crossTeamTargetYaml(targetEntity));
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.orchestrator = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      });
+      const head = makeHeadTeam(fixture.base, 'floor', 'floor');
+      recordMainOrchestrator(head.dir, head.session, 'pane-main');
+      upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: targetEntity, session: 'acme', root: fixture.root, at: NOW.toISOString() });
+      upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
+      return { fixture, head };
+    }
+
+    test("the bare name from the main orchestrator's own folder is its own seat; another team's folder, or the address, reaches that team", async () => {
+      const { fixture, head } = addressWorld();
+      const bare = makeHarness(fixture, { workerName: 'orchestrator' });
+      const bareIo = testIo(head.root);
+      bareIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(placedCallerTeam(fixture.home, bareIo)?.root).toBe(head.root);
+      expect(await runRestart(['orchestrator'], bareIo, bare.sources)).toBe(1);
+      expect(bareIo.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+      expect(bare.did.closed).toEqual([]);
+
+      // Run in the other team's folder, the bare name is that folder's seat: a command that changes
+      // a team never carries the caller's own team into another team's folder.
+      const there = makeHarness(fixture, { workerName: 'orchestrator' });
+      const thereIo = testIo(fixture.root);
+      thereIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator', '--dry-run'], thereIo, there.sources), thereIo.err).toBe(0);
+      expect(thereIo.out).toContain('stop orchestrator in pane-old (free)\n');
+      expect(thereIo.out).toContain('herdr --session acme workspace create');
+      expect(thereIo.out + thereIo.err).not.toContain('cannot restart its own recorded pane');
+      expect(there.did.closed).toEqual([]);
+
+      const dryRun = makeHarness(fixture, { workerName: 'orchestrator' });
+      const dryIo = testIo(fixture.root);
+      dryIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@acme', '--dry-run'], dryIo, dryRun.sources), dryIo.err).toBe(0);
+      expect(dryIo.out).toContain(`! addressed: orchestrator of team acme in session acme (${teamIdOf(fixture.root)}) at ${fixture.root}\n`);
+      expect(dryIo.out).toMatch(/! orchestrator: would (resume conversation|start a fresh conversation)/);
+      expect(dryRun.did.closed).toEqual([]);
+      expect(dryRun.did.created).toBe(0);
+
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@acme'], io, sources), io.err).toBe(0);
+      expect(did.typed).toEqual(['/exit']);
+      expect(did.closed).toEqual(['ws-old']);
+      expect(did.created).toBe(1);
+      expect(io.out).toContain('team restart: restarted orchestrator; pane pane-old -> pane-new\n');
+    });
+
+    test('a head-team seat that is not the main orchestrator is refused the address, dev mode included', async () => {
+      const { fixture } = addressWorld();
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-hops', session: 'floor' });
+      io.env = { TEAMCLI_DEV_MODE: '1' };
+      expect(await runRestart(['orchestrator@acme'], io, sources)).toBe(1);
+      expect(io.err).toContain("orchestrator@acme: only that team's owner or `leads`, or the entity's main orchestrator, restarts a seat by address");
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    test("an address to another entity's team is refused", async () => {
+      const { fixture, head } = addressWorld('radio');
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@acme'], io, sources)).toBe(1);
+      expect(io.err).toContain('restarts a seat by address');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    test("an address naming the caller's own seat through its team id is a self restart", async () => {
+      const { fixture, head } = addressWorld();
+      setRoster(fixture.home, teamIdOf(head.root), [
+        { agent: 'agt_000000000000', seat: 'orchestrator', role: 'coordinator', leads: true },
+        { agent: 'agt_111111111111', seat: 'ops', role: 'coordinator' },
+      ]);
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart([`orchestrator@${teamIdOf(head.root)}`], io, sources)).toBe(1);
+      expect(io.err).toBe('team restart: the orchestrator cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it\n');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    // The registry record names session `acme-b`; the file's default is `acme`, and the state also
+    // holds an older `acme` session where the lead is placed and the worker runs. The address is
+    // judged in `acme-b` only: the lead is not placed there, so it is refused, and nothing in
+    // `acme` is stopped or launched — the bare name's search across sessions is never used.
+    test("an address is judged in its record's session only, never another session of the root", async () => {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const older = (state.sessions.acme ??= emptySession());
+        older.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+        older.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+        (state.sessions['acme-b'] ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-b', workspace: 'ws-b' };
+      });
+      upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', session: 'acme-b', root: fixture.root, at: NOW.toISOString() });
+      setRoster(fixture.home, teamIdOf(fixture.root), [
+        { agent: 'agt_000000000000', seat: 'lead', role: 'coordinator', leads: true },
+        { agent: 'agt_111111111111', seat: 'worker', role: 'implementer' },
+      ]);
+      const { sources, did } = makeHarness(fixture);
+
+      // The bare name keeps its search: the lead is admitted in `acme`, where it stands.
+      const bareDry = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker', '--dry-run'], bareDry, sources), bareDry.err).toBe(0);
+
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker@acme', '--dry-run'], io, sources)).toBe(1);
+      expect(io.out).not.toContain('! addressed:');
+      const real = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker@acme'], real, sources)).toBe(1);
+      expect(real.err).toContain('restarts a seat by address');
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+    });
+
+    // A refused address leaves no dev-mode trace in the target team: a governing team policy turns
+    // dev mode off, so a run with the variable set would log that it was ignored, but the
+    // address is refused before dev mode is read at all — dry and real.
+    test('a refused address writes no dev-mode line to the target team log', async () => {
+      const { fixture } = addressWorld();
+      const written = writePolicySet(fixture.home, { level: 'team', target: fixture.root, teamRoot: fixture.root, name: 'dev-mode', value: 'off' }, { now: NOW });
+      if (!written.ok) throw new Error(written.why);
+      const logPath = join(fixture.dir, LOG_FILE);
+      const before = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      for (const extra of [['--dry-run'], []]) {
+        const io = testIo(fixture.root, { kind: 'seat', name: 'ops', pane: 'pane-hops', session: 'floor' });
+        io.env = { TEAMCLI_DEV_MODE: '1' };
+        expect(await runRestart(['orchestrator@acme', ...extra], io, sources)).toBe(1);
+        expect(io.err).toContain('restarts a seat by address');
+        expect(`${io.out}${io.err}`).not.toContain('dev mode');
+      }
+      const after = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
+      expect(after).toBe(before);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+
+    test('an address takes no --file or --session, and a scope no record holds is refused', async () => {
+      const { fixture, head } = addressWorld();
+      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+      for (const extra of [['--session', 'acme'], ['--file', 'team.yaml']]) {
+        const io = testIo(fixture.root);
+        io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+        expect(await runRestart(['orchestrator@acme', ...extra], io, sources)).toBe(2);
+        expect(io.err).toContain('a <seat>@<team> address names its team');
+      }
+      const io = testIo(fixture.root);
+      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+      expect(await runRestart(['orchestrator@nowhere'], io, sources)).not.toBe(0);
+      expect(io.err).toContain('no team registry record matches "nowhere"');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
   });
 
   test("the entity's main orchestrator lifts a stopped seat's sign-off, and puts it back when the launch fails", async () => {
@@ -1745,6 +2064,8 @@ describe('team restart <seat>', () => {
     const failedHarness = makeHarness(fixture, { createFails: true });
     const failIo = testIo(fixture.root);
     failIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, failIo);
     expect(await runRestart(['parked-seat'], failIo, failedHarness.sources)).not.toBe(0);
     expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(true);
     expect(failIo.err).toContain('its sign-off was put back in the team file');
@@ -1753,6 +2074,7 @@ describe('team restart <seat>', () => {
     const { sources, did } = makeHarness(fixture);
     const okIo = testIo(fixture.root);
     okIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, okIo);
     expect(await runRestart(['parked-seat'], okIo, sources), okIo.err).toBe(0);
     expect(okIo.out).toContain('team restart: restarted parked-seat; pane none -> pane-new\n');
     expect(seatIsStopped(readFileSync(fixture.file, 'utf8'), 'parked-seat')).toBe(false);
@@ -1760,7 +2082,7 @@ describe('team restart <seat>', () => {
     expect(readState(fixture.dir).sessions.acme?.seats['parked-seat']?.stage).toBe('ready');
   });
 
-  test("the entity's main orchestrator is still refused --abandon on the orchestrator, operator, or a working seat", async () => {
+  test("the entity's main orchestrator is still refused --abandon on the orchestrator or a working seat", async () => {
     const fixture = makeFixture(crossTeamTargetYaml('floor'));
     updateState(fixture.dir, (state) => {
       const held = (state.sessions.acme ??= emptySession());
@@ -1773,20 +2095,30 @@ describe('team restart <seat>', () => {
     upsertTeam(fixture.home, teamIdOf(fixture.root), { project: 'acme', entity: 'floor', session: 'acme', root: fixture.root, at: NOW.toISOString() });
     upsertTeam(fixture.home, teamIdOf(head.root), { project: 'floor', entity: 'floor', session: head.session, root: head.root, at: NOW.toISOString() });
 
-    for (const leadTarget of ['orchestrator', 'ops']) {
-      const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
-      const io = testIo(fixture.root);
-      io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
-      expect(await runRestart([leadTarget, '--abandon'], io, sources), leadTarget).toBe(1);
-      expect(io.err, leadTarget).toBe('team restart: a seat caller does not abandon the orchestrator\'s or the operator\'s seat; this call is orchestrator\n');
-      expect(did.closed, leadTarget).toEqual([]);
-      expect(did.created, leadTarget).toBe(0);
-    }
+    const { sources, did } = makeHarness(fixture, { workerName: 'orchestrator' });
+    const io = testIo(fixture.root);
+    io.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(fixture, head, io);
+    expect(await runRestart(['orchestrator', '--abandon'], io, sources)).toBe(1);
+    expect(io.err).toBe('team restart: a seat caller does not abandon the orchestrator\'s seat; this call is orchestrator\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+
+    // The operator seat is past the owner wall. This fixture then stops on two agents of that name.
+    const opsHarness = makeHarness(fixture, { workerName: 'ops' });
+    const opsIo = testIo(fixture.root);
+    opsIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, opsIo);
+    expect(await runRestart(['ops', '--abandon'], opsIo, opsHarness.sources)).toBe(1);
+    expect(opsIo.err).toBe('team restart: ops: herdr lists more than one agent of this name; left as it is\n');
+    expect(opsHarness.did.closed).toEqual([]);
 
     // `--abandon` on a `working` worker seat is also refused to the main orchestrator.
     const workingHarness = makeHarness(fixture, { workerScreen: 'working', workerStatus: 'working' });
     const workingIo = testIo(fixture.root);
     workingIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, workingIo);
     expect(await runRestart(['worker', '--abandon'], workingIo, workingHarness.sources)).toBe(1);
     expect(workingIo.err).toContain('worker is working');
     expect(workingHarness.did.closed).toEqual([]);
@@ -1843,6 +2175,8 @@ describe('team restart <seat>', () => {
     const noEntityHarness = makeHarness(noEntityFixture, { workerName: 'orchestrator' });
     const noEntityIo = testIo(noEntityFixture.root);
     noEntityIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: noEntityHead.root, targetRoot: noEntityFixture.root });
+    // Pane-first: unproven placement keeps this security scene aimed at the other team's root.
+    cwdTargetForReach(noEntityFixture, noEntityHead, noEntityIo);
     expect(await runRestart(['orchestrator'], noEntityIo, noEntityHarness.sources)).toBe(1);
     expect(noEntityHarness.did.created).toBe(0);
 
@@ -1870,6 +2204,7 @@ describe('team restart <seat>', () => {
     const noOrchestratorHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const noOrchestratorIo = testIo(fixture.root);
     noOrchestratorIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, noOrchestratorIo);
     expect(await runRestart(['orchestrator'], noOrchestratorIo, noOrchestratorHarness.sources)).toBe(1);
     expect(noOrchestratorHarness.did.created).toBe(0);
 
@@ -1884,6 +2219,7 @@ describe('team restart <seat>', () => {
     const otherLeadHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const otherLeadIo = testIo(fixture.root);
     otherLeadIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, otherLeadIo);
     expect(await runRestart(['orchestrator'], otherLeadIo, otherLeadHarness.sources)).toBe(1);
     expect(otherLeadHarness.did.created).toBe(0);
 
@@ -1898,15 +2234,17 @@ describe('team restart <seat>', () => {
     const singleLeadsHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const singleLeadsIo = testIo(fixture.root);
     singleLeadsIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, singleLeadsIo);
     expect(await runRestart(['orchestrator'], singleLeadsIo, singleLeadsHarness.sources), singleLeadsIo.err).toBe(0);
     expect(singleLeadsHarness.did.created).toBe(1);
 
     // 3. Restore valid head `team.yaml`, then corrupt `~/.config/team/teams.yaml`: unreadable registry fails closed.
     writeFileSync(headFile, validHeadText);
-    writeFileSync(join(fixture.home, '.config', 'team', 'teams.yaml'), 'teams:\n  broken: [\n');
     const unreadableHarness = makeHarness(fixture, { workerName: 'orchestrator' });
     const unreadableIo = testIo(fixture.root);
     unreadableIo.callerSources = sharedFleetSources({ headPane: 'pane-main', headRoot: head.root, targetRoot: fixture.root });
+    cwdTargetForReach(fixture, head, unreadableIo);
+    writeFileSync(join(fixture.home, '.config', 'team', 'teams.yaml'), 'teams:\n  broken: [\n');
     expect(await runRestart(['orchestrator'], unreadableIo, unreadableHarness.sources)).toBe(1);
     expect(unreadableHarness.did.created).toBe(0);
   });
@@ -2325,10 +2663,12 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   test('both records agreeing on one id resume it on the new declaration', async () => {
     const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep' });
+    registerDefaultChannel(fixture);
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(run.did.runs.join('\n')).toContain(CHANNEL_FLAG);
     expect(io.err).toBe('');
     const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
     expect(log).toContain('worker: resuming session ses_keep on the new declaration');
@@ -2345,7 +2685,9 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   // `team up` can adopt in place, so the check names neither: the repair is `team up`, whose own
   // plan writes the restored launch identity before its address pass reads the pane.
   test('check names team up for a replaced process it can prove restored, and never a restart', async () => {
-    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
+    // The team file opts the worker in to the socket (`inbound: accept`): the launch's own accept
+    // authorizes nothing alone.
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true, yaml: TEAM_YAML.replace('    name: worker\n', '    name: worker\n    inbound: accept\n') });
     // The registry record a plain-name send resolves: the check reads the seat's agent record
     // through it, and the restart's own binding reads the same one.
     upsertTeam(fixture.home, teamIdOf(fixture.root), {
@@ -2360,8 +2702,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const sockets = join(fixture.base, 'sockets');
     mkdirSync(sockets, { recursive: true });
     writeFileSync(join(sockets, '201.sock'), '');
-    // The launch's generated settings declare accept, backdated so the socket stands newer; the
-    // team file names no word of its own, and a generated declaration admits the socket alone.
+    // The launch's generated settings declare accept, backdated so the socket stands newer, and the
+    // team file's own word opts the seat in.
     const settings = cliHookSettingsPath(fixture.dir, 'acme', 'worker');
     if (settings === null) throw new Error('the fixture declares no settings path for worker');
     mkdirSync(dirname(settings), { recursive: true });
@@ -2425,7 +2767,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
-    expect(run.did.runs.join('\n')).not.toContain('resume');
+    expect(run.did.runs.join('\n')).not.toMatch(/(^|\s)(--resume|-r|resume)(=|\s|$)/);
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.id).toBe('seat_0123456789ab');
     expect(seat?.agent_session).toBe('ses_new');
@@ -2449,7 +2791,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   // and proves nothing (a socket that is not listening here), so the restart says exactly that
   // (pull-only), and the class a send prints must say the same: the runtime queue is addressed by
   // the conversation the records bind, and an endpoint alone never wakes anybody.
-  test('a restart whose new pane and endpoint name no thread ends pull-only, and the class claims no wake', async () => {
+  test('a restart whose new pane and endpoint name no thread is no queue, and the class falls to its typed wake', async () => {
     const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
     updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
     const BOUND = 'prs_fedcba987654';
@@ -2501,8 +2843,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
       state: seat,
     });
-    expect(delivery.class).toBe('pull-on-turn');
-    expect(delivery.words).toBe('queued; worker reads it at its next turn, and nothing here gives it one (pull-only)');
+    // No queue takes the message; the profile's typed wake is what reaches the seat.
+    expect(delivery.class).toBe('typed-wake');
     expect(delivery.evidence.endpoint).toBe(false);
     expect(delivery.evidence.conversation).toBe(false);
     // The run says which read proved nothing, so a reader can tell an unreadable endpoint from a
@@ -2568,6 +2910,85 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(log).toContain(`worker: its Codex endpoint holds thread ${THREAD}; bound as the seat's session`);
   });
 
+  // A managed Codex seat whose endpoint could not start must not be stopped first: the preflight
+  // is read before the stop, and a refusal leaves the old CLI running with nothing typed.
+  test('a restart whose managed Codex endpoint could not start stops nothing', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const asked: string[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      ...managedEndpoint(fixture, 'prs_fedcba987654'),
+      preflight: (input: { seat: string }) => { asked.push(input.seat); return 'no socket path this build can bind'; },
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const before = readState(fixture.dir).sessions.acme?.seats.worker;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).not.toBe(0);
+    expect(asked).toEqual(['worker']);
+    expect(run.did.typed).toEqual([]);
+    expect(io.err).toContain('no socket path this build can bind; left running, nothing typed');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker).toEqual(before);
+  });
+
+  // The decision before the stop is the plan's own: a line that opts out of the endpoint plans no
+  // managed launch, so its preflight is never asked and the restart goes on.
+  test('a restart whose line plans no managed endpoint never asks the endpoint preflight', async () => {
+    const line = 'codex -m gpt-6.1-sol --no-daemon';
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_old',
+      declaredCli: 'codex',
+      launch: line,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${line}`),
+    });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const asked: string[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      ...managedEndpoint(fixture, 'prs_fedcba987654'),
+      preflight: (input: { seat: string }) => { asked.push(input.seat); return 'would refuse'; },
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    await runRestart(['worker'], io, run.sources);
+    expect(asked).toEqual([]);
+    expect(io.err).not.toContain('would refuse');
+  });
+
+  // A shipped launcher resolves its own line, which the plan attaches to the endpoint even when the
+  // recorded line opted out: the preview reads the resolved launch, so the preflight is asked and
+  // its refusal stops nothing.
+  test('a shipped-launcher restart asks the preflight of the resolved launch and stops nothing on refusal', async () => {
+    const line = 'codex -m gpt-6.1-sol --no-daemon';
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_old',
+      declaredCli: 'codex',
+      launch: line,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${line}\n    launcher: codex\n    cwd: .`),
+    });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const asked: string[] = [];
+    run.sources.upLaunch.codexEndpoint = {
+      ...managedEndpoint(fixture, 'prs_fedcba987654'),
+      preflight: (input: { seat: string }) => { asked.push(input.seat); return 'the endpoint folder is not a plain directory'; },
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker'], io, run.sources);
+    expect(io.err).toContain('the endpoint folder is not a plain directory; left running, nothing typed');
+    expect(code).not.toBe(0);
+    expect(asked).toEqual(['worker']);
+    expect(run.did.typed).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+  });
+
   // The ambiguous reading: the endpoint holds two threads, so neither is proven to be this seat's.
   // Nothing is bound, and the restart stays honest about what a send will do.
   test('a restart whose Codex endpoint holds more than one thread binds none and stays pull-only', async () => {
@@ -2596,12 +3017,14 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {
     const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
+    registerDefaultChannel(fixture);
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(run.did.runs.join('\n')).toContain(CHANNEL_FLAG);
     expect(io.err).toBe('');
   });
 
@@ -2722,6 +3145,157 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toBe('');
   });
 
+  test('a restarted seat that declares a relative folder records it absolute, against the team root', async () => {
+    // A Cursor seat's own folder, written relative to the project: the start check returns it as
+    // written, and the record must still hold the absolute folder (a relative one made every
+    // client key's placement check refuse).
+    const yaml = CURSOR_TEAM_YAML
+      .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      cli: 'cursor',
+      model: 'Grok',
+      version: '4.7',
+      yaml,
+      launch: 'cursor-agent --model cursor-model',
+      foregroundArgv0: 'cursor-agent',
+      newPaneScreen: CURSOR_IDLE,
+      launched: true,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+    const recorded = readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd;
+    expect(recorded).toBe(join(fixture.root, 'web'));
+    expect(isAbsolute(recorded!)).toBe(true);
+  });
+
+  for (const prior of [{ label: 'an older absolute folder', value: '/elsewhere/old-seat-folder' }, { label: 'a malformed value', value: 42 }]) {
+    test(`a replacement workspace records its own folder over ${prior.label}`, async () => {
+      // The prior record named another folder (or no path at all); the restart makes a new
+      // workspace, and that workspace's folder is the one recorded, without a crash.
+      const yaml = CURSOR_TEAM_YAML
+        .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+        .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+      const { fixture, run } = seeded({
+        registry: 'ses_keep', state: 'ses_keep', cli: 'cursor', model: 'Grok', version: '4.7', yaml,
+        launch: 'cursor-agent --model cursor-model', foregroundArgv0: 'cursor-agent', newPaneScreen: CURSOR_IDLE, launched: true,
+      });
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme!.seats.worker as { start_cwd?: unknown }).start_cwd = prior.value;
+      });
+      run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+      mkdirSync(join(fixture.root, 'web'), { recursive: true });
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+      expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
+      // The folder carried while the record was dropped is gone once the record holds it again.
+      expect((readState(fixture.dir).sessions.acme as { retained_start_cwd?: unknown }).retained_start_cwd).toBeUndefined();
+    });
+  }
+
+  test('a seat whose own folder its sandbox refuses is not stopped: its record and folder stay as they are', async () => {
+    // A Grok seat whose own folder its sandbox refuses. Before 2026-11-15 the old pane was closed,
+    // the relaunch left out, and the record dropped; the relaunch plan is now read before the stop.
+    const yaml = GROK_TEAM_YAML
+      .replace('    launch: grok', '    launch: grok\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: GROK_SESSION, cli: 'grok', model: 'Grok', version: '4.7', yaml, launch: 'grok',
+      workerSession: GROK_SESSION, launched: true, foregroundArgv0: 'grok', newPaneScreen: GROK_IDLE,
+    });
+    updateState(fixture.dir, (state) => {
+      const worker = state.sessions.acme!.seats.worker!;
+      delete (worker as { id?: string }).id;
+      worker.start_cwd = '/elsewhere/where-it-ran';
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain('left as it is');
+    expect(run.did.closed).toEqual([]);
+    const session = readState(fixture.dir).sessions.acme as { seats: Record<string, { start_cwd?: string }>; retained_start_cwd?: Record<string, unknown> };
+    expect(session.seats.worker?.start_cwd).toBe('/elsewhere/where-it-ran');
+    expect(session.retained_start_cwd).toBeUndefined();
+  });
+
+  test('a pane recorded in another folder than today\'s plan is not reused: the seat starts in a fresh workspace', async () => {
+    const yaml = CURSOR_TEAM_YAML
+      .replace('    launch: cursor-agent --model cursor-model', '    launch: cursor-agent --model cursor-model\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = seeded({
+      registry: 'ses_keep', state: 'ses_keep', cli: 'cursor', model: 'Grok', version: '4.7', yaml,
+      launch: 'cursor-agent --model cursor-model', foregroundArgv0: 'cursor-agent', newPaneScreen: CURSOR_IDLE, launched: true,
+    });
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    mkdirSync(join(fixture.root, 'old'), { recursive: true });
+    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = join(fixture.root, 'old'); });
+    // The old pane returns to its shell after the exit: in the same folder it would be reused.
+    run.sources.upLaunch.processInfo = (_session, pane) => (pane === 'pane-old' ? { shell: 100, foreground: [100] } : { shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--abandon'], io, run.sources), io.err).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.created).toBeGreaterThan(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.start_cwd).toBe(join(fixture.root, 'web'));
+  });
+
+  /** The Grok seat at pane-old, its CLI (200) in front until /exit is typed; then the pane stands
+   *  at its shell (100) until a relaunch runs there and draws Grok's idle prompt. */
+  function grokKeptPane(yaml: string, startCwd: (fixture: Fixture) => string) {
+    const scene = seeded({
+      registry: GROK_SESSION, cli: 'grok', model: 'Grok', version: '4.7', yaml, launch: 'grok',
+      workerSession: GROK_SESSION, launched: true, foregroundArgv0: 'grok', newPaneScreen: GROK_IDLE,
+    });
+    const { fixture, run } = scene;
+    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.start_cwd = startCwd(fixture); });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
+    const exited = () => run.did.typed.length > 0;
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (exited() && run.did.runs.length === 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
+    run.sources.upLaunch.processInfo = (_session, pane) =>
+      (pane === 'pane-old' && exited() && run.did.runs.length === 0 ? { shell: 100, foreground: [100] } : { shell: 100, foreground: [200] });
+    const paneText = run.sources.upLaunch.paneText;
+    run.sources.upLaunch.paneText = (session, pane) => (pane === 'pane-old' && run.did.runs.length > 0 ? GROK_IDLE : paneText(session, pane));
+    run.sources.upLaunch.workspacePanes = (_session, workspace) => (workspace === 'ws-old' ? ['pane-old'] : []);
+    return scene;
+  }
+
+  test('a Grok pane kept at its shell in its own folder is relaunched there, not stopped and refused', async () => {
+    // 2026-11-14: a restart stopped a Grok seat, kept its pane at the shell, and then refused the
+    // in-place launch ("its reused pane has no recorded start folder"), leaving the seat stopped.
+    const { fixture, run } = grokKeptPane(GROK_TEAM_YAML, (f) => join(f.base, 'worker-tree'));
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const code = await runRestart(['worker'], io, run.sources);
+    expect(io.err).not.toContain('no recorded start folder');
+    expect(code, io.err).toBe(0);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
+  });
+
+  test('a launch the plan refuses is refused before the seat is stopped: the running seat keeps running', async () => {
+    // The seat's folder is outside its Grok sandbox grants: the relaunch would be refused, so the
+    // restart refuses first, and nothing is typed or closed.
+    const yaml = GROK_TEAM_YAML
+      .replace('    launch: grok', '    launch: grok\n    cwd: web')
+      .replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\n  protected: []\n');
+    const { fixture, run } = grokKeptPane(yaml, (f) => join(f.root, 'web'));
+    mkdirSync(join(fixture.root, 'web'), { recursive: true });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain('left as it is');
+    expect(run.did.typed).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-old');
+  });
+
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
     const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
     const { fixture, run } = seeded({
@@ -2752,6 +3326,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // The launch line runs the CLI inside a quoted script: a word after the closing quote never
     // reaches `claude`, so the resume and the profile's options go inside it, and the pre-close
     // line quotes the line the run launches rather than the bare declaration.
+    // This scene proves resume/profile placement; opt out of the unrelated default channel.
     const launch = 'zsh -lc "claude --model claude-opus-5-5"';
     const worker = `  - role: implementer
     name: worker
@@ -2767,7 +3342,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       workerSession: 'ses_keep',
       launched: true,
       launch,
-      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `channel: off\n    launch: ${launch}`)),
     });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
     const io = testIo(fixture.root, { kind: 'owner' });
@@ -2782,7 +3357,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(ran?.startsWith('AGENT_UNATTENDED=1 zsh -lc "claude --model claude-opus-5-5 --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt ')).toBe(true);
     expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
     expect(io.out).toContain(
-      `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace and resumes the recorded conversation ses_keep\n`,
+      `worker: context: relaunch runs "${resumed}" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) and resumes the recorded conversation ses_keep\n`,
     );
     // The recipe the launch records is the declared line, with the resume it carried.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
@@ -2869,6 +3444,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // option, not the CLI's continue. Both lines carry the recorded conversation, and the
     // profile's options go inside the script with it. The line is planned and recorded here;
     // the next scene runs one.
+    // This scene proves resume/profile placement; opt out of the unrelated default channel.
     for (const launch of ['/bin/sh -c "claude --model claude-opus-5-5"', 'zsh -c "claude --model claude-opus-5-5"']) {
       const worker = `  - role: implementer
     name: worker
@@ -2884,7 +3460,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         workerSession: 'ses_keep',
         launched: true,
         launch,
-        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `channel: off\n    launch: ${launch}`)),
       });
       run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
       const io = testIo(fixture.root, { kind: 'owner' });
@@ -3145,6 +3721,27 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('worker: not resuming its recorded session (its launch line has no measured resume form)');
   });
 
+  test('a launch line that names its own conversation is said as a resume, never as a fresh start', async () => {
+    // Seen live: the record carried no conversation, the line ran `codex … resume <id>`, and the
+    // context line said "without passing the old transcript". The line says what it runs.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_live',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_pinned',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 100, foreground: [200] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain('resume ses_pinned');
+    expect(io.out).toContain('and resumes conversation ses_pinned, named in its launch line');
+    expect(io.out).not.toContain('without passing the old transcript');
+  });
+
   test('a recorded launcher that already names the bound id resumes it unchanged', async () => {
     // No second resume word: the line's own selection is the one the record binds.
     const { fixture, run } = seeded({
@@ -3228,7 +3825,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
     // The caller's own flag is the reason: the context line does not present it as none recorded.
     expect(io.out).toContain(
-      'worker: context: workspace close ends the pane; relaunch runs "codex -m gpt-6.1-sol" in a new workspace without passing the old transcript; abandoned by the caller\n',
+      'worker: context: relaunch runs "codex -m gpt-6.1-sol" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; abandoned by the caller\n',
     );
   });
 
@@ -3263,9 +3860,51 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toBe('');
   });
 
-  test('--fresh refuses a launch line that itself names a conversation, before the stop', async () => {
-    // A fresh start cannot run a line that selects a conversation of its own: the stop is not
-    // made and nothing is typed.
+  test('--fresh strips a codex launch line that names another conversation, and starts fresh', async () => {
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_other',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--fresh'], io, run.sources), io.err + io.out).toBe(0);
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.launch ?? '').not.toMatch(/(^|\s)(--resume|-r|resume)(=|\s|$)/);
+    expect(readFileSync(join(agentsDir(fixture.home), `${agentId}.yaml`), 'utf8')).toContain('agent_session: null');
+    expect(run.did.runs).toHaveLength(1);
+    expect(run.did.runs[0] ?? '').not.toMatch(/(^|\s)(--resume|-r|resume)(=|\s|$)/);
+  });
+
+  test('--fresh refuses a bare codex resume line it cannot prove, and changes nothing', async () => {
+    const { fixture, run, agentId } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex resume',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const path = join(agentsDir(fixture.home), `${agentId}.yaml`);
+    const before = readFileSync(path, 'utf8');
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker', '--fresh'], io, run.sources);
+    expect(code, io.err + io.out).toBe(1);
+    expect(io.err).toContain('worker: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)');
+    expect(run.did.runs).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.typed).toEqual([]);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('without --fresh a codex launch line that names another conversation is still refused', async () => {
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',
@@ -3274,15 +3913,19 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       launch: 'codex -m gpt-6.1-sol resume ses_other',
     });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const before = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
     const io = testIo(fixture.root, { kind: 'owner' });
 
-    const code = await runRestart(['worker', '--fresh'], io, run.sources);
+    const code = await runRestart(['worker'], io, run.sources);
+    expect(code, io.err + io.out).toBe(1);
+    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)');
     expect(run.did.runs).toEqual([]);
-    expect(code).toBe(1);
     expect(run.did.closed).toEqual([]);
     expect(run.did.created).toBe(0);
     expect(run.did.typed).toEqual([]);
-    expect(io.err).toContain('worker: its launch line itself names a conversation, so --fresh cannot start a new one; left as it is (clear the resume selection from its launch line for a fresh start)');
+    const after = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(after?.launch).toBe(before?.launch);
+    expect(after?.reach.agent_session).toBe('ses_codex');
   });
 
   test('--fresh starts fresh when the launch line itself sets a new session id', async () => {
@@ -3437,7 +4080,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
     // The context line repeats the reason the run gave: it never reads as a silent fresh start.
     expect(io.out).toContain(
-      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
+      'worker: context: relaunch runs "claude --model claude-opus-5-5" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; not resuming its recorded conversation (its live agent session is not the recorded one)\n',
     );
   });
 
@@ -3471,7 +4114,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('worker: not resuming its recorded session (the seat record changed before the launch)');
     // The carried resume was dropped under the run lock: the context line says so, with the why.
     expect(io.out).toContain(
-      'worker: context: workspace close ends the pane; relaunch runs "claude --model claude-opus-5-5" in a new workspace without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
+      'worker: context: relaunch runs "claude --model claude-opus-5-5" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript; its recorded conversation was dropped before the launch (the seat record changed before the launch)\n',
     );
   });
 
@@ -3639,6 +4282,7 @@ describe('independent checks: restart --fresh', () => {
       lifecycle: 'running',
       by: 'team up',
     });
+    registerDefaultChannel(fixture);
     // The old conversation's own file, where a CLI keeps it: the run may start a new
     // conversation, and nothing it does may touch this file's bytes.
     const sessionsDir = join(fixture.home, '.claude', 'sessions');
@@ -3658,6 +4302,7 @@ describe('independent checks: restart --fresh', () => {
     expect(io.err).toBe('');
     expect(readFileSync(transcript, 'utf8')).toBe(bytes);
     expect(did.runs.join('\n')).toContain('claude --model claude-opus-5-5');
+    expect(did.runs.join('\n')).toContain(CHANNEL_FLAG);
     expect(did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     // The new conversation's id is whatever the new pane reported — not the recorded one — and
     // both records carry the SAME new id.
@@ -3666,6 +4311,66 @@ describe('independent checks: restart --fresh', () => {
     expect(minted).not.toBe('ses_keep');
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe(minted);
     expect(io.out).toContain('started fresh by the caller');
+  });
+
+  test('--fresh as the placed lead clears a pinned resume from the agent record and starts without it', async () => {
+    const fixture = makeFixture();
+    const pin = 'ses_pin';
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+        agent_session: pin,
+      };
+    });
+    const recorded = registerAgent(fixture.home, {
+      name: 'worker',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: `claude --model claude-opus-5-5 -r ${pin}`,
+      reach: {
+        team: teamIdOf(fixture.root),
+        seat: 'worker',
+        session: 'acme',
+        pane: 'pane-old',
+        address: null,
+        agent_session: pin,
+      },
+      seat_handle: 'seat_0123456789ab',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      settings: { voice: { tone: 'quiet' } },
+      by: 'team up',
+    });
+    const agentPath = join(agentsDir(fixture.home), `${recorded.id}.yaml`);
+    const before = readFileSync(agentPath, 'utf8');
+    const signingOf = (text: string) => text.slice(text.indexOf('signing:\n'), text.indexOf('lab:'));
+    const settingsOf = (text: string) => text.slice(text.indexOf('settings:\n'));
+    const { sources, did } = makeHarness(fixture, { workerSession: pin });
+    sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const agents = sources.upLaunch.agents;
+    sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+      agent.pane.startsWith('pane-new') ? { ...agent, agent: 'claude-code', session: 'ses_minted' } : agent
+    ));
+    const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+    expect(await runRestart(['worker', '--fresh'], io, sources)).toBe(0);
+    const ran = did.runs.join('\n');
+    expect(ran).toContain('claude --model claude-opus-5-5');
+    expect(ran).not.toContain(pin);
+    expect(ran).not.toMatch(/(?:^|\s)-r(?:\s|$)/);
+    const after = readFileSync(agentPath, 'utf8');
+    expect(after).not.toContain(pin);
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).not.toBe(pin);
+    expect(readFileSync(join(fixture.dir, LOG_FILE), 'utf8')).toContain('[lead]');
+    expect(signingOf(after)).toBe(signingOf(before));
+    expect(settingsOf(after)).toBe(settingsOf(before));
   });
 
   test('--fresh revives a signed-off seat the way a plain restart does', async () => {
@@ -3832,7 +4537,7 @@ describe('a stored approval that does not verify', () => {
   }
 
   test('dev mode says the record and the re-sign command, and continues without signing', async () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture(withoutChannel('worker'));
     const planted = plantUnverifiedApproval(fixture);
     const sources = ready(fixture);
     const io = testIo(fixture.root, { kind: 'owner' });

@@ -7,27 +7,80 @@ process_names:
   - codex
 tested:
   from: '0.157.0'
-  to: '0.161.0'
+  to: '0.167.0'
 unattended:
   - -a
   - never
   - -s
   - danger-full-access
   - --no-alt-screen
-# The feature settings every Codex seat's launch pins, appended last as `-c features.<pair>`.
-# `codex --help` documents `-c, --config <key=value>` as "Override a configuration value ... dotted
-# path ... parsed as TOML", and a scratch CODEX_HOME run of `codex features list` printed the row
-# `mcp_oauth_refresh_coordination  under development  false` among its 160 rows. The same command
-# with a trailing `-c features.mcp_oauth_refresh_coordination=true` printed that row as `true` and
-# exited 0, so a config word after the subcommand is read. `codex resume --help -c
-# features.mcp_oauth_refresh_coordination=false` exited 0 and printed
-# `Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]`, so the pin rides a resumed seat's
-# `resume <id>` line too. A duplicated `-c` for one key took the last value in both orders, so a
-# pin appended after the line's own words is the effective set: every seat then presents the same
-# settings to the one background server they share, and no seat meets its
-# "background server has incompatible feature settings" dialog.
+# An earlier recipe pinned this feature false after measuring that default on Codex 0.161.0.
+# Current recipes remove that historical pin: a fixed override can differ from the shared server.
+# Old recorded recipes shed that exact pair through currentCodexRecipe before relaunch.
+#
+# A seat whose `desktop_control` is false drives neither the user's desktop nor browser: those
+# carry signed-in accounts. These four are the switches, measured on codex-cli 0.167.0 in a scratch
+# CODEX_HOME: `codex features list` printed `computer_use`, `browser_use`,
+# `browser_use_external` and `in_app_browser` as `stable true`, and the same command with
+# `-c features.<name>=false` for each printed them `false`.
+# `codex --help`, `codex app-server --help` and `codex app-server daemon --help` all document
+# `--disable <FEATURE>` as "Equivalent to `-c features.<name>=false`". A pin rides every TUI
+# line and the managed app-server's start words (`codexEndpointConfig`), because an attached TUI
+# runs its turns under the app-server's configuration, not its own; the shared background server
+# must hold the same set, or a TUI that meets it shows the incompatible-settings dialog.
+#
+# `browser_use_full_cdp_access` is the fifth switch (codex-cli 0.167.0, scratch CODEX_HOME:
+# `stable true`, and `false` under `-c features.browser_use_full_cdp_access=false`). `apps` is
+# the ChatGPT apps and connectors switch: the built-in `codex_apps` MCP server whose tools act
+# under the signed-in ChatGPT account (`mcp__codex_apps__*`). Same measurement: `apps  stable
+# true`, and `false` under `-c features.apps=false`; `codex_apps` is not in the user's config and
+# needs a ChatGPT login to list tools, so its removal was not seen in a scratch home.
 features:
-  - mcp_oauth_refresh_coordination=false
+  - computer_use=false
+  - browser_use=false
+  - browser_use_external=false
+  - in_app_browser=false
+  - browser_use_full_cdp_access=false
+  - apps=false
+# The team's `desktop_control` setting, per seat, on by default. On: the feature pins named here
+# are lifted and no `config` pair is placed, so the seat runs with the user's own configuration.
+# Set false: the six feature pins above and the `config` pairs below ride the seat's line and its
+# managed app-server's start words.
+#
+# The computer-control tools also come from MCP servers a desktop app registers in the user's
+# Codex config (`cua_repl`, `node_repl`) and from bundled plugins. Measured on codex-cli 0.167.0
+# with a scratch CODEX_HOME:
+# - `-c mcp_servers.<name>.enabled=false` alone, for a server the config does not hold, makes
+#   every command refuse ("invalid transport in `mcp_servers.<name>`"). With
+#   `-c mcp_servers.<name>.command=/usr/bin/false` beside it (a word that is not TOML is taken as
+#   a literal string), `codex mcp list --json` printed the server `enabled: false` both when it
+#   was absent (a disabled stub) and when a stdio server of that name was present (its command
+#   replaced, disabled). A present server with a `url` transport refuses the pair, so the seat
+#   does not start rather than start with it.
+# - The `-c` path is split at every dot, quotes included: `mcp_servers."cua_repl".enabled=false`
+#   named a server called `"cua_repl"`, not `cua_repl`. A plugin id is therefore written bare;
+#   `plugins.<id>.enabled=false` was accepted with no such plugin installed, and a non-boolean
+#   value was refused ("expected a boolean"). Its effect on an installed plugin was not measured.
+desktop_control:
+  features:
+    - computer_use
+    - browser_use
+    - browser_use_external
+    - in_app_browser
+    - browser_use_full_cdp_access
+    - apps
+  config:
+    - mcp_servers.cua_repl.command=/usr/bin/false
+    - mcp_servers.cua_repl.enabled=false
+    - mcp_servers.node_repl.command=/usr/bin/false
+    - mcp_servers.node_repl.enabled=false
+    - plugins.computer-use@openai-bundled.enabled=false
+    - plugins.unified-computer-use@openai-bundled.enabled=false
+    - plugins.browser@openai-bundled.enabled=false
+    # The connectors' server by name too, as the stub pair above: accepted with no such server
+    # configured (`codex mcp list --json` printed `codex_apps` `enabled: false`).
+    - mcp_servers.codex_apps.command=/usr/bin/false
+    - mcp_servers.codex_apps.enabled=false
 rules:
   launch_prompt: positional
 # The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a
@@ -41,16 +94,26 @@ delivery: between-turns
 # dialog refuse before a key. Nothing else is typed, and a wake that cannot deliver leaves the
 # message in the bus inbox. See src/send/typed-wake.ts.
 typed_wake: screen
+# The longest wake line. With no figure the default was 200 bytes, which the message header
+# alone nearly fills: every wake to a Codex seat became "Body too long; read it with team drops
+# --read", a read a Codex seat cannot make (2026-11-13). 1000 is a first figure, not yet a
+# measured one: a line that does not read back is reported "not delivered" with the message kept.
+typed_wake_max: 1000
 login:
   check:
     - login
     - status
   hint: codex login
 exit: /exit
-# The one key that empties the box, from the 0.160.0 capture: ctrl+u returns the
-# composer to its empty placeholder. Used only to clear an exit text that did not read
-# back as typed, and only when the box holds exactly that text.
-exit_clear: ctrl+u
+# `/exit` opens the slash-command popup (`› /exit  exit Codex`, exit-typed.txt), and an Enter
+# pressed right after the typing was seen live to stay unsent under the popup on many seats
+# (0.167.0, a loaded machine after a restart). The popup is the completion row: the Enter
+# waits the settle first.
+exit_completion: true
+# The key that clears an exit text that did not run. ctrl+u empties a plain draft (0.160.0,
+# 0.167.0), but live it left `/exit` under the popup; five backspaces cleared it. A backspace
+# is pressed once per character of the text it clears.
+exit_clear: backspace
 # The measured way into the input box (2026-10-19, herdr 0.7.1, a 55-column pane, codex-cli
 # 0.161.0): one ctrl+u removed the draft's last row; the pair [ctrl+u, ctrl+k] cleared one row per
 # pass and left the box empty after the passes its rows counted (four for a three-line draft; the
@@ -87,8 +150,8 @@ timeouts:
 # - `0.161.0/question.txt`: the footer's `esc to interrupt`; Escape closed the question and
 #   interrupted that turn, the composer back over an empty box.
 # Both are exact, and spelled as `codex --version` prints (`codex-cli 0.161.0`): the answer
-# layer compares that print, and an exact record matches it byte for byte. No other version
-# was captured with either dialog, so no range is claimed.
+# layer compares that print, and an exact record matches it byte for byte. The 0.167.0
+# captures below prove that version separately; no intervening dialog versions are claimed.
 question_answer:
   - kind: plan approval
     key: escape
@@ -98,6 +161,15 @@ question_answer:
     key: escape
     from: 'codex-cli 0.161.0'
     to: 'codex-cli 0.161.0'
+  # 0.167.0 scratch captures record both dialogs returning to the composer with Escape.
+  - kind: plan approval
+    key: escape
+    from: 'codex-cli 0.167.0'
+    to: 'codex-cli 0.167.0'
+  - kind: question
+    key: escape
+    from: 'codex-cli 0.167.0'
+    to: 'codex-cli 0.167.0'
 startup_reads:
   - AGENTS.md
   - .codex/config.toml
@@ -202,6 +274,13 @@ screen:
         - '^\s*›?\s*2\. Yes, clear context and implement\s*$'
         - '^\s*›?\s*3\. No, stay in Plan mode\s*$'
       footer: 'enter select · esc back'
+    # 0.167.0 at wide width puts each choice's explanation on the same row.
+    - all:
+        - '^\s*Implement this plan\?\s*$'
+        - '^\s*›?\s*1\. Yes, implement this plan\s+Switch to Default and start coding\s*$'
+        - '^\s*›?\s*2\. Yes, clear context and implement\s+Start a fresh thread \(current context: [0-9]+% used\)\s*$'
+        - '^\s*›?\s*3\. No, stay in Plan mode\s+Continue planning with the model\s*$'
+      footer: 'enter select · esc back'
   # The agent's own question, from the same capture (question.txt): the dialog's
   # `Question N/N (N unanswered)` header, its first option row, and its footer. The footer's
   # `esc to interrupt` is the working row's phrase too; the header is what makes this a
@@ -211,6 +290,11 @@ screen:
         - '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
         - '^\s*›?\s*1\.\s'
       footer: 'esc to interrupt'
+    # The 0.167.0 wide question capture combines the action hints into its last row.
+    - all:
+        - '^\s*Question [0-9]+/[0-9]+ \([0-9]+ unanswered\)\s*$'
+        - '^\s*›?\s*1\.\s'
+      footer: 'tab to add notes | enter to submit answer | esc to interrupt'
   # Codex's own update screen, drawn at startup before any composer (startup.txt, 0.157.0).
   # A vendor notice, not a question the agent asked: never answered, and the `tested` range
   # says the version the capture was taken on. The `question` stage above is the 0.161.0
@@ -251,6 +335,14 @@ screen:
         - 'Usage limit reached\. You(?:''|’)ve reached your usage limit\.'
       live: true
       at_composer: true
+  # A conversation another Codex process (or the desktop app) holds: the TUI draws this notice
+  # in place of the composer and sends nothing until it is closed there (seen live on
+  # codex-cli 0.167.0, 2026-11-13: a seat sat two days behind it reading "idle").
+  provider_error:
+    - all:
+        - 'This conversation is open in another app'
+        - 'Close it there and press R to continue here'
+      live: true
   working:
     - any: ['esc to interrupt']
   # A pane scrolled back over its transcript draws its own rows in the composer's place: either

@@ -1,9 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { generalDoor } from './client/general-door.ts';
 import type { Command, Io } from './io.ts';
-import { writeJson, writeJsonError } from './output/index.ts';
+import { AMBIGUOUS, HOSTED_COMMANDS, tryHost } from './host/client.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from './permissions/must-not-pretend.ts';
 import { description, homepage, license, version } from './version.ts';
 
@@ -37,6 +36,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   seats: () => import('./commands/seats.ts'),
   seat: () => import('./commands/seat.ts'),
   list: () => import('./commands/list.ts'),
+  launchers: () => import('./commands/launchers.ts'),
   up: () => import('./commands/up.ts'),
   watch: () => import('./commands/watch.ts'),
   messages: () => import('./commands/messages.ts'),
@@ -46,6 +46,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   next: () => import('./commands/next.ts'),
   plan: () => import('./commands/plan.ts'),
   peek: () => import('./commands/peek.ts'),
+  ping: () => import('./commands/ping.ts'),
   queue: () => import('./commands/queue.ts'),
   worktree: () => import('./commands/worktree.ts'),
   add: () => import('./commands/add.ts'),
@@ -70,6 +71,8 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   unlock: () => import('./commands/unlock.ts'),
   hold: () => import('./commands/hold.ts'),
   pause: () => import('./commands/pause.ts'),
+  git: () => import('./commands/git.ts'),
+  gh: () => import('./commands/gh.ts'),
   resume: () => import('./commands/resume.ts'),
   raise: () => import('./commands/raise.ts'),
   broker: () => import('./commands/broker.ts'),
@@ -87,6 +90,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   agents: () => import('./commands/agents.ts'),
   fallback: () => import('./commands/fallback.ts'),
   waits: () => import('./commands/waits.ts'),
+  queues: () => import('./commands/queues.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one
@@ -177,6 +181,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const isAbout = name === '--about' || (name === '--json' && rest[0] === '--about');
     const isJson = isAbout && (name === '--json' || rest[0] === '--json');
     if (isJson) {
+      const { writeJson } = await import('./output/index.ts');
       writeJson(io, 'team.about', {
         format: 1,
         version: version(),
@@ -229,6 +234,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // is refused until 0.5.11. up, init and config read it themselves, after this door has refused
   // a scoped grant and a grant named beside their owner-seat options. An admitted run reaches the
   // command as the owner, with the two options taken off its line.
+  // Loaded here, not at the top: a line the warm send host serves never needs it, and the
+  // program's own start stays light (src/host/client.ts).
+  const [{ generalDoor }, { writeJsonError }] = await Promise.all([import('./client/general-door.ts'), import('./output/index.ts')]);
   const door = generalDoor(name, rest, io);
   if (door.kind === 'usage') {
     if (door.json) writeJsonError(io, 'team.general-usage', door.why, null);
@@ -263,8 +271,37 @@ export function processIo(): Io {
   };
 }
 
+/** The program's own run: a `send`, `reply` or `ack` line goes to the warm send host first when one
+ *  answers; it runs here when the host never received it or handed it back, and ends with exit 1
+ *  and no retry when the host took it and its answer was lost (rfc-bus-send-server §2.2).
+ *  `TEAMCLI_SEND_HOST=0` skips the host. */
+async function entry(argv: string[]): Promise<number> {
+  const command = argv[0];
+  if (command !== undefined && HOSTED_COMMANDS.has(command) && process.env.TEAMCLI_SEND_HOST !== '0') {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+    const outcome = await tryHost({
+      argv,
+      cwd: process.cwd(),
+      env,
+      tty: { stdin: Boolean(process.stdin.isTTY), stdout: Boolean(process.stdout.isTTY), stderr: Boolean(process.stderr.isTTY) },
+      cliEntry: fileURLToPath(import.meta.url),
+    });
+    if (outcome.kind === 'ran') {
+      if (outcome.stdout !== '') process.stdout.write(outcome.stdout);
+      if (outcome.stderr !== '') process.stderr.write(outcome.stderr);
+      return outcome.code;
+    }
+    if (outcome.kind === 'ambiguous') {
+      process.stderr.write(AMBIGUOUS);
+      return 1;
+    }
+  }
+  return main(argv, processIo());
+}
+
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2), processIo()).then(
+  entry(process.argv.slice(2)).then(
     (code) => { process.exitCode = code; },
     (error: unknown) => {
       process.exitCode = reportFailure(error, (text) => {

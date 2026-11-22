@@ -3,15 +3,24 @@
 // another principal (never to itself, never wider than its own); that child is signed by the
 // holder's client key and chains back to an owner-signed root.
 import { createPrivateKey, randomBytes, type KeyObject } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
+import { ownerMachinePinned } from './owner-pin-path.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 /** Dispatcher commands explicitly refused by the general door, outside its op vocabulary. */
-export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set(['start']);
+// Migration can write the owner's shared launcher home and script stubs. Its ordinary
+// own-team lead admission does not make it a delegable general-grant operation.
+// git and gh act on GitHub with the entity's own token: a client holding a general grant is not
+// the entity's seat, so neither ever runs through a grant. queues changes the root's delivery
+// floor, whose state-changing verbs are the owner's alone: no general grant runs it. ping runs
+// its sends as child commands in the caller's own environment, where no grant rides along, so a
+// grant never runs it either.
+export const GENERAL_REFUSED_COMMANDS: ReadonlySet<string> = new Set(['start', 'launchers', 'git', 'gh', 'queues', 'ping']);
 // Every command's op: the first nine since 0.5.6, then (0.5.8) every other command the dispatcher's
 // general door admits, so a listed grant may name any of them. `abandon` is `down --abandon`'s.
 // A command added later is covered by the wildcard at once, and by name once it is listed here
@@ -221,6 +230,9 @@ function load(path: string): Disk | string {
 
 /** One verified general grant, its whole chain checked back to the owner's signature. */
 export function readGeneralGrant(home: string, path: string, now: Date = new Date(), depth = 0): R<{ grant: GeneralGrant }> {
+  // A grant's root is signed with this account's own key, which any process of the account can
+  // read: on a machine whose owner seat is pinned from another machine, no grant verifies.
+  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner signs on another machine; a general grant does not stand in for the owner here" };
   if (depth > MAX_CHAIN) return { ok: false, why: 'the grant chain is too long' };
   const disk = load(path);
   if (typeof disk === 'string') return { ok: false, why: disk };

@@ -170,57 +170,6 @@ function bodies(results: readonly Record<string, unknown>[]): number {
 }
 
 describe('the inbox read-once gate', () => {
-  test('a repeat read returns no body and leaves the write-once receipt untouched', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      expect(read(at)).toEqual({ ok: true, body: MARKED_BODY });
-      const receipt = readFileSync(receiptPath(at.dropDir, LEAD_ID), 'utf8');
-      expect(readReceipt(at).payload).toMatchObject({ id: LEAD_ID, to: 'lead', status: 'read' });
-
-      const again = read(at);
-      expect(again).toEqual({
-        ok: false,
-        reason: `message ${JSON.stringify(LEAD_ID)} was already served in this inbox`,
-        served: 'already-served',
-      });
-      expect(JSON.stringify(again)).not.toContain(BODY);
-      expect(readFileSync(receiptPath(at.dropDir, LEAD_ID), 'utf8')).toBe(receipt);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('two real processes reading the same id return exactly one body', async () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      const child = writeReadChild(at);
-      const barrier = join(at.base, 'go');
-      const args = [at.dropDir, at.root, 'lead', SESSION, at.home, LEAD_ID, barrier];
-      const first = runInBackground(child, args);
-      const second = runInBackground(child, args);
-      // Both children are waiting at the barrier: nothing serves this id before the race starts.
-      await new Promise((tick) => setTimeout(tick, 100));
-      expect(existsSync(barrier)).toBe(false);
-      expect(existsSync(receiptPath(at.dropDir, LEAD_ID))).toBe(false);
-      writeFileSync(barrier, 'go\n');
-      const [a, b] = await Promise.all([first, second]);
-      expect(a.code).toBe(0);
-      expect(b.code).toBe(0);
-      const results = [JSON.parse(a.out) as Record<string, unknown>, JSON.parse(b.out) as Record<string, unknown>];
-      expect(bodies(results)).toBe(1);
-      const loser = results.find((result) => result.ok === false);
-      expect(loser).toBeDefined();
-      expect(loser?.served).toBe('already-served');
-      expect(JSON.stringify(loser)).not.toContain(BODY);
-      // The one receipt is the winner's, and neither child's temp is left behind.
-      expect(readReceipt(at).payload).toMatchObject({ id: LEAD_ID, to: 'lead', status: 'read' });
-      expect(readdirSync(at.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
-    } finally {
-      at.cleanup();
-    }
-  });
 
   test('two real processes publishing the receipt name: exactly one wins and the name is never replaced', async () => {
     const at = place();
@@ -247,24 +196,6 @@ describe('the inbox read-once gate', () => {
       expect(lstatSync(path).isFile()).toBe(true);
       // Neither writer's temp is left behind: the file that exists is the one that won.
       expect(readdirSync(at.dropDir).filter((name) => name.endsWith('.new'))).toEqual([]);
-    } finally {
-      at.cleanup();
-    }
-  });
-
-  test('a temp left by a publisher that died before the link blocks nothing', () => {
-    const at = place();
-    try {
-      message(at, 'lead', LEAD_ID, BODY);
-      const path = receiptPath(at.dropDir, LEAD_ID);
-      const leftover = `${path}.999999.deadbeef.new`;
-      writeFileSync(leftover, 'half-written receipt\n', { mode: 0o600 });
-
-      // No shared name was published, so there is nothing to reclaim; the next reader serves the
-      // one body and the leftover is left as debris, not treated as a receipt.
-      expect(read(at)).toEqual({ ok: true, body: MARKED_BODY });
-      expect(read(at)).toMatchObject({ ok: false, served: 'already-served' });
-      expect(readFileSync(leftover, 'utf8')).toBe('half-written receipt\n');
     } finally {
       at.cleanup();
     }

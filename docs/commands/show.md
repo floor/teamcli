@@ -125,7 +125,7 @@ the message:
 
 ```console caller=claude-scribe
 $ team show 22222222 ; echo "exit $?"
-from claude-keeper (team lead):
+claude-keeper · 2026-10-04 09:00Z · admitted: team lead
 
 from the file's seat claude-keeper (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team [nv-22222222]
 
@@ -134,7 +134,7 @@ the draft is ready for review
 ↩ team reply 22222222 "…" · team ack 22222222
 exit 0
 $ team show 22222222 ; echo "exit $?"
-from claude-keeper (team lead):
+claude-keeper · 2026-10-04 09:00Z · admitted: team lead
 
 from the file's seat claude-keeper (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team [nv-22222222]
 

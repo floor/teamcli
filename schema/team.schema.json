@@ -456,10 +456,25 @@
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
           "description": "how long a message may go without the seat's read receipt before the watch retries it once; the report to the sender and the lead follows at twice this window"
         },
+        "lead_unread_after": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a lead's own unread drop waits before the lead is woken; 3m when omitted, and a tempo scales it"
+        },
         "stuck_after": {
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
           "description": "how long a seat whose presence still says a turn is running may sit with unread mail before the lead is told it is stuck; 15m when omitted, never scaled by the tempo"
+        },
+        "watch_start_limit": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a hosted watch may stay in starting without reaching a watch work seam before the daemon stops and starts the child it started for that root; 120s when omitted"
+        },
+        "child_late_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "how many heartbeats a chores child may miss before the daemon stops and starts that root's child, even while it is still working; 30 when omitted"
         },
         "nudge": {
           "type": "string",
@@ -487,6 +502,7 @@
             "enum": [
               "restored",
               "provider-error",
+              "out-of-tokens",
               "unsent",
               "idle",
               "extra",
@@ -505,6 +521,10 @@
           "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too; retired names (swap-free) stay accepted and carried, deprecated"
         }
       }
+    },
+    "seat_folder": {
+      "type": "string",
+      "$comment": "relative to the team folder; {project}, {team} and {seat} are filled in"
     },
     "seats": {
       "type": "array",
@@ -572,6 +592,18 @@
             "type": "string",
             "minLength": 1,
             "$comment": "the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged"
+          },
+          "access": {
+            "enum": [
+              "read",
+              "write"
+            ],
+            "$comment": "overrides the role default of a shipped launcher: read holds the seat to reads and team commands, write lets it write whatever its role; omitted, the role decides (reviewer, tester and assistant read)"
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1,
+            "$comment": "a file whose text is added to this seat's own rules at every launch, after the team's; relative to the team root or absolute"
           },
           "cwd": {
             "type": "string",
@@ -672,6 +704,17 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "desktop_control": {
+            "type": "boolean",
+            "$comment": "whether this seat may control the computer (computer use, the user's browser, desktop apps); wins over the team's desktop_control, and on when neither writes one"
+          },
+          "channel": {
+            "enum": [
+              "off",
+              "on"
+            ],
+            "$comment": "the team-inbox channel for a claude-code seat: omitted or on is the default, and off leaves the launch and the seat's MCP pair alone"
+          },
           "watch_wake": {
             "enum": [
               "on",
@@ -722,6 +765,13 @@
                   "inbox"
                 ],
                 "$comment": "the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event"
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "$comment": "the CLI the routine runs the seat as; the webhook counts as the seat's delivery only when this is the seat's own cli; absent, the URL host decides where it names one vendor service, and otherwise the row counts as before"
               },
               "timeout_ms": {
                 "type": "integer",
@@ -817,6 +867,10 @@
         "seat@team"
       ],
       "$comment": "how a sender reads in TeamCLI headlines: auto (the nickname inside its own team, seat@team from another), nickname, seat, or seat@team; the registry id stays in every record, and the default is auto"
+    },
+    "desktop_control": {
+      "type": "boolean",
+      "$comment": "whether the team's seats may control the computer (computer use, the user's browser, desktop apps, connectors acting under the user's accounts): on when omitted; a seat's own desktop_control wins, so false keeps a seat or a team off the user's apps"
     },
     "messaging": {
       "type": "object",

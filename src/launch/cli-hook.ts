@@ -20,10 +20,11 @@
 // (`supportsCliHook`). Nothing under the owner's CLI home is read or written: the settings file
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
 // stdin — no session id, no transcript path, no environment.
-import {
-  closeSync, constants, fchmodSync, lstatSync, lutimesSync, mkdirSync, openSync, readSync, renameSync,
-  unlinkSync, writeSync, type Stats,
-} from 'node:fs';
+import { shippedClaudeSettings } from '../launchers/shipped.ts';
+import { claudeDesktopDeny, claudeDesktopSettings } from './desktop-control.ts';
+import { closeSync, constants, lstatSync, readFileSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { fchmodSync, lutimesSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -55,11 +56,18 @@ export type CliHookSeat = {
    *  seat with no recorded binding gets no presence entry rather than a binding its running
    *  process never loaded. */
   fresh?: boolean;
-  /** The team file's own `inbound` word for the seat. An `accept` there is written into the
-   *  generated settings when the launch scripts declare no word of their own, so a seat whose
-   *  owner accepts cross-session frames is launched able to take them: its socket is its event
-   *  adapter, with nothing ever typed into its pane. */
+  /** The seat's inbound word. Generated Claude settings default to accept; explicit hold
+   *  and refuse override that default and any accepting launch script. */
   inbound?: CrossSessionInbound;
+  /** The seat's shipped launcher and role, when it has them: a read-only seat on the claude-code
+   *  launcher gets its sandbox and denials in this same settings file, since the CLI reads one. */
+  launcher?: string;
+  role?: string;
+  /** The seat's own `access`, over its role's default (shipped launchers). */
+  access?: 'read' | 'write';
+  /** The seat's resolved `desktop_control`. Only false writes the deny rules for the computer-use,
+   *  browser-control and claude.ai connector MCP tools into the seat's settings file. */
+  desktopControl?: boolean;
 };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
@@ -85,9 +93,50 @@ function sessionFolderName(session: string): string | null {
   return Buffer.byteLength(encoded) <= 255 ? encoded : null;
 }
 
-/** The settings file the launch of one seat in one session names, under the project state
- *  folder. */
+/** Where the seats' generated settings files live: TeamCLI's own machine folder, outside every
+ *  checkout, worktree and lobby. `TEAM_HOOKS_HOME` moves it (the test suite points it at a
+ *  scratch folder); otherwise `~/.config/team/hooks`. */
+export function cliHooksHome(): string {
+  const set = process.env.TEAM_HOOKS_HOME;
+  return set !== undefined && set !== '' ? set : join(homedir(), '.config', 'team', 'hooks');
+}
+
+/** One folder per project state folder, named by a hash of its real path, so two teams never
+ *  share a seat's file and nothing about the project's path is spelled out in the name. */
+function hooksFolderOf(dir: string): string {
+  let real = dir;
+  try { real = realpathSync(dir); } catch { /* not created yet: the path as given */ }
+  return createHash('sha256').update(real).digest('hex').slice(0, 12);
+}
+
+/** The settings file the launch of one seat in one session names: under TeamCLI's machine
+ *  folder (`cliHooksHome`), never in the project. The file holds the seat's hooks and, for a
+ *  read-only seat, its sandbox and denials; in a checkout a seat could read and edit it.
+ *  (Until 2026-11-12 it lived at `<project state folder>/hooks/<session>/<seat>.json`, which
+ *  `cliHookLegacySettingsPath` still names for seats launched before the move.) */
 export function cliHookSettingsPath(dir: string, session: string, seat: string): string | null {
+  const folder = sessionFolderName(session);
+  if (folder === null || !seatFileName(seat)) return null;
+  if (hooksInProject()) return join(dir, 'hooks', folder, `${seat}.json`);
+  return join(cliHooksHome(), hooksFolderOf(dir), folder, `${seat}.json`);
+}
+
+/** `TEAM_HOOKS_HOME=project` keeps the layout from before the move (the files in the project
+ *  state folder). Only the test suite's older scenes set it; they build that path by hand. */
+function hooksInProject(): boolean {
+  return process.env.TEAM_HOOKS_HOME === 'project';
+}
+
+/** The folders, outermost first, the installer makes for one session's settings files. */
+function hooksFoldersFor(dir: string, folder: string): string[] {
+  if (hooksInProject()) return [join(dir, 'hooks'), join(dir, 'hooks', folder)];
+  const home = cliHooksHome();
+  return [home, join(home, hooksFolderOf(dir)), join(home, hooksFolderOf(dir), folder)];
+}
+
+/** The path a seat launched before the move still runs with: its line names it until the next
+ *  launch, so the socket check reads it. Nothing new is written there. */
+export function cliHookLegacySettingsPath(dir: string, session: string, seat: string): string | null {
   const folder = sessionFolderName(session);
   if (folder === null || !seatFileName(seat)) return null;
   return join(dir, 'hooks', folder, `${seat}.json`);
@@ -163,6 +212,34 @@ export function cliWatcher(cli: string, launch: string, hookInstalled = true): C
  *  exclusively in the same folder (the rename never crosses a filesystem and cannot land on a
  *  planted link); the mode comes from the hook's own umask, and the command reads nothing from
  *  its stdin. */
+/** Where a seat's CLI writes the model it reports itself: beside its state file. */
+export function reportedModelPath(statePath: string): string {
+  return join(dirname(statePath), 'model.json');
+}
+
+/** The hook command that keeps the CLI's own word on its model: Claude Code's SessionStart
+ *  (`model`) and PostModelSwitch (`to_model`) payloads, written whole and atomically. The seat
+ *  reports; TeamCLI reads it (`reportedModel`) instead of reading the model off the screen. */
+export function modelReportCommand(statePath: string): string {
+  const target = reportedModelPath(statePath);
+  return `umask 077; f=$(mktemp ${shellQuote(`${target}.new.XXXXXX`)}) && cat > "$f" && mv -f "$f" ${shellQuote(target)}`;
+}
+
+/** The model the seat's CLI last reported, as the profile spells it, or null when no report is
+ *  there, it cannot be read, or its id is not one the CLI's profile knows (a provider id behind a
+ *  wrapper reads null and keeps the older reading). */
+export function reportedModel(statePath: string, cli: string): { model: string; version: string } | null {
+  try {
+    const raw = JSON.parse(readFileSync(reportedModelPath(statePath), 'utf8')) as { model?: unknown; to_model?: unknown };
+    const id = typeof raw.to_model === 'string' ? raw.to_model : typeof raw.model === 'string' ? raw.model : null;
+    if (id === null || !/^[A-Za-z0-9._:\[\]-]{1,120}$/.test(id)) return null;
+    // A context-size suffix (`claude-opus-5-5[1m]`) is the same model.
+    return profileFor(cli)?.modelOf(`${cli} --model ${id.replace(/\[[^\]]*\]$/, '')}`) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function hookCommand(statePath: string, state: 'working' | 'idle'): string {
   return `umask 077; f=$(mktemp ${shellQuote(`${statePath}.new.XXXXXX`)}) && printf '{"state":"${state}","since":"%s"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f" && mv -f "$f" ${shellQuote(statePath)}`;
 }
@@ -221,8 +298,11 @@ function presenceHookCommand(
   presence: CliHookPresence,
   event: 'turn-start' | 'turn-end' | 'human-wait',
   runner: string,
+  start = false,
 ): string {
-  const filter = event === 'human-wait' ? ' --notification permission_prompt' : '';
+  const filter = event === 'human-wait'
+    ? ' --notification permission_prompt'
+    : start ? ' --start session-start' : '';
   return `${runner} presence-hook --dir ${shellQuote(presence.dir)} --session ${shellQuote(presence.session)} --seat ${shellQuote(presence.seat)} --binding ${shellQuote(presence.binding)} --event ${event}${filter} >/dev/null 2>&1 || true`;
 }
 
@@ -277,13 +357,14 @@ const LANDING_ESCAPER = (() => {
  * at all. The body is read from the runner's stdout and escaped here, so a body holding quotes,
  * backslashes or control bytes cannot break the JSON; a pipe that fails still prints nothing.
  * `epoch`, when the launch has written the seat's claim, is the runtime the read is bound to: the
- * hook then serves only a brief delivered under the same epoch.
+ * hook then serves only a brief delivered under the same epoch. `--due`: a stamped message is
+ * handed over again only when its re-send ladder step is due (`rereadDue`), never at every prompt.
  */
 function dropReadCommand(seat: string, session: string, runner: string, epoch?: string): string {
   const envelope = shellQuote('{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\\n');
   const bound = epoch === undefined ? '' : ` --epoch ${shellQuote(epoch)}`;
   return [
-    `ctx=$(${runner} drops --read --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
+    `ctx=$(${runner} drops --read --due --seat ${shellQuote(seat)} --session ${shellQuote(session)}${bound} 2>/dev/null | awk ${shellQuote(LANDING_ESCAPER)})`,
     `if [ -n "$ctx" ]; then printf ${envelope} "$ctx"; fi`,
   ].join('\n');
 }
@@ -336,8 +417,26 @@ export function cliHookSettings(
   }
   hooks.UserPromptSubmit = start;
   hooks.Stop = stop;
+  // The CLI's own word on its model, at session start and at every /model switch (2026-11-13: a
+  // lead the owner switched with /model kept its old model on record and every send carried a
+  // drift notice). Written beside the state file; nothing here reads the screen.
+  const sessionStart: unknown[] = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
+  hooks.SessionStart = sessionStart;
+  // A fresh incarnation's first presence word: the CLI is at its prompt after a startup, resume
+  // or clear (the hook reads the payload's `source`; `compact` declines). Without it a restarted
+  // seat has no projection under its new binding until its first turn, and the watch holds the
+  // very message that would start that turn.
+  if (presence !== undefined && cli !== null) {
+    sessionStart.push({ hooks: [{ type: 'command', command: presenceHookCommand(presence, 'turn-end', cli, true) }] });
+  }
+  hooks.PostModelSwitch = [{ hooks: [{ type: 'command', command: modelReportCommand(statePath) }] }];
   const document: Record<string, unknown> = { hooks };
   if (inbound !== undefined && inbound !== null) document.crossSessionInbound = inbound;
+  // A seat that starts in its own folder inside the project sees the project's `.mcp.json`, and
+  // Claude Code asked to approve its `team-inbox` server on every fresh launch (a consent dialog
+  // that stopped the seat, 2026-11-12). That server is TeamCLI's own inbox: the seat's settings
+  // approve exactly that one name, and no other project server.
+  document.enabledMcpjsonServers = ['team-inbox'];
   return `${JSON.stringify(document, null, 2)}\n`;
 }
 
@@ -632,7 +731,9 @@ export function restorePresenceBinding(
  *  A seat whose launch scripts declare `crossSessionInbound` gets that word merged into the same
  *  file: the file is appended last on the launch line, so it overrides the scripts' own
  *  `--settings` and would otherwise leave the CLI with the setting unset. `root` resolves a
- *  relative script word; it defaults to the folder holding the state folder.
+ *  relative script word; it defaults to the folder holding the state folder. Generated Claude
+ *  settings default to accept when neither seat nor script declares a word; the seat's explicit
+ *  hold or refuse always wins. Existing script refusals are retained.
  *
  *  A seat marked `fresh` (a launch this run is about to type) mints and records a new presence
  *  binding before its settings are written, so its hooks carry the successor incarnation. A
@@ -652,10 +753,11 @@ export function installCliHooks(
   if (Object.keys(planned).length === 0) return {};
   const folder = sessionFolderName(session);
   if (folder === null) return {};
-  const hooks = join(dir, 'hooks', folder);
+  // The settings files go under TeamCLI's machine folder, each level the owner's alone (0700);
+  // the hooks' own state files stay in the project state folder, which the seat's sandbox grants.
   const states = join(dir, 'seat-state', folder);
-  if (!ensureFolder(join(dir, 'hooks')) || !ensureFolder(join(dir, 'seat-state'))
-    || !ensureFolder(hooks) || !ensureFolder(states)) return {};
+  if (!hooksFoldersFor(dir, folder).every((each) => ensureFolder(each)) || !ensureFolder(join(dir, 'seat-state'))
+    || !ensureFolder(states)) return {};
   const guarded = guard !== undefined && commandGuardAvailable();
   const cli = runner === undefined ? cliRunner() : runner;
   const launches = new Map(seats.map((seat) => [seat.name, seat.launch]));
@@ -669,16 +771,37 @@ export function installCliHooks(
     const command = guarded ? commandGuardHookCommand(guard, session, seat) ?? undefined : undefined;
     const launchWord = wrapperInboundOf({ root, launch: launches.get(seat) ?? '' }).policy;
     const teamWord = byName.get(seat)?.inbound;
-    const inbound = launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
+    const inbound = byName.get(seat)?.cli === 'claude-code'
+      ? (teamWord === 'hold' || teamWord === 'refuse' ? teamWord : launchWord ?? teamWord ?? 'accept')
+      : launchWord ?? (teamWord === 'accept' ? teamWord : launchWord);
     const fresh = byName.get(seat)?.fresh === true;
     const binding = fresh
       ? recordPresenceBinding(dir, session, seat)
       : presenceBindingAt(dir, session, seat);
     const presence = binding === null ? undefined : { dir, session, seat, binding };
-    if (!writeSettings(settingsPath, cliHookSettings(statePath, drops, command, inbound, presence, cli))) continue;
+    const base = cliHookSettings(statePath, drops, command, inbound, presence, cli);
+    const shipped = shippedClaudeSettings(byName.get(seat)?.launcher, byName.get(seat)?.role, byName.get(seat)?.access);
+    // A seat whose `desktop_control` is set false is denied the computer-use, browser-control and
+    // claude.ai connector MCP tools in this same file: the CLI reads one --settings.
+    const claude = byName.get(seat)?.cli === 'claude-code';
+    const deny = claude ? claudeDesktopDeny(byName.get(seat)?.desktopControl) : [];
+    const denied = withDeny(shipped, deny);
+    const off = claude ? claudeDesktopSettings(byName.get(seat)?.desktopControl) : {};
+    const extra = Object.keys(off).length === 0 ? denied : { ...(denied ?? {}), ...off };
+    const text = extra === undefined ? base : `${JSON.stringify({ ...extra, ...(JSON.parse(base) as Record<string, unknown>) }, null, 2)}\n`;
+    if (!writeSettings(settingsPath, text)) continue;
     landed[seat] = settingsPath;
   }
   return landed;
+}
+
+/** The shipped settings with `deny` added to their `permissions.deny`, or the deny alone when
+ *  there are none; undefined when there is nothing to add. */
+function withDeny(settings: Record<string, unknown> | undefined, deny: readonly string[]): Record<string, unknown> | undefined {
+  if (deny.length === 0) return settings;
+  const permissions = (settings?.permissions ?? {}) as Record<string, unknown>;
+  const held = Array.isArray(permissions.deny) ? (permissions.deny as string[]) : [];
+  return { ...(settings ?? {}), permissions: { ...permissions, deny: [...new Set([...held, ...deny])] } };
 }
 
 /** What one no-restart refresh did, per seat it looked at. A seat is in exactly one list, and a

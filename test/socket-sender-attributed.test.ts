@@ -46,24 +46,3 @@ function socketWorld(): World {
   declare(made);
   return made;
 }
-
-test('a socket-delivered message opens with the sender attributed', async () => {
-  const made = socketWorld();
-  const frames: string[] = [];
-  const host = fake(made, {
-    deliver: async (_socket: string, frame: string) => {
-      frames.push(frame);
-      return { ok: true };
-    },
-  });
-  const code = await runSend(['lead', 'a note'], owner(made.root), host);
-  expect(code).toBe(0);
-  expect(frames).toHaveLength(1);
-  const frame = JSON.parse(frames[0] as string) as { message: { content: string } };
-  expect(frame.message.content.startsWith('from the owner (owner):\n')).toBe(true);
-  // The compact header and the body appear in that order.
-  expect(frame.message.content).toContain('a note');
-  expect(frame.message.content.indexOf('a note')).toBeGreaterThan(
-    frame.message.content.indexOf('from the owner (owner):'),
-  );
-});

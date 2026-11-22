@@ -89,6 +89,7 @@ test('real unsent text takes no Enter and is not reported as a line that stayed 
   expect(pane.typed).toEqual([]);
   expect(out.delivered).toBe(false);
   expect(out.tries).toBe(0);
-  expect(out.reason).toContain('unsent');
+  // 1345 never-drop: a held draft is kept in a file, and the refusal reason names that keeping.
+  expect(out.reason).toContain('the box held a draft; it was kept in a file and no Enter was pressed');
   expect(out.reason).not.toContain('stayed in the box');
 });

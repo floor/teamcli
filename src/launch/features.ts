@@ -9,13 +9,38 @@
 // a pin inside a quoted script that runs the CLI is one the CLI reads, and a pin after that
 // script's closing quote is not. A line neither can decode is read as carrying no pin and says
 // so, rather than as carrying one no CLI was shown to receive.
-import { decodedWordsOf } from './cli-scope.ts';
+import { cliBodyOn, cliWordListOf, decodedWordsOf, plainBodyOf, shellScriptWordOf } from './cli-scope.ts';
+import { shellWords } from './shell-words.ts';
 
 /** The words a launch line carries for one pinned feature set: `-c features.<name>=<value>`,
  *  one pair per entry. The profile refuses any pair that is not `name=true|false`, so these
  *  words are always bare shell words and need no quoting. */
 export function pinnedWords(features: readonly string[]): string[] {
   return features.flatMap((pair) => ['-c', `features.${pair}`]);
+}
+
+/** One `--enable <FEATURE>` / `--disable <FEATURE>` word (spaced or `=`-joined) as the feature
+ *  pair it stands for, or null for any other word. `codex --help` (0.167.0) documents each as
+ *  "Equivalent to `-c features.<name>=true`" and "... `=false`". `took` is whether the name was
+ *  the next word. */
+export function featureToggle(word: string, next: string | undefined): { name: string; value: boolean; took: boolean } | null {
+  const joined = /^--(enable|disable)=([A-Za-z0-9_]+)$/.exec(word);
+  if (joined !== null) return { name: joined[2]!, value: joined[1] === 'enable', took: false };
+  if ((word === '--enable' || word === '--disable') && next !== undefined && /^[A-Za-z0-9_]+$/.test(next)) {
+    return { name: next, value: word === '--enable', took: true };
+  }
+  return null;
+}
+
+/** A Codex app-server's start words with the profile's pinned feature set made effective: each
+ *  pin whose last value in `config` is absent or the other value is appended as
+ *  `-c features.<pair>`, after every word already there, so the CLI's last-wins rule makes it the
+ *  server's value. A config that already ends on every pin is returned unchanged. The server a
+ *  seat's TUI attaches to runs its turns under its own configuration, so this is the one place
+ *  the team's set reaches it, and the reuse and check comparisons read the same words. */
+export function withPinnedFeatures(config: readonly string[], features: readonly string[]): string[] {
+  const gaps = featureGaps('', features, config);
+  return gaps.length === 0 ? [...config] : [...config, ...pinnedWords(gaps)];
 }
 
 /** The CLI's decoded words for a recorded line: the caller's own reading when it has one (the
@@ -26,8 +51,9 @@ function decodedFor(line: string, words: readonly string[] | null | undefined): 
 }
 
 /** One feature name's effective value on a launch line, read the way the CLI reads its own
- *  words. Only `-c`/`--config` pairs are read — the spelling the profile pins and the one the
- *  seat's own config words already use — with the last pair for a name winning. A bare `--`
+ *  words. `-c`/`--config` pairs are read — the spelling the profile pins and the one the seat's
+ *  own config words already use — and `--enable`/`--disable`, the CLI's own shorthand for the
+ *  same pair, with the last word for a name winning. A bare `--`
  *  ends option parsing, as it does for the CLI: a word after it is positional, and a
  *  config-shaped prompt word names no feature. `words` is the line already decoded by the
  *  launch scope; when it is omitted the line is decoded here, and an unreadable line names no
@@ -39,6 +65,12 @@ export function featureSettings(line: string, words?: readonly string[] | null):
   for (let i = 0; i < decoded.length; i++) {
     const word = decoded[i]!;
     if (word === '--') break;
+    const toggle = featureToggle(word, decoded[i + 1]);
+    if (toggle !== null) {
+      if (toggle.took) i++;
+      settings.set(toggle.name, toggle.value);
+      continue;
+    }
     const inline = /^--config=(.*)$/.exec(word);
     const value = word === '-c' || word === '--config' ? decoded[i + 1] : inline?.[1];
     if (value === undefined) continue;
@@ -87,4 +119,139 @@ export function featureMismatch(line: string | undefined, features: readonly str
   const gaps = featureGaps(line, features, words);
   if (gaps.length === 0) return null;
   return `its recorded launch line does not pin ${said(gaps)}; the profile pins ${said(features)} on every launch`;
+}
+
+/** Remove the fixed false override shipped in earlier Codex defaults, including in an old
+ * recorded recipe. Other config values, positional text, wrappers and quoting stay byte for
+ * byte. Null means the obsolete pair is present but no source span proves safe to rewrite;
+ * the launch must refuse before closing anything rather than run the incompatible recipe. */
+export function currentCodexRecipe(line: string): string | null {
+  const obsolete = 'features.mcp_oauth_refresh_coordination=false';
+  const decoded = cliWordListOf('codex', line);
+  // An unreadable line containing the key cannot prove it will shed the old pin. A line
+  // without it needs no migration and keeps the existing launch-placement decision.
+  if (decoded === null) return line.includes('mcp_oauth_refresh_coordination') ? null : line;
+  const sites = (words: readonly { text: string; start: number; end: number }[]) => {
+    const spans: { start: number; end: number }[] = [];
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i]!;
+      if (word.text === '--') break;
+      if (word.text === '-c' || word.text === '--config') {
+        const value = words[++i];
+        if (value?.text.trim() === obsolete) spans.push({ start: word.start, end: value.end });
+      } else if (word.text.startsWith('--config=') && word.text.slice('--config='.length).trim() === obsolete) {
+        spans.push({ start: word.start, end: word.end });
+      }
+    }
+    return spans;
+  };
+  if (sites(decoded.map((text) => ({ text, start: 0, end: 0 }))).length === 0) return line;
+  const body = shellScriptWordOf(line) === null ? plainBodyOf(line) : cliBodyOn('codex', line);
+  if (body === null) return null;
+  const words = shellWords(body.text);
+  if (words === null) return null;
+  let text = body.text;
+  for (const span of sites(words).reverse()) {
+    let start = span.start;
+    while (start > 0 && /[ \t]/.test(text[start - 1]!)) start--;
+    text = text.slice(0, start) + text.slice(span.end);
+  }
+  const changed = line.slice(0, body.start) + text + line.slice(body.end);
+  // Removing words inside a script must not change what any retained word decodes to.
+  const after = cliWordListOf('codex', changed);
+  const expected = [...decoded];
+  for (const span of sites(decoded.map((text, start) => ({ text, start, end: start + 1 }))).reverse()) {
+    expected.splice(span.start, span.end - span.start);
+  }
+  return after !== null && JSON.stringify(after) === JSON.stringify(expected) ? changed : null;
+}
+
+/** One `-c` pair's key and value, split at its first `=`; null for a word with none. */
+function configPair(pair: string): { key: string; value: string } | null {
+  const at = pair.indexOf('=');
+  return at <= 0 ? null : { key: pair.slice(0, at).trim(), value: pair.slice(at + 1).trim() };
+}
+
+/** Every `-c`/`--config` key a decoded line sets, with the last value it gives, read as the CLI
+ *  reads its own words: a bare `--` ends option parsing. */
+function configValues(decoded: readonly string[]): Map<string, string> {
+  const values = new Map<string, string>();
+  for (let i = 0; i < decoded.length; i++) {
+    const word = decoded[i]!;
+    if (word === '--') break;
+    const inline = /^--config=(.*)$/.exec(word);
+    const value = word === '-c' || word === '--config' ? decoded[i + 1] : inline?.[1];
+    if (value === undefined) continue;
+    if (word === '-c' || word === '--config') i++;
+    const pair = configPair(value);
+    if (pair !== null) values.set(pair.key, pair.value);
+  }
+  return values;
+}
+
+/** The plain config pairs (`desktop_control.config`) a recorded line does not set to the value
+ *  required, last word winning. A line this reader cannot decode carries none of them. */
+export function configGaps(line: string, required: readonly string[], words?: readonly string[] | null): string[] {
+  const decoded = decodedFor(line, words);
+  if (decoded === null) return [...required];
+  const values = configValues(decoded);
+  return required.filter((pair) => {
+    const wanted = configPair(pair);
+    return wanted === null || values.get(wanted.key) !== wanted.value;
+  });
+}
+
+/** A Codex app-server's start words with one seat's pins made effective: the feature pins as
+ *  `withPinnedFeatures` places them, then each config pair whose last value differs, appended. */
+export function withPinnedConfig(config: readonly string[], pins: { features: readonly string[]; config: readonly string[] }): string[] {
+  const featured = withPinnedFeatures(config, pins.features);
+  const gaps = configGaps('', pins.config, featured);
+  return gaps.length === 0 ? featured : [...featured, ...gaps.flatMap((pair) => ['-c', pair])];
+}
+
+/** The words every pin sentence for a seat with `desktop_control` off ends on. */
+export const DESKTOP_PIN_GAP = 'desktop_control is off for it, so its launch pins computer and browser control off';
+
+/**
+ * The sentence naming a seat whose recorded line misses its pins, or null when it carries them
+ * all: `featureMismatch` for the feature pins, then the config pairs a seat with desktop control
+ * off carries. The repair is the seat's relaunch, which writes a line with every pin.
+ */
+export function pinMismatch(
+  line: string | undefined,
+  pins: { features: readonly string[]; config: readonly string[] },
+  words?: readonly string[] | null,
+): string | null {
+  if (pins.config.length === 0) return featureMismatch(line, pins.features, words);
+  const why = DESKTOP_PIN_GAP;
+  if (line === undefined) return `its recorded launch line is unknown; ${why}`;
+  if (decodedFor(line, words) === null) return `its recorded launch line cannot be read; ${why}`;
+  const gaps = [
+    ...featureGaps(line, pins.features, words).map((pair) => `features.${pair}`),
+    ...configGaps(line, pins.config, words),
+  ];
+  if (gaps.length === 0) return null;
+  return `its recorded launch line does not pin ${gaps.join(', ')}; ${why}`;
+}
+
+/** The pins one seat's launch carries: `name=value` feature pairs and plain `-c` config pairs. */
+export type SeatPins = { features: readonly string[]; config: readonly string[] };
+
+/** The pins a seat of this profile carries for its `desktop_control` word. */
+export function seatPins(profile: { features: readonly string[]; desktopControl?: { features: readonly string[]; config: readonly string[] } | null } | null | undefined, desktopControl: boolean): SeatPins {
+  if (profile === null || profile === undefined) return { features: [], config: [] };
+  const block = profile.desktopControl ?? null;
+  if (!desktopControl || block === null) {
+    return { features: [...profile.features], config: desktopControl ? [] : [...(block?.config ?? [])] };
+  }
+  const lifted = new Set(block.features);
+  return {
+    features: profile.features.filter((pair) => !lifted.has(pair.slice(0, pair.lastIndexOf('=')))),
+    config: [],
+  };
+}
+
+/** The words the pins stand for on a launch line: `-c features.<pair>` then `-c <pair>`. */
+export function seatPinWords(pins: SeatPins): string[] {
+  return [...pinnedWords(pins.features), ...pins.config.flatMap((pair) => ['-c', pair])];
 }

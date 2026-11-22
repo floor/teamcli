@@ -1,3 +1,5 @@
+import { clearUnrecognisedScreen, noteUnrecognisedScreen } from '../send/unrecognised-screen.ts';
+import { recordStampAt } from '../send/record.ts';
 // Waking an idle seat whose message is still unread, and telling the sender and the lead.
 //
 // A delivery is a deposit until the seat's signed read receipt follows: a trigger can leave the
@@ -46,16 +48,34 @@
 // over and never reported over. A delivery the seam itself says took nothing (`held`,
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
-import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readTeamConfig } from '../file/team-config.ts';
+import { typedWakeMaxFor } from '../send/readable-wake.ts';
+import { floorState, socketSuppressed } from '../queue/floor.ts';
+
+/** Whether the root's floor reads active now: positive, never unknown or fenced. */
+function floorActive(root: string, home: string): boolean {
+  try {
+    return floorState(root, home).kind === 'active';
+  } catch {
+    return false;
+  }
+}
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
+import { createHash, type KeyObject } from 'node:crypto';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readdirSync, realpathSync, readFileSync } from 'node:fs';
+import { openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { dirname, join } from 'node:path';
 import { appendEvent } from '../bus/log.ts';
+import { nudgeBus } from '../bus/server.ts';
 import { OWNER_MAILBOX, writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { postArrivalWebhook } from '../bus/webhook.ts';
+import { strayWebhookOf } from '../send/webhook.ts';
 import type { Seat, SeatWebhook } from '../file/types.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
-import { claimBindingIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, currentClaimIn, listUnread, receiptHeld } from '../mcp/inbox.ts';
+import { channelPushPath } from '../mcp/channel.ts';
 import { herdrUnreliable, profileFor } from '../profiles/profile.ts';
 import { AGENT_ID_PATTERN, getAgent } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
@@ -64,6 +84,9 @@ import { RUNTIME_RULE as LEAD_REPORT_RULE } from '../send/endpoint-notice.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory, readHistory, type HistoryEntry } from '../send/history.ts';
 import { dropMessage, readTriggerLine, socketWakeHint } from '../send/native.ts';
+import { logLine } from '../log.ts';
+import { deliverLeadTypedWake, pointerLine, type TypedWakeHost } from '../send/typed-wake.ts';
+import { DEFAULT_WATCH_WAKE_TRIES } from '../profiles/profile.ts';
 import {
   markWake as mark,
   releaseWake as release,
@@ -72,8 +95,8 @@ import {
   wakePath,
   type WakeMark,
 } from '../send/wake-marker.ts';
-import { pendingDropPath } from '../send/pending.ts';
-import { isRead, readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { markPending, pendingDropPath } from '../send/pending.ts';
+import { isRead, isReadOrCleared, readRecord, recordFile, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { legClassOf, type WalkLeg } from '../send/walk-cascade.ts';
 import { wakeTrigger, wakeWordsFor, type WakeWords } from '../send/wake.ts';
@@ -81,7 +104,19 @@ import { DELIVERY_LEGS } from '../settings/inherit.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { MailPass, STUCK_MARKER } from './mail-pass.ts';
 import { passPaneProcesses, passPaneScreen, passPaneScreenAsync, passPaneStatus, type RetryScene } from './retry.ts';
+import { climbUnreadLead } from './status-events.ts';
+import { attemptGate, incarnationOf, prepareAttemptAs, tokenText, type GateOutcome } from '../queue/wake-attempt.ts';
+import { deactivate, floorPass } from '../queue/floor.ts';
+import { clearStranded, noteReachedPointer, noteStrandedPointer, strandedSeats } from '../queue/stranded.ts';
+import { channelOfferGivenUp, channelOwnsSeat, channelUnproven, claudeAdapterRoot, overdueChannelRecords, resendPass, TYPED_REQUESTED } from '../queue/resend.ts';
+import { liveChannelCopy, noteAttemptOutcome, withdrawAttempt } from '../queue/handover.ts';
+import { liveFloorActors } from '../queue/floor-actors.ts';
+import { queuePlaceOf } from '../queue/append.ts';
+import { readState } from '../state.ts';
+import { typedPaneProof } from '../launch/identity.ts';
 import { readScreen } from './screen.ts';
+import { seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
+import { liveRecordPath, seatFolderOf } from '../send/drop-folder.ts';
 
 /** The marker beside a message whose one wake line was typed (`src/send/wake-marker.ts` holds
  *  the reservations and the record; this module keeps the name its callers import). */
@@ -117,6 +152,11 @@ export type UnreadOptions = UnreadWindow & {
   /** Seats this pass already rang with their message-display line: the ring and the unread wake
    *  now type the same line, so a seat rung this pass is not woken a second time. */
   rung?: ReadonlySet<string>;
+  /** Whether the held-drop retry runs beside this pass (`retryHeldDrops`). A `.pending` marker
+   *  is that retry's to act on, so this pass leaves it alone while the retry runs. A watch whose
+   *  retry does not run — the daemon-hosted watch never runs it — leaves no one else to wake a
+   *  message the marker holds, so here the marker does not stand in the way. Absent: true. */
+  heldDropRetry?: boolean;
 };
 
 /** What the wake reservation says, when it can be read; null otherwise. */
@@ -126,7 +166,7 @@ function wakeMarkOf(dropDir: string, id: string): WakeMark | null {
 
 /** What the watch's typed wake retry has done for one message: how many attempts, whether any
  *  put a key into the pane, and the earliest instant the next one is due. */
-export type WakeTry = { tries: number; typed: boolean; next_at: string };
+export type WakeTry = { tries: number; typed: boolean; next_at: string; route?: 'channel' | 'socket'; reason?: string };
 
 /** The first retry waits this long after a failed attempt; each later one doubles. */
 const WAKE_TRY_BASE_MS = 5_000;
@@ -140,16 +180,84 @@ export function wakeBackoffMs(tries: number): number {
   return Math.min(WAKE_TRY_BASE_MS * 2 ** Math.max(0, tries - 1), WAKE_TRY_MAX_MS);
 }
 
+/** The most typed wake lines the retry puts into one seat's pane in any hour. */
+export const WAKE_LINES_PER_HOUR = 6;
+
+/** The dot-named record of the retry's typed lines beside a seat's mail: never read as a message. */
+export function wakeLinesPath(dropDir: string): string {
+  return join(dropDir, '.wake-lines.json');
+}
+
+/** The record as written: the instants of the typed lines, and the instant the cap last held a
+ *  line back (`held`), when it did since the last typed line. */
+function wakeLinesOf(dropDir: string): { at: number[]; held: number | null } {
+  try {
+    const parsed = JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')) as { at?: unknown; held?: unknown };
+    const at = Array.isArray(parsed.at) ? parsed.at.filter((one): one is number => typeof one === 'number' && Number.isFinite(one)) : [];
+    return { at, held: typeof parsed.held === 'number' && Number.isFinite(parsed.held) ? parsed.held : null };
+  } catch {
+    return { at: [], held: null };
+  }
+}
+
+function typedLinesOf(dropDir: string): number[] {
+  return wakeLinesOf(dropDir).at;
+}
+
+/** How many lines the retry typed into this seat's pane in the hour before `nowMs`. */
+function typedLinesWithinHour(dropDir: string, nowMs: number): number {
+  return typedLinesOf(dropDir).filter((at) => at > nowMs - 60 * 60_000 && at <= nowMs).length;
+}
+
+/** Records one typed line, or (`held`) a line the cap held back; only the last hour is kept,
+ *  and a typed line ends the hold. Best effort: an unwritable record only loosens the cap, or
+ *  leaves the hold unsaid, and never blocks a wake. */
+function noteTypedLine(dropDir: string, nowMs: number, held = false): void {
+  const kept = typedLinesOf(dropDir).filter((at) => at > nowMs - 60 * 60_000 && at <= nowMs);
+  const record = held ? { at: kept, held: nowMs } : { at: [...kept, nowMs] };
+  try {
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  } catch {
+    // The cap reads what it can.
+  }
+}
+
+/** The words the reports add when the hourly cap held this seat's wake line back within the last
+ *  hour and no line was typed since; empty otherwise. The cap is a storm guard, never a silence. */
+function capHeldWords(dropDir: string, nowMs: number): string {
+  const held = wakeLinesOf(dropDir).held;
+  if (held === null || !(held > nowMs - 60 * 60_000 && held <= nowMs)) return '';
+  return `; the hourly cap of ${String(WAKE_LINES_PER_HOUR)} typed wake lines held a wake line back at ${new Date(held).toISOString()}`;
+}
+
+/** The first slow retry, once the profile's fast bound is spent; each later one doubles. */
+const WAKE_SLOW_BASE_MS = 5 * 60_000;
+
+/** The slow retries never wait longer than this. */
+const WAKE_SLOW_MAX_MS = 30 * 60_000;
+
+/** A message older than this is not retried any more: the report and the seat's own turn-start
+ *  read are what is left. */
+export const WAKE_SLOW_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
+/** The wait before the next attempt once `tries` attempts have failed under a fast bound of
+ *  `fastTries`: the fast backoff inside the bound, then 5, 10, 20 and 30 minutes. */
+export function wakeRetryDelayMs(tries: number, fastTries: number): number {
+  if (tries < fastTries) return wakeBackoffMs(tries);
+  return Math.min(WAKE_SLOW_BASE_MS * 2 ** Math.max(0, tries - fastTries), WAKE_SLOW_MAX_MS);
+}
+
 /** The typed wake ledger, when it can be read; null when the message has had no typed wake
  *  attempt. The file is written whole and 0600, like every record beside a message. */
 function wakeTryOf(dropDir: string, id: string): WakeTry | null {
   try {
-    const parsed = JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries?: unknown; typed?: unknown; next_at?: unknown };
+    const parsed = JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries?: unknown; typed?: unknown; next_at?: unknown; reason?: unknown };
     if (typeof parsed.tries !== 'number' || !Number.isInteger(parsed.tries) || parsed.tries < 0) return null;
     return {
       tries: parsed.tries,
       typed: parsed.typed === true,
       next_at: typeof parsed.next_at === 'string' ? parsed.next_at : '',
+      ...(typeof parsed.reason === 'string' ? { reason: parsed.reason } : {}),
     };
   } catch {
     return null;
@@ -164,6 +272,114 @@ function recordWakeTry(dropDir: string, id: string, record: WakeTry): void {
   } catch {
     // Best effort: the message keeps its remaining tries rather than silently giving up.
   }
+}
+
+/** Whether a record is under the at-least-once contract (E7b). Such a record is never on this
+ *  file's ladders: the one re-send scheduler offers it (src/queue/resend.ts). An unreadable stamp
+ *  is not proven stamped and keeps the ladders it had. */
+function stampedRecord(dropDir: string, id: string, mail?: MailPass): boolean {
+  return (mail === undefined ? recordStampAt(dropDir, id) : mail.stampAt(dropDir, id)) === true;
+}
+
+/** The most messages one pass re-offers to one seat on its event legs. */
+const EVENT_REOFFER_PER_PASS = 5;
+
+/** Whether a message is due on the event ladder: past its unread window, younger than the slow
+ *  ladder's last day, not held by the held-drop retry, and past the next attempt its ledger set. */
+function eventLadderDue(dropDir: string, message: { id: string; ts: string }, nowMs: number, unreadAfter: number, pendingOwned = true): boolean {
+  const age = nowMs - Date.parse(message.ts);
+  if (!(age >= unreadAfter * 1000) || !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
+  if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
+  const ledger = wakeTryOf(dropDir, message.id);
+  if (ledger === null) return true;
+  const next = Date.parse(ledger.next_at);
+  return !(Number.isFinite(next) && nowMs < next);
+}
+
+/**
+ * The event ladder for a Claude seat's unread message: the watch offers it again on the seat's
+ * own event legs, in the cascade's order, and counts each attempt in the message's wake ledger
+ * so the next one waits 5, 10, 20, then 30 minutes, for up to seven days.
+ *
+ * 1. The channel push, when the seat's inbox server is live with its channel declared and has
+ *    not pushed this message yet: the channel marker goes down, and the server (with the held-drop
+ *    retry's one socket redelivery behind it) carries it. A message the server already pushed is
+ *    not pushed a second time through its single-writer marker.
+ * 2. The socket: the stored signed record, dialed under the same gate a send's socket leg reads
+ *    (`redeliverChannelOnSocket`).
+ *
+ * Neither leg types into the pane. A taken offer writes an `awaiting receipt` history line; the
+ * seat's own signed receipt is still the one proof of a read. Returns whether any message was
+ * offered, so the caller types nothing more for the seat this pass.
+ */
+async function reofferOnEventLegs(
+  scene: RetryScene,
+  seat: Seat,
+  dropDir: string,
+  candidates: readonly { id: string; ts: string }[],
+  nowMs: number,
+  unreadAfter: number,
+  home: string,
+  pendingOwned = true,
+): Promise<boolean> {
+  // The routes are the ones the seat's own resolved order permits, exclusions included: a seat
+  // whose order keeps the socket or the channel out (a drop-only word, a human) is never offered
+  // on it here either. A watch that cannot ask offers nothing.
+  const legs = scene.eventLegs?.(seat.name) ?? { channel: false, socket: false };
+  if (!legs.channel && !legs.socket) return false;
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return false;
+  const due = [...candidates]
+    .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+    .filter((one) => !stampedRecord(dropDir, one.id) && eventLadderDue(dropDir, one, nowMs, unreadAfter, pendingOwned))
+    .slice(0, EVENT_REOFFER_PER_PASS);
+  const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
+  let offered = false;
+  for (const message of due) {
+    // The candidates are the pass's earlier reading, and an offer just made may have had the
+    // seat read the rest: the signed read or replied receipt, or a lead's or the owner's signed
+    // clearance, is looked for again, under the seat's current claim binding, immediately before
+    // each offer (`isReadOrCleared`, the question the unread listing itself asks).
+    if (isReadOrCleared(dropDir, message.id, context, key.key, claimBindingIn(scene.root, scene.session, seat.name, message.id))) continue;
+    const payload = payloadOf(dropDir, message.id, home);
+    if (payload === null) continue;
+    const at = scene.now.toISOString();
+    let route: 'channel' | 'socket' | null = null;
+    let reason = '';
+    const channelUnpushed = legs.channel && !existsSync(channelPushPath(dropDir, message.id)) && liveChannelCopy(dropDir, message.id) === null;
+    if (channelUnpushed) {
+      markPending(dropDir, { ts: at, from: payload.from, to: seat.name, body: payload.body, id: message.id, thread: payload.thread, leg: 'channel' });
+      route = 'channel';
+    } else if (legs.socket && scene.socketRedeliver !== undefined && !socketSuppressed(scene.root, home)) {
+      const socket = await scene.socketRedeliver(dropDir, { id: message.id, from: payload.from, to: seat.name, body: payload.body, ts: at, tries: 0 });
+      if (socket.ok) route = 'socket';
+      else reason = socket.reason;
+    } else {
+      reason = legs.socket ? 'this watch carries no socket redelivery' : 'its channel already pushed it, and its order permits no socket';
+    }
+    const tries = (wakeTryOf(dropDir, message.id)?.tries ?? 0) + 1;
+    const nextAt = new Date(nowMs + wakeRetryDelayMs(tries - 1, 0)).toISOString();
+    // No route this time: the attempt is counted, so the ladder still spaces the next look, and
+    // the pass goes on to whatever else it walks for the seat. The reason stays in the ledger.
+    recordWakeTry(dropDir, message.id, route === null
+      ? { tries, typed: false, next_at: nextAt, reason }
+      : { tries, typed: false, next_at: nextAt, route });
+    if (route === null) continue;
+    offered = true;
+    appendHistory(scene.team.project, scene.root, home, {
+      ts: at,
+      from: payload.from,
+      to: seat.name,
+      body: payload.body,
+      id: message.id,
+      thread: payload.thread,
+      outcome: 'awaiting receipt',
+      note: `watch re-offer ${String(tries)} on the ${route}`,
+      via: route,
+    });
+    scene.say(`${seat.name}: a message from ${payload.from} was unread and was offered again on its ${route} (attempt ${String(tries)}); next at ${nextAt}`, false);
+  }
+  return offered;
 }
 
 /** What the watch's typed wake retry is for one seat, when it is on: the profile's attempt
@@ -181,10 +397,23 @@ function watchRetryOf(seat: Seat): { tries: number } | null {
 function payloadOf(dropDir: string, id: string, home: string): RecordPayload | null {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return null;
-  const looked = readRecord(join(dropDir, id), id);
+  const looked = readRecord(recordFile(dropDir, id), id);
   if (!looked.ok || looked.record === null) return null;
   if (!verifyRecord(looked.record, key.key)) return null;
   return looked.record.payload;
+}
+
+/** The watch's sources as the typed wake sees one pane. */
+function leadWakeHost(scene: RetryScene, pane: string): TypedWakeHost {
+  return {
+    read: () => scene.sources.screen(pane, scene.session),
+    type: (_id, text) => scene.sources.typeText(pane, text, scene.session),
+    enter: () => scene.sources.pressEnter(pane, scene.session),
+    ...(scene.sources.sendKey
+      ? { key: (_id: string, key: string) => scene.sources.sendKey!(pane, key, scene.session) }
+      : {}),
+    wait: (ms) => scene.sources.sleep(ms),
+  };
 }
 
 /** The watch's sources as the delivery sees one pane. */
@@ -205,12 +434,17 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * Whether this message is the unread pass's to wake now. A message read has left the listing
  * already (`listUnread` omits a verified receipt); what remains is waited on:
  * - younger than the window: not yet;
- * - a `.pending` marker: the retry pass owns it, and a second trigger would be one too many;
+ * - a `.pending` marker, while the held-drop retry runs beside this pass: that retry owns it,
+ *   and a second trigger would be one too many (a watch that runs no such retry passes
+ *   `pendingOwned` false, and the marker is then nobody's but this pass's);
  * - `.wake` or `.reported`: the one wake was sent, or the word has already gone out.
  *
  * A seat whose typed wake retry is on (`watch_wake`) also reads its ledger: an attempt inside
- * its backoff is not due yet, and one at the profile's bound is never due again — the report
- * at twice the window is what speaks after that.
+ * its backoff is not due yet. Past the profile's bound the fast retries end and the slow ones
+ * begin: every five minutes, doubling to half an hour, for as long as the message stays unread
+ * and younger than `WAKE_SLOW_MAX_AGE_MS`. The report at twice the window still speaks once; it
+ * no longer ends the slow retries, so a seat that was busy through the fast ones and then sits
+ * idle is woken (2026-11-14: messages to idle Grok and Antigravity seats sat unread for days).
  */
 function dueForWake(
   dropDir: string,
@@ -218,20 +452,28 @@ function dueForWake(
   nowMs: number,
   unreadAfter: number,
   retryTries: number | null,
+  pendingOwned = true,
 ): boolean {
   const age = nowMs - Date.parse(message.ts);
   if (!(age >= unreadAfter * 1000)) return false;
-  if (existsSync(pendingDropPath(dropDir, message.id))) return false;
+  if (pendingOwned && existsSync(pendingDropPath(dropDir, message.id))) return false;
   if (existsSync(wakePath(dropDir, message.id))) return false;
-  if (existsSync(reportedPath(dropDir, message.id))) return false;
-  if (retryTries !== null) {
-    const ledger = wakeTryOf(dropDir, message.id);
-    if (ledger !== null) {
-      if (ledger.tries >= retryTries) return false;
-      const next = Date.parse(ledger.next_at);
-      if (Number.isFinite(next) && nowMs < next) return false;
-    }
-  }
+  // A held drop under a watch that runs no held-drop retry was kept from every wake by its
+  // marker, while the report still went out at twice the window: its report is no word that a
+  // wake was tried, so it does not stand in the way of the first one. The report marker still
+  // keeps the report from going out twice, and a wake younger than the slow ladder's last day
+  // is the only one it lets through.
+  const neverWoken = !pendingOwned
+    && age < WAKE_SLOW_MAX_AGE_MS
+    && existsSync(pendingDropPath(dropDir, message.id));
+  const reported = existsSync(reportedPath(dropDir, message.id)) && !neverWoken;
+  if (retryTries === null) return !reported;
+  const ledger = wakeTryOf(dropDir, message.id);
+  // Before any typed attempt, a report already written is the word that stands.
+  if (ledger === null) return !reported;
+  if (ledger.tries >= retryTries && !(age < WAKE_SLOW_MAX_AGE_MS)) return false;
+  const next = Date.parse(ledger.next_at);
+  if (Number.isFinite(next) && nowMs < next) return false;
   return true;
 }
 
@@ -250,6 +492,34 @@ function sendLinesOf(scene: RetryScene, home: string): Map<string, HistoryEntry>
     if (!lines.has(entry.id)) lines.set(entry.id, entry);
   }
   return lines;
+}
+
+/** The history note of a re-send's typed pointer whose line was written and submitted. */
+const POINTER_RESENT_NOTE = 'not acknowledged; re-sent on the typed (the pointer)';
+
+/** The time of the newest typed wake history records as delivered, per message id: a typed wake
+ *  line, or a re-send's pointer line. Read once per report, and only when a notice is due. */
+function deliveredTypedWakesOf(scene: RetryScene, home: string): Map<string, string> {
+  const woken = new Map<string, string>();
+  const read = readHistory(scene.team.project, scene.root, home);
+  if (!read.ok) return woken;
+  for (const entry of read.entries) {
+    const typed = entry.outcome === 'delivered (typed wake)' || (entry.via === 'typed' && entry.note === POINTER_RESENT_NOTE);
+    if (!typed) continue;
+    const seen = woken.get(entry.id);
+    if (seen === undefined || Date.parse(entry.ts) > Date.parse(seen)) woken.set(entry.id, entry.ts);
+  }
+  return woken;
+}
+
+/** The newest delivered typed wake among `ids`, from the map above; undefined when none. */
+function newestWakeOf(woken: Map<string, string>, ids: Iterable<string>): string | undefined {
+  let newest: string | undefined;
+  for (const id of ids) {
+    const at = woken.get(id);
+    if (at !== undefined && (newest === undefined || Date.parse(at) > Date.parse(newest))) newest = at;
+  }
+  return newest;
 }
 
 /** Every leg name a history line's `via` can carry in this build: the catalogue's legs and the
@@ -271,6 +541,8 @@ const WALKED_LEGS: readonly string[] = [...DELIVERY_LEGS, 'webhook'];
  */
 function webhookNext(seat: Seat, line: HistoryEntry | undefined): boolean {
   if (seat.webhook === undefined || line === undefined) return false;
+  // A webhook whose routine runs another CLI is not this seat's: the pass types instead.
+  if (strayWebhookOf(seat.webhook, seat.cli) !== null) return false;
   if ((line.failed ?? []).some((one) => one.startsWith('webhook: '))) return false;
   const via = line.via;
   if (via === 'webhook') return true;
@@ -308,10 +580,12 @@ async function wakeByWebhook(
   at: string,
   /** The send already recorded a webhook delivery. Post once more; the `.posted` mark stays. */
   again: boolean,
+  /** When set, a post is not the wake: the wake is the read receipt this returns. */
+  receipt?: () => boolean,
 ): Promise<WebhookWake> {
   const home = scene.home;
   if (home === undefined) return { outcome: 'next' };
-  const looked = readRecord(join(dropDir, message.id), message.id);
+  const looked = readRecord(liveRecordPath(dropDir, message.id), message.id);
   if (!looked.ok || looked.record === null) return { outcome: 'next' };
   if (!reserve(wakePath(dropDir, message.id), { id: message.id, at, state: 'reserved', evidence: 'webhook' })) {
     return { outcome: 'settled' };
@@ -319,6 +593,7 @@ async function wakeByWebhook(
   const posted = await postArrivalWebhook({
     seat: seat.name,
     webhook,
+    cli: seat.cli,
     team: scene.team,
     root: scene.root,
     session: scene.session,
@@ -334,7 +609,9 @@ async function wakeByWebhook(
     ...(again ? { again: true } : {}),
   });
   if (posted.kind === 'posted') {
-    mark(wakePath(dropDir, message.id), { id: message.id, at, state: 'sent', evidence: 'webhook', ms: posted.ms });
+    const read = receipt?.() === true;
+    if (receipt !== undefined) noteLeadEpisode(scene, seat.name, dropDir, message.id, scene.now.getTime(), true);
+    mark(wakePath(dropDir, message.id), { id: message.id, at, state: read ? 'read' : 'sent', evidence: 'webhook', ms: posted.ms });
     appendHistory(scene.team.project, scene.root, home, {
       ts: at,
       from: payload.from,
@@ -342,13 +619,19 @@ async function wakeByWebhook(
       body: payload.body,
       id: message.id,
       thread: payload.thread,
-      outcome: 'delivered',
+      outcome: read ? 'delivered (read)' : receipt !== undefined ? 'awaiting receipt' : 'delivered',
       ms: posted.ms,
       via: 'webhook',
-      note: 'the watch posted the record after the unread window',
+      note: read
+        ? 'the watch posted the record after the unread window and the read receipt was there'
+        : receipt !== undefined
+          ? 'the watch posted the record after the unread window; the wake counts when the read receipt appears'
+          : 'the watch posted the record after the unread window',
     });
     scene.say(
-      `${seat.name}: a message from ${payload.from} was unread and its webhook adapter took it after the unread window (${String(posted.ms)} ms)`,
+      read || receipt === undefined
+        ? `${seat.name}: a message from ${payload.from} was unread and its webhook adapter took it after the unread window (${String(posted.ms)} ms)`
+        : `${seat.name}: a message from ${payload.from} was posted after the unread window; the wake counts when the read receipt appears`,
       false,
     );
     return { outcome: 'settled' };
@@ -371,6 +654,263 @@ async function wakeByWebhook(
   return { outcome: 'next' };
 }
 
+/** Whether the seat is one of the team's leads (orchestrator or operator). */
+function isLeadSeat(scene: RetryScene, seat: string): boolean {
+  return (scene.team.orchestrator !== '' && seat === scene.team.orchestrator)
+    || (scene.team.operator !== '' && seat === scene.team.operator);
+}
+
+/** Whether `path` is a plain file (not a link, not any other kind) whose real path lies directly
+ *  in `folder` (already a real path). Any read error is a no. */
+/** Writes an episode entry by creating a fresh file in the same folder and renaming it over the
+ *  name. A rename replaces the directory entry itself and never follows a link that a concurrent
+ *  writer may have put at the name, so nothing outside the folder is ever written through. */
+function replaceEpisode(path: string, text: string): void {
+  const temp = `${path}.${String(process.pid)}.${String(Date.now())}.tmp`;
+  writeFileSync(temp, text, { mode: 0o600, flag: 'wx' });
+  try {
+    renameSync(temp, path);
+  } catch (error) {
+    try {
+      unlinkSync(temp);
+    } catch {
+      // The temporary is ours; a later pass ignores names that are not `.lead-episode`.
+    }
+    throw error;
+  }
+}
+
+/** Reads an episode entry without following a link at the name: opened with O_NOFOLLOW, the
+ *  open descriptor must be a plain file. Anything else throws, like an unreadable file. */
+function readEpisode(path: string): string {
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('not a plain file');
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function ownPlainFile(path: string, folder: string): boolean {
+  try {
+    if (!lstatSync(path).isFile()) return false;
+    return dirname(realpathSync(path)) === folder;
+  } catch {
+    return false;
+  }
+}
+
+/** Tends the lead-alarm clocks in the seat's drop folder. With `waiting` (the ids this pass read
+ *  as still unread), an episode whose message is settled (read, cleared, archived) is removed.
+ *  With `nowMs`, every clock still running restarts at `nowMs`; one already there is not written.
+ *  Only this seat's own plain files are touched; one that cannot be read or written stays. */
+export function rearmLeadEpisodes(dropDir: string, nowMs: number | null, waiting?: ReadonlySet<string>): void {
+  let names: string[];
+  let folder: string;
+  try {
+    folder = realpathSync(dropDir);
+    names = readdirSync(dropDir).filter((name) => name.endsWith('.lead-episode'));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(dropDir, name);
+    // A link (to another seat's episode or anywhere else), any other kind of entry, or a file
+    // whose real path is not directly inside the seat's own folder is left untouched.
+    if (!ownPlainFile(path, folder)) continue;
+    try {
+      if (waiting !== undefined && !waiting.has(name.slice(0, -'.lead-episode'.length))) {
+        unlinkSync(path);
+        continue;
+      }
+      if (nowMs === null) continue;
+      const parsed = JSON.parse(readEpisode(path)) as { at?: unknown; climbed?: unknown };
+      if (parsed.climbed === true || typeof parsed.at !== 'number' || parsed.at === nowMs) continue;
+      replaceEpisode(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`);
+    } catch {
+      // Unreadable or unwritable: the marker stays as it is.
+    }
+  }
+}
+
+/** Five minutes after a lead's first wake, with no read receipt, the parent is told once. */
+const LEAD_RECEIPT_MS = 5 * 60 * 1000;
+
+/** Starts the lead's receipt clock the first time a wake is due, and climbs once it expires
+ *  while the drop is still unread. The mailbox write is the lead climb in status-events.
+ *  RFC event-comms E3: the alarm never fires while the lead is working. A pass that sees the lead
+ *  `working` re-arms the clock instead (the clock restarts at the end of the turn it saw), so the
+ *  climb needs five minutes with no turn observed. A status the pass cannot read is not treated
+ *  as working: the legacy clock stands. */
+export function noteLeadEpisode(
+  scene: RetryScene,
+  seat: string,
+  dropDir: string,
+  id: string,
+  nowMs: number,
+  waking: boolean,
+  working = false,
+): void {
+  const path = join(dropDir, `${id}.lead-episode`);
+  // An episode entry that is a link, or not a plain file of this seat's own folder, is never read
+  // or written through (a missing one is created below as a plain file).
+  if (existsSync(path) || isLink(path)) {
+    let folder: string;
+    try {
+      folder = realpathSync(dropDir);
+    } catch {
+      return;
+    }
+    if (!ownPlainFile(path, folder)) return;
+  }
+  let at: number | undefined;
+  let climbed = false;
+  try {
+    const parsed = JSON.parse(readEpisode(path)) as { at?: unknown; climbed?: unknown };
+    if (typeof parsed.at === 'number') at = parsed.at;
+    climbed = parsed.climbed === true;
+  } catch {
+    at = undefined;
+  }
+  if (climbed) return;
+  if (working) {
+    // Mid-turn: no alarm, and the clock restarts so it counts from the end of this turn. An
+    // episode with no clock yet stays without one until a wake is due.
+    if (at === undefined) return;
+    try {
+      replaceEpisode(path, `${JSON.stringify({ at: nowMs, climbed: false })}\n`);
+    } catch {
+      // A clock that cannot be re-armed still never climbs on this pass.
+    }
+    return;
+  }
+  if (at === undefined) {
+    if (!waking) return;
+    at = nowMs;
+    try {
+      replaceEpisode(path, `${JSON.stringify({ at, climbed: false })}\n`);
+    } catch {
+      return;
+    }
+  }
+  if (nowMs - at < LEAD_RECEIPT_MS) return;
+  const home = scene.home;
+  if (home === undefined) return;
+  try {
+    climbUnreadLead({
+      home,
+      root: scene.root,
+      project: scene.team.project,
+      seat,
+      episode: id.replace(/[^0-9A-Za-z]/g, ''),
+      why: `The lead ${seat} had unread mail and no read receipt within 5 minutes of the first wake, so the entity's orchestrator is told now`,
+      at: new Date(nowMs).toISOString(),
+      ...(scene.deliverClimb === undefined ? {} : { deliver: scene.deliverClimb }),
+    });
+  } catch {
+    return;
+  }
+  try {
+    replaceEpisode(path, `${JSON.stringify({ at, climbed: true })}\n`);
+  } catch {
+    // The mailbox id is the episode, so a later pass writes the same record.
+  }
+}
+
+/**
+ * The watch's host for the one re-send scheduler (src/queue/resend.ts): every stamped record of
+ * the seat that is not settled and is due by its history is offered once more through the seat's
+ * current adapter (`scene.resendStamped`, the seat's resolved delivery walk, which types nothing).
+ * When the walk reaches its typed leg it stops there and asks for a typed wake: the record joins
+ * this pass's typed wake below, the existing guarded one (live pane, seat lock, the wake-attempt
+ * fence and its token), as the pointer wake only; the seat reads the numbered body with
+ * `team drops`. A seat the ownership rule gives to its channel server (`channelOwnsSeat`) is left
+ * to that server. Returns the ids whose typed wake was asked for.
+ */
+async function resendStampedDrops(scene: RetryScene, seat: Seat, key: KeyObject, nowMs: number): Promise<Map<string, number>> {
+  const requested = new Map<string, number>();
+  const resend = scene.resendStamped;
+  if (resend === undefined) return requested;
+  const legs = scene.eventLegs?.(seat.name);
+  const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
+  const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
+  // The Claude adapter (§2.1, §2.4): on an active root a claude-code seat's attempt is the channel
+  // push while its channel is proven (its channel server offers then), and otherwise the typed
+  // pointer, which this pass's guarded typed wake types. No walk is asked.
+  if (scene.home !== undefined && claudeAdapterRoot(seat.cli, scene.root, scene.home, seat.webhook !== undefined)) {
+    const unproven = (): boolean => channelUnproven({ dropDir, root: scene.root, session: scene.session, seat: seat.name, context, key, nowMs }) !== null;
+    // No pointer is reserved for a protected pane (a person's pane, a lead whose declared order
+    // does not name `typed`, any seat whose order leaves it out), nor on a floor that does not
+    // read active now: the record waits for its hook or a pull, and `team doctor` names it.
+    if (legs?.pointer !== true || !floorActive(scene.root, scene.home)) return requested;
+    // A proven seat's new traffic is its channel server's; a record whose channel offer went
+    // overdue is still owed a pointer until it settles, whatever proves the channel since.
+    let only: ReadonlySet<string> | undefined;
+    if (!unproven()) {
+      const overdue = overdueChannelRecords({ dropDir, context, key, nowMs, givenUp: true });
+      if (overdue === 'unreadable' || overdue.size === 0) return requested;
+      only = new Set(overdue.keys());
+    }
+    const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir, unproven, ...(only === undefined ? {} : { only }) }, nowMs, async (id) => {
+      release(wakePath(dropDir, id));
+      return TYPED_REQUESTED;
+    }, 'watch');
+    for (const one of results) if (one.via === TYPED_REQUESTED) requested.set(one.id, one.attempt);
+    return requested;
+  }
+  if (channelOwnsSeat({ dropDir, root: scene.root, session: scene.session, seat: seat.name, walkTakesChannel: legs?.channel === true })) return requested;
+  const results = await resendPass({ dropDir, context, key, agentsDir: scene.dir }, nowMs, (id) => resend(seat, dropDir, id, () => {
+    // The pointer wake's single-writer marker belongs to the scheduler's attempt for a stamped
+    // record: the earlier attempt's marker is let go, so this attempt's wake can reserve it.
+    release(wakePath(dropDir, id));
+    return true;
+  }), 'watch');
+  for (const one of results) {
+    if (one.via === TYPED_REQUESTED) {
+      // Not a re-send yet: this pass's typed wake records it once the pointer is typed.
+      requested.set(one.id, one.attempt);
+      continue;
+    }
+    const carried = one.copy === null ? 'no copy was carried' : `delivery ${String(one.copy)}`;
+    const leg = one.via === null ? '' : ` on the ${one.via}`;
+    scene.say(`${seat.name}: message ${one.id} is not acknowledged; offered again${leg} (${carried})`, false);
+  }
+  return requested;
+}
+
+/**
+ * The positive proof the shared typed path asks immediately before every key, under the seat lock
+ * (every typed wake the watch types, re-sends included): the seat's recorded pane is this pane;
+ * the terminal host's agent list, read fresh, names this seat on it and no other seat; the pane's live
+ * processes, read fresh, are the recorded launch (its shell pid and that shell's start time, a
+ * recorded CLI pid in front and that CLI's start time). A Claude adapter pointer for a
+ * workspace predating shell anchors instead needs its uniquely reported recorded conversation
+ * as well as that launched shell and CLI identity. Any mismatch or unreadable value is no proof:
+ * nothing is typed and the message stays due. A source set that binds no owner reader (a test
+ * host) keeps today's path.
+ */
+function paneStillSeats(scene: RetryScene, seatName: string, pane: string, conversationFallback = false, refused?: (why: string) => void): boolean {
+  const owner = scene.sources.keyOwner;
+  if (owner === undefined) return true;
+  try {
+    const proof = typedPaneProof(readState(scene.dir).sessions[scene.session]?.seats[seatName], seatName, pane, scene.session, owner, conversationFallback);
+    if (!proof.ok) refused?.(proof.why);
+    return proof.ok;
+  } catch {
+    refused?.('the recorded pane identity cannot be read');
+    return false;
+  }
+}
+
 /**
  * Wakes each idle seat whose oldest due message is still unread, then types one line into the
  * panes that still owe one: the trigger is the seat's own drop read, which serves the whole
@@ -388,6 +928,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   const home = scene.home;
   if (home === undefined) return;
   if (options.noNudge === true) return;
+  const pendingOwned = options.heldDropRetry !== false;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
   // The pass's own mail reading: this reader and the report that follows share the pass's lists,
@@ -399,6 +940,27 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   let words: WakeWords | undefined;
   const wordsNow = (): WakeWords => (words ??= wakeWordsFor(home, { root: scene.root, session: scene.session, team: scene.team }, scene.now));
   catchUpBlockedSeatEvents(scene, home);
+  // The activation floor (rfc-event-comms §3, E6): the hosted watch runs the root's floor pass —
+  // activation once every live actor is at the floor, and the legacy-actor watch after it.
+  floorPass(scene.root, home, scene.now.getTime(), () => liveFloorActors(scene.root, home), null);
+  // The net under the restart rebind (src/queue/stranded.ts): a seat whose typed pointer the pane
+  // ownership proof has kept refusing is reached by nothing on an active root, and by dark
+  // delivery once the root is rolled back. The rollback is said, never silent.
+  const floorNow = floorState(scene.root, home);
+  if (floorNow.kind === 'dark') clearStranded(scene.root);
+  const stranded = floorNow.kind === 'active' ? strandedSeats(scene.root, scene.now.getTime(), floorNow.at) : [];
+  if (floorNow.kind === 'active' && stranded.length > 0) {
+    const names = stranded.map(one => `${one.seat} (${one.why}, since ${new Date(one.since).toISOString()})`).join(', ');
+    const rolled = deactivate(scene.root, home, { expectAt: floorNow.at });
+    if (rolled.kind === 'dark') {
+      clearStranded(scene.root);
+      scene.say(`the root was rolled back to dark: its typed pointers kept failing the pane ownership proof for ${names}; dark delivery reaches them again; activate it again once \`team doctor\` shows them proven`, true);
+    } else if (rolled.kind === 'superseded') {
+      clearStranded(scene.root);
+    } else {
+      scene.say(`the root could not be rolled back to dark (${rolled.kind === 'failed' ? rolled.why : 'the activation lock is busy'}) for ${names}; the rollback is finished on a later pass`, true);
+    }
+  }
   // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
   // The first history line per message id names the leg that carried it. Read once per pass, on
@@ -406,7 +968,19 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   // its one-attempt rule.
   let sendLines: Map<string, HistoryEntry> | null = null;
   const linesNow = (): Map<string, HistoryEntry> => (sendLines ??= sendLinesOf(scene, home));
+  // E7b: the typed requests of the seat the loop left last, settled when the loop moves on. A
+  // request whose pointer line was written is already noted. One whose wake put a key but not its
+  // line may have reached the pane: the attempt counts (the wake fence holds the retype). One whose
+  // wake sent no key at all was refused before any key: its walk goes on to the seat's later legs
+  // in this same pass, and if none takes it the attempt is withdrawn and the record stays due.
+  let settleRequested: (() => Promise<void>) | null = null;
+  const settleNow = async (): Promise<void> => {
+    const settle = settleRequested;
+    settleRequested = null;
+    await settle?.();
+  };
   for (const seat of scene.team.seats) {
+    await settleNow();
     // A person's drop is read by a person, and nothing is typed into a human's pane.
     if (seat.human === true) continue;
     // A stopped seat keeps its unread messages until its next start; a stale pane sighting does
@@ -415,12 +989,83 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // A held seat is not woken: its native presence proves a turn, a person wait, a session end,
     // or a projection this pass cannot trust. The message stays unread and the later report
     // still speaks; no reservation is taken and nothing is typed.
-    if (scene.nativeHeld?.has(seat.name) === true) continue;
+    if (scene.nativeHeld?.has(seat.name) === true) {
+      // RFC event-comms E3: a lead the presence proves mid-turn is not idle. Every running
+      // lead-alarm clock is re-armed here, so the alarm counts from the end of the turn, never
+      // from the wake before it. Other holds (a person wait, a gone or untrusted projection) keep
+      // the legacy clock. Nothing else happens for a held seat: no wake, no reservation, no key.
+      if (isLeadSeat(scene, seat.name) && scene.nativeWorking?.has(seat.name) === true) {
+        rearmLeadEpisodes(seatMailDirIn(scene.dir, scene.session, seat.name), scene.now.getTime(), mail.waitingIds(seat.name));
+      }
+      continue;
+    }
     if (options.rung?.has(seat.name) === true) continue;
+    // E7b (R3.4): the one re-send scheduler, for every stamped record of the seat that is not
+    // settled, through the seat's current adapter. The ladders below never see a stamped record.
+    const requested = scene.resendStamped === undefined ? new Map<string, number>() : await resendStampedDrops(scene, seat, key.key, nowMs);
+    /** Requests whose wake put a key into the pane but not the pointer line. */
+    const keysOnly = new Set<string>();
+    // The Claude adapter's seat: its pointer is the attempt, and no walk goes on after it.
+    const adapterSeat = claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined);
+    if (requested.size > 0) {
+      const seatDir = seatMailDirIn(scene.dir, scene.session, seat.name);
+      const resend = scene.resendStamped;
+      settleRequested = async () => {
+        for (const [id, attempt] of requested) {
+          if (keysOnly.has(id)) {
+            noteAttemptOutcome(seatDir, id, attempt, { copy: null, via: null });
+            continue;
+          }
+          if (adapterSeat) {
+            withdrawAttempt(seatDir, id, attempt);
+            continue;
+          }
+          let via: string | null = null;
+          try {
+            via = resend === undefined ? null : await resend(seat, seatDir, id, () => false, 'typed');
+          } catch {
+            via = null;
+          }
+          if (via === null || via === TYPED_REQUESTED) withdrawAttempt(seatDir, id, attempt);
+          else noteAttemptOutcome(seatDir, id, attempt, { copy: null, via });
+        }
+        requested.clear();
+      };
+    }
+    /** The pointer line was written with its token: it names every message waiting at the seat,
+     *  so each request it covers is a re-send now. The pointer carries no copy: the read it names
+     *  numbers each copy as it serves the body. A request for a message read since the folder was
+     *  listed is not among `ids`: it is settled when the loop moves on. */
+    const confirmRequested = (ids: readonly string[], at: string): void => {
+      const seatDir = seatMailDirIn(scene.dir, scene.session, seat.name);
+      for (const id of ids) {
+        const attempt = requested.get(id);
+        if (attempt === undefined) continue;
+        requested.delete(id);
+        noteAttemptOutcome(seatDir, id, attempt, { copy: null, via: 'typed' });
+        const payload = payloadOf(seatDir, id, home);
+        if (payload !== null) {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at, from: payload.from, to: seat.name, body: payload.body, id, thread: payload.thread,
+            outcome: 'awaiting receipt', note: POINTER_RESENT_NOTE, via: 'typed',
+          });
+        }
+        scene.say(`${seat.name}: message ${id} is not acknowledged; offered again on the typed (one pointer line for every waiting message)`, false);
+      }
+    };
+    /** What a typed wake that carried the pointer did: the line written (the re-send of every
+     *  request it covers), only other keys (counted, fenced), or no key at all (settled by the walk
+     *  going on). */
+    const settleTypedRequest = (ids: readonly string[], typed: { typed: boolean; tries: number; lineWritten?: true } | null | undefined, tokened: boolean, at: string): void => {
+      if (ids.length === 0 || typed === null || typed === undefined) return;
+      // The pointer line written and submitted (an Enter, or the agent prompt), with its token.
+      if (typed.lineWritten === true && typed.tries > 0 && tokened) confirmRequested(ids, at);
+      else if (typed.typed) for (const id of ids) keysOnly.add(id);
+    };
     // The seat's own retry, read from its profile and its file word. Off keeps today's
     // drop-file typed leg, whose writer refuses in every real binding.
     const retry = watchRetryOf(seat);
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
     const unread = mail.unread(seat.name);
     // The folder as it is now, not only as the scan saw it. A message that landed after the
@@ -429,29 +1074,75 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // this pass has not read yet (the pass's reader answers the others), and it runs for every
     // seat: an empty list, or a list the webhook empties, is no reason not to see a late message.
     const fresh = listUnread(dropDir, context, home, mail.recordAt);
+    // A lead is woken from unread mail whatever its delivery order is, including drop only.
+    const leadSeat = isLeadSeat(scene, seat.name);
+    // A lead's clocks for messages settled since are removed, so no pass tends them again.
+    const waiting = leadSeat ? mail.waitingIds(seat.name) : undefined;
+    if (waiting !== undefined) rearmLeadEpisodes(dropDir, null, new Set([...waiting, ...fresh.map((one) => one.id)]));
     if (unread.length === 0 && fresh.length === 0) continue;
     // The seat's class is read only for a seat something waits at: the window is the one its
     // delivery class earns, and a seat with nothing unread costs no read.
-    const unreadAfter = windowForSeat(options, seat);
+    const leadWindow = scene.team.watch.leadUnreadAfter;
+    const unreadAfter = leadSeat && typeof leadWindow === 'number' ? leadWindow : windowForSeat(options, seat);
+    // RFC event-comms E2: the seat's current launch brief, once its claim says the seat is ready,
+    // is offered on the first pass that sees it unread: no unread window. It goes through this
+    // same guarded wake below (live pane, seat lock, delivery order, human and policy rules) and
+    // its pointer trigger, never a body of its own; a lost ready changes nothing, the window
+    // applies again to every other message.
+    const readyBrief = (() => {
+      const claim = currentClaimIn(scene.root, scene.session, seat.name);
+      return claim !== null && claim.stage === 'ready' ? claim.id : null;
+    })();
+    const windowOf = (id: string): number => (id === readyBrief ? 0 : unreadAfter);
     const scanned = new Set(unread.map((one) => one.id));
     const due = unread
-      .filter((message) => dueForWake(dropDir, message, nowMs, unreadAfter, retry === null ? null : retry.tries));
+      .filter((message) => !stampedRecord(dropDir, message.id, mail)
+        && dueForWake(dropDir, message, nowMs, windowOf(message.id), retry === null ? null : retry.tries, pendingOwned));
     // A message the scan did not list is new here, and it is due now if its window has passed.
     // One the cascade would take by webhook waits for the pass that reaches the webhook first:
     // this pass types no line ahead of a leg it has not walked for the message.
     const arrived = fresh.filter((one) => !scanned.has(one.id)
-      && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+      && !stampedRecord(dropDir, one.id, mail)
+      && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
       && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
-    if (due.length === 0 && arrived.length === 0) continue;
+    if (leadSeat) {
+      const pending = [...unread];
+      for (const one of fresh) {
+        if (!pending.some((item) => item.id === one.id)) pending.push(one);
+      }
+      pending.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+      const oldest = pending[0];
+      if (oldest !== undefined) {
+        // The lead's own status in this pass's live snapshot: a lead seen working is mid-turn, and
+        // its alarm waits. Only the snapshot is read here (no extra pane or status read), so the
+        // wake below takes exactly the reads it took before.
+        const leadAgents = scene.live.agents.filter((agent) => agent.name === seat.name);
+        const leadWorking = leadAgents.length === 1 && leadAgents[0]?.status === 'working';
+        noteLeadEpisode(scene, seat.name, dropDir, oldest.id, nowMs, false, leadWorking);
+      }
+    }
+    // A Claude seat has no typed wake of its own, so without this a message its channel push or
+    // its socket did not get read sat "pull-only" until the seat's next turn: the watch re-offers
+    // it on the event legs, channel push then socket, on the typed wake's slow ladder.
+    if (seat.cli === 'claude-code' && retry === null && !(adapterSeat && requested.size > 0)) {
+      const candidates = [...unread];
+      for (const one of fresh) if (!candidates.some((item) => item.id === one.id)) candidates.push(one);
+      const reoffered = await reofferOnEventLegs(scene, seat, dropDir, candidates, nowMs, unreadAfter, home, pendingOwned);
+      if (reoffered) continue;
+    }
+    // The re-send scheduler's typed requests (E7b): stamped records its walk stopped at the typed
+    // leg for. They take this pass's typed wake whatever the legacy windows say.
+    const requestedDue = [...unread, ...fresh.filter((one) => !scanned.has(one.id))].filter((one) => requested.has(one.id));
+    if (due.length === 0 && arrived.length === 0 && requestedDue.length === 0) continue;
     // The cascade's next leg below the one the send's walk took, per message: the adapter is
     // tried before any pane is looked for, because a post is no keystroke and needs none. A
     // message whose walk moves on stays due for the typed line below, with the failed leg kept
     // for its history line; a message the bus is posting is left for a later pass, unmarked.
-    let typedDue = due;
+    let typedDue = [...requestedDue, ...due];
     const failedWebhook = new Map<string, string>();
     if (seat.webhook !== undefined) {
       const lines = linesNow();
-      typedDue = [];
+      typedDue = [...requestedDue];
       for (const message of due) {
         if (!webhookNext(seat, lines.get(message.id))) {
           typedDue.push(message);
@@ -471,6 +1162,15 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
           payload,
           scene.now.toISOString(),
           lines.get(message.id)?.via === 'webhook',
+          leadSeat
+            ? () => receiptHeld(
+              dropDir,
+              message.id,
+              context,
+              home,
+              claimBindingIn(scene.root, scene.session, seat.name, message.id),
+            )
+            : undefined,
         );
         if (woke.outcome === 'next') {
           if (woke.failed !== undefined) failedWebhook.set(message.id, woke.failed);
@@ -484,7 +1184,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if (typedDue.length === 0) {
         const after = listUnread(dropDir, context, home, mail.recordAt);
         const late = after.filter((one) => !scanned.has(one.id)
-          && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+          && !stampedRecord(dropDir, one.id, mail)
+          && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
           && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
         if (late.length === 0) continue;
       }
@@ -512,9 +1213,14 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // silence. A recognised screen still meets the status rule below.
     const kind = readScreen(seat.cli, screen).kind;
     if (kind === 'unknown') {
+      // The capture request, once per episode, beside the per-message blocked report below: the
+      // lead learns the seat needs a capture even when no message is due for that report yet.
+      noteUnrecognisedScreen({ dropDir, root: scene.root, session: scene.session, home, seat: seat.name, pane, lead: scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator, at: scene.now });
       reportBlockedScreenToLead(scene, seat, pane, dropDir, context, typedDue, unreadAfter, kind, failedLeg, home);
       continue;
     }
+    // A screen the profile places again ends the episode.
+    clearUnrecognisedScreen(dropDir);
     // A profile the terminal host cannot report faithfully names its own screen as the seat's
     // state, so the typed retry trusts that reading rather than the host's word; the drop-file
     // leg keeps its own status rule. The typed wake reads the box twice itself, and only an empty
@@ -550,7 +1256,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const freshNow = listUnread(dropDir, context, home, mail.recordAt);
       const unreadNow = new Set(freshNow.map((one) => one.id));
       const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
-        && dueForWake(dropDir, one, nowMs, unreadAfter, retry === null ? null : retry.tries)
+        && !stampedRecord(dropDir, one.id, mail)
+        && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
         && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
       const wakeable = [
         ...typedDue.filter((one) => unreadNow.has(one.id) && !existsSync(wakePath(dropDir, one.id))),
@@ -559,19 +1266,36 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;
+      // A re-send's wake (E7b) is the pointer only: one line for every message waiting at the
+      // seat, with the count and the read that serves them all (`pointerLine`), never a line per
+      // message and never a word a sender wrote. Every request the pass holds for a message still
+      // waiting is carried by it.
+      const pointerIds = requested.has(audited.message.id)
+        ? wakeable.filter((one) => requested.has(one.id)).map((one) => one.id)
+        : [];
+      const batch = pointerIds.length > 0;
+      // The Claude adapter's pointer (§2.4) is that same line, typed under its own guards below.
+      const adapterPointer = adapterSeat && batch;
       // The wake's header names the sender the signed record carries, resolved through this
       // home's registries. A sender that cannot be pinned is not typed nameless: the message
       // stays unread, its reservations are never taken, and the report pass says why.
-      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
-      if (sender === null) continue;
+      const sender = batch ? null : wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now, wordsNow());
+      if (!batch && sender === null) continue;
       // A socket delivery's re-wake names the message the frame carried: answer it or ack it
       // (ADR `message-path`, D3). Any other message keeps the profile's read sentence.
       const wakeHint = linesNow().get(audited.message.id)?.via === 'socket' ? socketWakeHint(audited.message.id) : undefined;
-      const line = readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
+      const line = batch
+        ? pointerLine(freshNow.length, seat.name, typedWakeMaxFor(seat.cli))
+        : sender === null
+          ? null
+          : readTriggerLine(seat.name, scene.session, sender, seat.cli, wakeHint);
       if (line === null) continue;
       // The typed retry submits a box that already holds exactly its line, and leaves every
-      // other draft. The check is this pass's own look; the wake reads the box again.
-      if (retry !== null && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
+      // other draft. A lead's draft is the exception the delivery below can keep: it copies
+      // the text and puts it back, and types nothing when it cannot. The typed-wake seam has
+      // no restore, so it is not used while that draft is there.
+      const preserveDraft = leadSeat && !adapterPointer && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen);
+      if (!preserveDraft && (retry !== null || adapterPointer) && kind === 'unsent' && !boxHoldsText(seat.cli, line, screen)) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an
       // earlier attempt whose effect is unknown, and no second line is typed for it.
@@ -583,6 +1307,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
         return true;
       };
       if (!take(audited.message.id)) continue;
+      if (leadSeat) noteLeadEpisode(scene, seat.name, dropDir, audited.message.id, nowMs, true);
       for (const one of wakeable) {
         if (one.id !== audited.message.id) take(one.id);
       }
@@ -592,12 +1317,181 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       // delivery cannot become the wake's read here.
       const binding = claimBindingIn(scene.root, scene.session, seat.name, message.id);
       const receipt = (): boolean => receiptHeld(dropDir, message.id, context, home, binding);
+      // A lead is woken by a socket nudge first (the bus fans `message.arrived` to the seat and
+      // to a channel server). No bus, and the typed wake: a box that holds other text is cleared
+      // and that text is put back, or the wake line is not typed.
+      // The Claude adapter's pointer, a lead's included, takes the guarded typed seam below (its
+      // gate, attempt record and hourly cap), never the lead's legacy fallback.
+      if (leadSeat && !adapterPointer) {
+        let pushed = false;
+        // The Claude adapter §1: no lead socket nudge on an E7b-active root.
+        if (!adapterPointer && !socketSuppressed(scene.root, home)) try {
+          pushed = (await nudgeBus(scene.root, {
+            session: scene.session,
+            seat: seat.name,
+            record_id: message.id,
+          }, { deadlineMs: 300 })).kind === 'nudged';
+        } catch {
+          pushed = false;
+        }
+        // The lead's legacy typed fallback is under the same wake-attempt fence (rfc-event-comms
+        // §5, E6): the gate first, then `emitted` before its first key of any kind.
+        const leadScope = { root: scene.root, session: scene.session, seat: seat.name, incarnation: seatIncarnation(scene.dir, scene.session, seat.name, pane) };
+        const leadTarget = { msg_id: message.id, seq: queuePlaceOf(dropDir, message.id)?.seq ?? null };
+        const leadGate: GateOutcome = pushed ? { kind: 'open', enforced: false, create: 'none' } : attemptGate(leadScope, leadTarget, home, {
+          settled: (id) => id === message.id ? receipt() : false,
+          scrollback: () => passPaneScreen(scene, pane),
+        });
+        const leadHandle = pushed || leadGate.kind === 'blocked' ? null : prepareAttemptAs(leadScope, leadTarget, home, leadGate.create);
+        const leadBlocked = leadGate.kind === 'blocked' || (leadHandle === null && leadGate.kind === 'open' && leadGate.create === 'enforce');
+        if (leadBlocked) scene.say(`${seat.name}: ${leadGate.kind === 'blocked' ? leadGate.why : 'the wake attempt could not be recorded'}; no wake line was typed`, false);
+        const leadLine = leadHandle !== null && leadGate.kind === 'open' && leadGate.create === 'enforce' ? `${line} ${tokenText(leadHandle.attempt.token)}` : line;
+        const typed = pushed || leadBlocked
+          ? null
+          : await deliverLeadTypedWake(leadWakeHost(scene, pane), pane, leadLine, seat.cli, {
+              now: () => scene.now.getTime(),
+              dropPath: liveRecordPath(dropDir, message.id),
+              seatDir: join(scene.dir, 'seats', seat.name),
+              log: (kept) => logLine(join(scene.root, '.agents'), 'watch', seat.name, kept, scene.now),
+              // The shared typed path's proof before every key; the attempt's `emitted` before
+              // the first.
+              beforeEachKey: () => paneStillSeats(scene, seat.name, pane),
+              beforeFirstKey: () => leadHandle === null || leadHandle.emit(),
+              reportLine: true,
+            });
+        if (typed !== null) leadHandle?.settle(typed);
+        settleTypedRequest(pointerIds, typed, leadLine !== line, at);
+        if (!pushed && (typed === null || !typed.typed)) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          continue;
+        }
+        const read = receipt();
+        const via = pushed ? 'socket' as const : 'typed' as const;
+        if (read) {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at,
+            from: payload.from,
+            to: seat.name,
+            body: payload.body,
+            id: message.id,
+            thread: payload.thread,
+            outcome: 'delivered (read)',
+            via,
+            ...failedLeg(message.id),
+          });
+          scene.say(`${seat.name}: a message from ${payload.from} was unread and was read on the wake (receipt)`, false);
+        } else {
+          appendHistory(scene.team.project, scene.root, home, {
+            ts: at,
+            from: payload.from,
+            to: seat.name,
+            body: payload.body,
+            id: message.id,
+            thread: payload.thread,
+            outcome: 'awaiting receipt',
+            ...(typed?.reason === undefined ? {} : { note: typed.reason }),
+            via,
+            ...failedLeg(message.id),
+          });
+          scene.say(
+            `${seat.name}: a message from ${payload.from} was unread and one wake was delivered; it counts when the read receipt appears`,
+            false,
+          );
+        }
+        for (const id of reserved) {
+          mark(wakePath(dropDir, id), { id, at, state: read ? 'read' : 'sent', evidence: pushed ? 'socket' : 'typed-wake' });
+        }
+        continue;
+      }
       // The seat's profile declares a typed wake and its retry is on: the watch types the same
       // wake a send types, through the one seam that carries the module (src/send/typed-wake.ts).
       // That wake is delivered only when the profile's working screen showed; a refused or
       // failed attempt gives its reservations back, so it never spends the message's one wake.
-      if (retry !== null) {
-        const typed = await scene.sources.typedWake?.(pane, line, seat.cli, scene.session);
+      if ((retry !== null || adapterPointer) && !preserveDraft) {
+        // One pane takes at most `WAKE_LINES_PER_HOUR` typed lines from this retry, whatever
+        // number of messages wait: the slow retries must never flood a seat's box.
+        // A line held back is recorded, so the unread reports say the cap held it.
+        if (scene.sources.typedWake !== undefined && typedLinesWithinHour(dropDir, nowMs) >= WAKE_LINES_PER_HOUR) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          noteTypedLine(dropDir, nowMs, true);
+          scene.say(`${seat.name}: the hourly cap of ${String(WAKE_LINES_PER_HOUR)} typed wake lines is reached; no wake line was typed this pass, ${String(freshNow.length)} unread message${freshNow.length === 1 ? ' waits' : 's wait'}`, false);
+          continue;
+        }
+        // The wake-attempt fence (rfc-event-comms §5, E6): an attempt whose keys may have landed
+        // and that nothing confirmed is never retyped; it resolves only on a read, its token in
+        // the scrollback, or a new seat incarnation. Dark roots write the states in shadow only.
+        const attemptScope = { root: scene.root, session: scene.session, seat: seat.name, incarnation: seatIncarnation(scene.dir, scene.session, seat.name, pane) };
+        const attemptTarget = { msg_id: message.id, seq: queuePlaceOf(dropDir, message.id)?.seq ?? null };
+        const gate: GateOutcome = scene.sources.typedWake === undefined
+          ? { kind: 'open', enforced: false, create: 'none' }
+          : attemptGate(attemptScope, attemptTarget, home, {
+              settled: (id) => id === message.id ? receipt() : false,
+              scrollback: () => passPaneScreen(scene, pane),
+            });
+        if (gate.kind === 'blocked') {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          scene.say(`${seat.name}: ${gate.why}; no wake line was typed`, false);
+          continue;
+        }
+        const handle = scene.sources.typedWake === undefined ? null : prepareAttemptAs(attemptScope, attemptTarget, home, gate.create);
+        if (handle === null && gate.create === 'enforce') {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          scene.say(`${seat.name}: the wake attempt could not be recorded; no wake line was typed`, false);
+          continue;
+        }
+        // The Claude adapter's pointer is typed only under an enforcing wake attempt on a root
+        // that reads active now: an unknown or fenced floor, or no durable attempt, types nothing.
+        if (adapterPointer && (handle === null || gate.create !== 'enforce' || !floorActive(scene.root, home))) {
+          for (const id of reserved) release(wakePath(dropDir, id));
+          continue;
+        }
+        const typedLine = handle !== null && gate.create === 'enforce' ? `${line} ${tokenText(handle.attempt.token)}` : line;
+        // An adapter pointer reads the seat's protection again before every key, from the team
+        // file as it stands now (never the pass's copy): a pane protected since the reservation
+        // takes no key.
+        const legsNow = adapterPointer ? (await import('../commands/send.ts')).permittedEventLegs : null;
+        const pointerPermittedNow = (): boolean => {
+          if (legsNow === null) return true;
+          try {
+            const loaded = readTeamConfig(scene.root, { home });
+            if (!loaded.ok) return false;
+            return legsNow({ dir: scene.dir, root: scene.root, home, session: scene.session, seat: seat.name, team: loaded.team, now: () => new Date() }).pointer === true;
+          } catch {
+            return false;
+          }
+        };
+        // The shared typed path's proof before every key; the attempt's `emitted` before the
+        // first. An adapter pointer also asks the floor and its protection again at every key,
+        // under the seat lock this pass holds.
+        let refusal: string | undefined;
+        let ownership: string | undefined;
+        let typed = await scene.sources.typedWake?.(pane, typedLine, seat.cli, scene.session, {
+          beforeEachKey: () => {
+            if (!paneStillSeats(scene, seat.name, pane, adapterPointer, why => { refusal = why; ownership = why; })) return false;
+            if (adapterPointer && !floorActive(scene.root, home)) { refusal = 'the queue floor is no longer active'; return false; }
+            if (adapterPointer && !pointerPermittedNow()) { refusal = 'the typed pointer is no longer permitted'; return false; }
+            return true;
+          },
+          beforeFirstKey: () => {
+            if (handle !== null && !handle.emit()) { refusal = 'the wake attempt could not be emitted'; return false; }
+            return true;
+          },
+          reportLine: true,
+        });
+        if (typed !== undefined && refusal !== undefined) typed = { ...typed, reason: `${typed.reason}; ${refusal}` };
+        if (adapterPointer && typed !== undefined) {
+          const activation = floorState(scene.root, home);
+          if (ownership !== undefined && activation.kind === 'active') noteStrandedPointer(scene.root, seat.name, nowMs, ownership, activation.at);
+          else if (typed.typed) noteReachedPointer(scene.root, seat.name);
+        }
+        if (typed !== undefined) handle?.settle(typed);
+        if (typed?.unrecognised === true) {
+          noteUnrecognisedScreen({ dropDir, root: scene.root, session: scene.session, home, seat: seat.name, pane, lead: scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator, at: scene.now });
+        } else if (typed?.delivered === true) {
+          clearUnrecognisedScreen(dropDir);
+        }
+        settleTypedRequest(pointerIds, typed, typedLine !== line, at);
+        if (typed?.typed === true) noteTypedLine(dropDir, nowMs);
         if (typed === undefined) {
           // No seam bound: nothing was attempted, so nothing is spent and no attempt is counted.
           for (const id of reserved) release(wakePath(dropDir, id));
@@ -620,7 +1514,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
             recordWakeTry(dropDir, id, {
               tries,
               typed: before?.typed === true || typed.typed,
-              next_at: new Date(nowMs + wakeBackoffMs(tries)).toISOString(),
+              next_at: new Date(nowMs + wakeRetryDelayMs(tries, retry?.tries ?? DEFAULT_WATCH_WAKE_TRIES)).toISOString(),
+              reason: typed.reason,
             });
           }
           continue;
@@ -649,12 +1544,17 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
             body: payload.body,
             id: message.id,
             thread: payload.thread,
-            outcome: 'delivered (typed wake)',
+            outcome: leadSeat ? 'awaiting receipt' : 'delivered (typed wake)',
             note: typed.reason,
             via: 'typed',
             ...failedLeg(message.id),
           });
-          scene.say(`${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered (${typed.reason})`, false);
+          scene.say(
+            leadSeat
+              ? `${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered; it counts when the read receipt appears`
+              : `${seat.name}: a message from ${payload.from} was unread and one typed wake line was delivered (${typed.reason})`,
+            false,
+          );
         }
         for (const id of reserved) {
           mark(wakePath(dropDir, id), { id, at, state: read ? 'read' : 'sent', evidence: 'typed-wake' });
@@ -663,7 +1563,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       }
       const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
         submitHeld: true,
-        dropPath: join(dropDir, message.id),
+        dropPath: liveRecordPath(dropDir, message.id),
         receipt,
       });
       // `held` left the box as it was, and `not-submitted` left the trigger in it for the next
@@ -746,6 +1646,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       lock.release();
     }
   }
+  await settleNow();
 }
 
 /** One mailbox a report goes to: the checkout and session whose `team messages` reads it, and the
@@ -818,7 +1719,7 @@ function writeLeadBlockedDrop(
   text: string,
   at: string,
 ): { ok: true; path: string; id: string; existing?: true } | { ok: false; error: string } {
-  const dropDir = join(target.root, '.agents', 'send-drops', target.session, target.to);
+  const dropDir = seatDropDir(target.root, target.session, target.to);
   const path = join(dropDir, id);
   if (existsSync(path)) return { ok: true, path, id, existing: true };
   let record: ReturnType<typeof signRecord>;
@@ -827,7 +1728,11 @@ function writeLeadBlockedDrop(
       kind: 'message', id, to: target.to, to_id: null, root: sceneRoot(target.root), session: target.session,
       at, body: text, from: 'runtime', from_id: null, rule: LEAD_REPORT_RULE, thread: id,
     }, home);
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    const signed = record;
+    appendDeliverySync({ dropDir, record: signed }, () => {
+      dropMessage(dropDir, id, `${JSON.stringify(signed, null, 2)}\n`);
+      return { ok: true, value: null };
+    }, { home, log: queueLog(dropDir) });
   } catch (error) {
     return { ok: false, error: String(error) };
   }
@@ -962,7 +1867,7 @@ function reportBlockedScreenToLead(
     const noticeId = cover?.notice ?? activeReportId ?? blockedDropId(scene.session, seat.name, kind, ids);
     const lines = reserved.map((one) => {
       const minutes = Math.max(1, Math.round(one.age / 60_000));
-      const where = `the drop is at ${join(dropDir, one.message.id)}`;
+      const where = `the drop is at ${liveRecordPath(dropDir, one.message.id)}`;
       return `${seat.name}: blocked by a dialog (${kind}) — a message from ${one.payload.from} is delivered-but-blocked after ${String(minutes)} min (id ${one.message.id}); no wake line was typed; ${where}`;
     });
     const header = unreadListing.length === 1
@@ -1189,13 +2094,15 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     : { root: scene.root, session: scene.session, to: leadName, label: leadName };
   const nowMs = scene.now.getTime();
   const at = scene.now.toISOString();
+  let deliveredWakes: Map<string, string> | undefined;
   for (const seat of scene.team.seats) {
     // A person reads their own mail; a stopped seat keeps it until its next start, and the
     // generic report already names the queue its absence leaves. The lead is the report's
-    // recipient, never its subject: a notice about the lead is written into the very queue it
-    // names, and that queue is what the report exists to speak for.
+    // recipient, never its subject: a notice about the lead would be written into the queue
+    // the report exists to speak for. The lead's own unread mail is the wake, and a receipt
+    // that never arrives climbs to the parent orchestrator.
     if (seat.human === true || seat.stopped === true || seat.name === leadName) continue;
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const unread = mail.unread(seat.name);
     if (unread.length === 0) {
       closeStuckEpisode(mail, dropDir);
@@ -1241,10 +2148,15 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
           // rather than read outside the pass's one shared reading.
           const screen = passPaneScreen(scene, pane);
           if (screen === null) {
+            // A hosted pass holds a screen only when it read one: its status read skips the
+            // screen of a seat herdr reports idle or working (`shouldReadScreenForStatus`), and
+            // the wake leg's own read (`passPaneScreenAsync`) caches the screen it takes. No
+            // screen here therefore means no wake read the pane this pass, not that a read
+            // failed; the old wording blamed the pane (2026-11-17, a Grok seat mid-turn).
             reason = {
               class: 'screen',
               kind: 'no-screen',
-              word: 'the pane screen could not be read, no wake reached it',
+              word: 'no wake read the pane this pass, no wake reached it',
             };
           } else {
             const kind = readScreen(seat.cli, screen).kind;
@@ -1264,10 +2176,24 @@ export function reportStuckSeats(scene: RetryScene, window: UnreadWindow, readin
     const count = unread.length;
     const minutes = Math.max(1, Math.round(oldestAge / 60_000));
     const waits = `${String(count)} message${count === 1 ? '' : 's'} wait, oldest ${String(minutes)} min`;
-    const where = `the drop is at ${join(dropDir, oldest.id)}`;
+    const where = `the drop is at ${liveRecordPath(dropDir, oldest.id)}`;
+    // This report types nothing, but a wake the send or a retry already delivered is named: a
+    // notice saying only "no wake line was typed" read as "the seat was never woken" when the
+    // send's own typed wake had landed minutes before (2026-11-17, an agy seat whose turn ran
+    // 3 min after the wake). Every waiting message is asked, not only the oldest: one pointer
+    // line covers them all, and the history names whichever message it was written for. A line
+    // the hourly cap held back is said too.
+    deliveredWakes ??= deliveredTypedWakesOf(scene, home);
+    const woken = newestWakeOf(deliveredWakes, unreadIds);
+    const typedWord = (woken === undefined
+      ? 'no wake line was typed for any of them'
+      : `a typed wake was delivered at ${woken} and the seat has not read it since; this report typed nothing`) + capHeldWords(dropDir, nowMs);
+    // The screen words end in "no wake reached it": true of this pass, false of the message once
+    // a delivered wake is known, so the clause goes and only what the pass saw stays.
+    const word = woken === undefined ? reason.word : reason.word.replace(/, no wake reached it$/, '');
     const body = reason.ageMin === undefined
-      ? `${seat.name}: ${reason.word}; ${waits} - no wake line was typed; ${where}`
-      : `${seat.name}: ${reason.word}; ${waits} - the word has stood for ${String(reason.ageMin)} min; no wake line was typed; ${where}`;
+      ? `${seat.name}: ${word}; ${waits} - ${typedWord}; ${where}`
+      : `${seat.name}: ${word}; ${waits} - the word has stood for ${String(reason.ageMin)} min; ${typedWord}; ${where}`;
     // An episode whose named messages no longer all stand (one was read) is over: its marker was
     // given back above, and this pass claims the new one. The claim comes before the notice it
     // covers, so a crash between the two leaves a marker with nothing said rather than a notice
@@ -1304,7 +2230,7 @@ function writeLeadReportDrop(
   text: string,
   at: string,
 ): { ok: true; path: string; id: string; existing?: true } | { ok: false; error: string } {
-  const dropDir = join(target.root, '.agents', 'send-drops', target.session, target.to);
+  const dropDir = seatDropDir(target.root, target.session, target.to);
   const id = reportDropId(messageIds);
   const path = join(dropDir, id);
   if (existsSync(path)) return { ok: true, path, id, existing: true };
@@ -1314,7 +2240,11 @@ function writeLeadReportDrop(
       kind: 'message', id, to: target.to, to_id: null, root: sceneRoot(target.root), session: target.session,
       at, body: text, from: 'runtime', from_id: null, rule: LEAD_REPORT_RULE, thread: id,
     }, home);
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    const signed = record;
+    appendDeliverySync({ dropDir, record: signed }, () => {
+      dropMessage(dropDir, id, `${JSON.stringify(signed, null, 2)}\n`);
+      return { ok: true, value: null };
+    }, { home, log: queueLog(dropDir) });
   } catch (error) {
     return { ok: false, error: String(error) };
   }
@@ -1474,6 +2404,39 @@ type DueReport = {
  * retry publishes each name once. A lead drop's id is fixed by the set of messages it lists, so a
  * lost marker finds the standing record rather than writing a second one.
  */
+/** The marker beside a message whose sender was told no route is left to wake its seat. */
+export function noRouteReportedPath(dropDir: string, id: string): string {
+  return join(dropDir, `${id}.no-route-reported`);
+}
+
+/** Tells a message's senders, once, that its seat is a protected pane whose channel offer was
+ *  given up before any push: nothing wakes it until the channel's re-offer. The lead is not a
+ *  target here (it may be the very seat), and its own report keeps the generic 2N rule. */
+function notifyNoRoute(scene: RetryScene, seat: string, dropDir: string, id: string, home: string, lead: ReportTarget | null, at: string, context: StatusContext, key: KeyObject): void {
+  if (existsSync(noRouteReportedPath(dropDir, id))) return;
+  // The pass listed the folder earlier: a read or an ack that landed since settles it, and the
+  // same fresh check the regular report makes, under the same claim binding, comes first.
+  if (isRead(dropDir, id, context, key, claimBindingIn(scene.root, scene.session, seat, id))) return;
+  const payload = payloadOf(dropDir, id, home);
+  if (payload === null || payload.rule === LEAD_REPORT_RULE) return;
+  const { targets } = reportTargets(scene, payload, home);
+  const senders = targets.filter((target) => lead === null || target.root !== lead.root || target.session !== lead.session || target.to !== lead.to);
+  if (senders.length === 0) return;
+  if (!reserve(noRouteReportedPath(dropDir, id), { id, at, state: 'reserved' })) return;
+  const text = `${seat}: a message from ${payload.from} has no route to wake its seat yet (id ${id}): the send's channel offer was given up before any push, and ${seat} is a protected pane that takes no typed pointer; the channel re-offers it as a numbered copy; the drop is at ${liveRecordPath(dropDir, id)}`;
+  let landed = 0;
+  for (const target of senders) {
+    const outcome = writeRuntimeMailboxRecord({ root: target.root, home, to: target.to, id: `no-route-${id}`, text, session: target.session, at, once: true });
+    if (outcome.ok) landed += 1;
+  }
+  if (landed === 0) {
+    release(noRouteReportedPath(dropDir, id));
+    return;
+  }
+  mark(noRouteReportedPath(dropDir, id), { id, at, state: 'reported', to: senders.map((target) => target.label) });
+  scene.say(`${seat}: no route is left to wake it for ${id}; its sender was told`, true);
+}
+
 export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, reading?: StuckReading): void {
   const home = scene.home;
   if (home === undefined) return;
@@ -1499,6 +2462,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     return nowMs - Date.parse(since) < reading.stuckAfterSeconds * 1000;
   };
   let blockedHistoryIds: Set<string> | null = null;
+  let deliveredWakes: Map<string, string> | undefined;
   const hasBlockedHistory = (id: string): boolean => {
     if (blockedHistoryIds === null) {
       const historyRead = readHistory(scene.team.project, scene.root, home);
@@ -1514,7 +2478,7 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     // A person writes no receipt; a drop to a human seat is read by the person, not by a watcher.
     // The retry pass's own give-up already names a drop no watcher read.
     if (seat.human === true) continue;
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator };
     // The seat's class is read only for a seat something waits at, as the wake pass reads it.
     const unread = mail.unread(seat.name);
@@ -1527,6 +2491,21 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
     const leadSpeaks = stuckEpisodeFor(mail, seat.name, dropDir) === null && !youngWorking(seat.name);
     // Twice this seat's own window: the wake at N and the report at 2N read one value.
     const threshold = windowForSeat(window, seat) * 1000 * 2;
+    // A confirmed protected pane on an active root (the route lookup answers, and it permits no
+    // pointer) whose channel offer its sender gave up before any push: no wake is coming until the
+    // channel server's re-offer. Its sender is told now, under its own marker and heading; the
+    // generic report at 2N (lead and senders) is untouched by it.
+    const legs = scene.eventLegs?.(seat.name);
+    // Only an explicit verdict counts: a lookup that could not read the settings or the delivery
+    // chain answers without `pointer`, and that is not a protected pane.
+    const protectedPane = legs?.pointer === false
+      && claudeAdapterRoot(seat.cli, scene.root, home, seat.webhook !== undefined);
+    if (protectedPane) {
+      for (const message of unread) {
+        if (!channelOfferGivenUp(seatFolderOf(dropDir, message.id), message.id)) continue;
+        notifyNoRoute(scene, seat.name, dropDir, message.id, home, lead, at, context, key.key);
+      }
+    }
     for (const message of unread) {
       const age = nowMs - Date.parse(message.ts);
       if (!(age >= threshold)) continue;
@@ -1558,18 +2537,23 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
       if (!reserve(reportedPath(dropDir, message.id), { id: message.id, at, state: 'reserved' })) continue;
       const minutes = Math.max(1, Math.round(age / 60_000));
       const tried = woke === null ? wakeTryOf(dropDir, message.id) : null;
-      const wakeWords = woke === null
+      // A re-send's pointer gives its marker back before the next attempt: the history still
+      // names the line it typed, so "no wake line was typed" is said only when none was.
+      const pointed = woke === null ? (deliveredWakes ??= deliveredTypedWakesOf(scene, home)).get(message.id) : undefined;
+      const wakeWords = (woke === null
         ? tried !== null && tried.typed
           ? `a typed wake was tried ${String(tried.tries)} time${tried.tries === 1 ? '' : 's'} and none was confirmed`
-          : 'no wake line was typed'
+          : pointed !== undefined
+            ? `a typed wake was delivered at ${pointed} and the seat has not read it since`
+            : 'no wake line was typed'
         : woke.state === 'reserved'
           ? woke.evidence === 'webhook'
             ? `a webhook wake was posted at ${woke.at} and its answer was not read`
             : `a wake was attempted at ${woke.at} and its outcome is unconfirmed`
           : woke.evidence === 'webhook'
             ? `its webhook adapter took the wake at ${woke.at}`
-            : `its wake line was sent at ${woke.at}`;
-      const where = `the drop is at ${join(dropDir, message.id)}`;
+            : `its wake line was sent at ${woke.at}`) + capHeldWords(dropDir, nowMs);
+      const where = `the drop is at ${liveRecordPath(dropDir, message.id)}`;
       // The record's state word matches the send-side one written when a walk stored a message
       // without waking the seat: `queued, not woken`. A sender reading either line finds the
       // same words, and the wake words behind them say what this daemon's re-wake did.
@@ -1674,5 +2658,17 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow, readi
         true,
       );
     }
+  }
+}
+
+/** The seat's incarnation for its wake attempts: the launch identity `team` recorded (or the agent
+ *  session herdr reported) and the pane. 'unknown' when neither is recorded. */
+function seatIncarnation(dir: string, session: string, seat: string, pane: string): string {
+  try {
+    const held = readState(dir).sessions[session]?.seats[seat];
+    const stamp = held?.launched !== undefined ? JSON.stringify(held.launched) : (held?.agent_session ?? null);
+    return incarnationOf(stamp, pane);
+  } catch {
+    return incarnationOf(null, null);
   }
 }

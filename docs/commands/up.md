@@ -1,5 +1,45 @@
 # team up
 
+If a Claude Code conversation changes while its launched process stays on its recorded pane,
+an admitted `team up` can repair the conversation binding without restarting that CLI. It
+requires one live agent naming the seat, the same recorded pane and launched process, and a
+live socket whose inbound declaration is current. The state and registry must still agree on
+the previous conversation; a changed snapshot refuses the repair. A dry run and an automatic
+restore that protects a present pane leave these bindings untouched.
+
+To repair one seat alone, including your own working CLI, run:
+
+    team up --rebind <seat>
+
+Add `--dry-run` to verify the proof and show the proposed rebind without writing either record.
+This mode uses ordinary owner or lead admission. It reads the recorded pane, launched process,
+live conversation and current socket declaration, and updates only that seat's state and registry
+binding. It plans no launches or closures, so unrelated seats and launch-only doctor, load and
+lobby checks do not prevent this repair. A working process is eligible when it is the recorded
+CLI; a replaced process, ambiguous pane or changed snapshot is refused. Client grants and
+owner-request forms are not accepted by this narrower mode.
+
+After a machine restart the recorded pids are gone. `--rebind` then ties the restored pane
+when the record's launch predates this boot, the pane holds exactly the recorded conversation,
+and the declared CLI is in front. This works for any CLI (Codex, Cursor, Grok, Claude Code on
+another provider), and for a pane the host restored without its name: the pane is named back
+once the record is written. Outside a restart, only a Claude Code seat with a live socket is
+rebound, and an unnamed pane is never tied on its pids alone.
+
+To re-tie a whole running team after a restart without starting anything, run:
+
+    team up --retie
+
+Every seat whose restored pane proves it is re-tied (renamed back, its record updated). A
+record that stopped at `launched`, or waiting at a dialog, is adopted when its pane holds the
+seat's own recorded conversation. Every seat the plain run would launch, close or relaunch is
+listed as `not launched` and left as it is, and no workspace is swept: a parked seat stays
+parked, and one parked seat's start folder never refuses the repair.
+
+Whatever the record says, no run launches a conversation that is already live on another pane
+of the seat's CLI: the seat is held with nothing launched or closed, and the line names the
+pane and `team up --rebind <seat>`.
+
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
 declares and this machine can run, and the watch, in a workspace of its own labelled
 `Watch · <project>`. A fresh launch of
@@ -53,11 +93,15 @@ only [`team brief rollout --apply`](brief.md) recovers that delivery at the clai
 ## After a power loss
 
 The service manager starts the machine daemon at login, often before the terminal host has
-finished restoring the sessions it had. The daemon's startup pass sweeps the checkouts its service
-unit names and retries the ones whose session has not come back yet: it waits five seconds, then
-twice as long each time up to a minute, for five minutes and a quarter in all, and stops waiting
-early when every session is back or the daemon closes. A session still restoring at that bound is
-logged as pending, never reported as nothing to do.
+finished restoring the sessions it had, and the owner attaches most sessions later. The daemon's
+startup pass restores each checkout whose session runs and watches the others, without spending
+its retry wait on them: one session list every thirty seconds, and a checkout's pass runs as soon
+as its session is attached, however late. Until then `team status` names it on the daemon line as
+`restore pending … restored when attached`. A pass the load guard holds is retried after five
+seconds, then twice as long each time up to a minute, for five minutes and a quarter in all; one
+still held at that bound is logged and shown as pending with `team up --all` to finish it. A seat
+refused because its launch timed out gets one more pass on the same schedule. The sidebar's model
+line is painted within thirty seconds of an attach.
 
 One command runs the restore pass across every registered team, whatever the daemon's checkouts:
 
@@ -81,6 +125,14 @@ nothing restored yet: no teams are registered` when the registry is empty, exit 
 refuses the same way. A terminal host that does not answer is `team up: the terminal host doesn't
 answer`, exit 1. A team that failed leaves the run at exit 1; a run in which every swept team came
 back is exit 0.
+
+At daemon startup, a restore held only by the load guard joins the existing startup retry
+window: five seconds initially, doubling to at most one minute, with a 315-second wait budget.
+Each attempt releases the session lock before waiting, then reads the current lifecycle and
+launch guards again. The log names the load reason, each wait, and the bound if it is reached.
+Automatic restore uses the existing serial launch window, starting one seat at a time with a
+fresh load check before each start. A load rise between starts can defer the remaining restore.
+Interactive `team up` keeps its load refusal; other restore refusals retain their normal result.
 
 `--dry-run` prints each team's plan under `=== <project> (session <session>) ===` and writes
 nothing. `--json` prints one `team.up` document with `all` `true`, the per-team entries as
@@ -258,6 +310,19 @@ reads: `projects[<folder>].hasTrustDialogAccepted` in `~/.claude.json` for Claud
 key is ever typed into a pane for it. Antigravity has no such record, so nothing is written for it:
 its launch carries the folder as trusted for that session only (`--settings`, never saved), and
 its dialog does not wait for the owner.
+
+One dialog a launch answers itself: Claude Code's development-channels warning. A Claude seat
+whose line carries the development-channels flag for the team's own inbox
+(`--dangerously-load-development-channels server:team-inbox`) is asked at every start whether that
+channel is for local development, and Claude Code offers no supported way to approve a named
+development channel ahead of the start or to skip the question. So the wait right after the launch
+answers it with Enter on its marked first option (`I am using this for local development`): only
+on that seat's own pane (one the terminal host lists for no other seat, with the seat's CLI in
+front), only for a line this run launched with that flag, and only when the screen is exactly that
+dialog naming that one channel. Each answer is logged with the seat, the channel and the time, and
+said under the seat's record. A second showing in the same wait is not answered: the wait stops at
+it as at any other dialog. No other dialog is answered, on any platform. `team restart`,
+`team reload` and `team add` launch the same way.
 
 ## A create-grant's seat
 

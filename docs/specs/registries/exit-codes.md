@@ -404,7 +404,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `restart.caller` | the caller may not restart a seat, or passed an owner-only flag | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.detached` | a run with no terminal | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.herdr` | herdr doesn't answer | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
-| `restart.lead` | a seat caller passed --abandon for the orchestrator's or the operator's seat | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
+| `restart.lead` | a seat caller passed --abandon for the orchestrator's seat | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.no-session` | the herdr session is not running | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.not-ready` | preflight or launch did not produce a ready seat | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.replaced` | the old pane holds a process that is not the seat's CLI | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
@@ -512,6 +512,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `up.pending` | a seat was left short of ready | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.placement` | a seat has nowhere to start | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.run-lock` | another session-mutating run is holding the session | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
+| `up.seat` | `team up <seat>` names a seat the file does not declare | added in this release | none | command `up`; exit `1` |
 | `up.server` | the session's server did not start | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.stopped` | the session is stopped | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |
 | `up.unknown` | a running agent is not in this file's state | present at 0.5.0 | `contract/exit-codes.json` | command `up`; exit `1` |

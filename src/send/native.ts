@@ -14,7 +14,7 @@ import { NO_PANE_MESSAGING } from './no-pane-messaging.ts';
 //
 // `delivered` rests on that status change, not on the exit code and not on pane text read here.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import {
   composeMessageLine,

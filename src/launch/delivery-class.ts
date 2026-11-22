@@ -22,7 +22,7 @@ import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record
 import type { Seat } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
-import { DELIVERY_CLASSES, profileFor, type DeliveryClass } from '../profiles/profile.ts';
+import { profileFor, type DeliveryClass as ProfileDeliveryClass } from '../profiles/profile.ts';
 import { findAgent } from '../registry/agents.ts';
 import { recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -32,8 +32,11 @@ import { webhookRouteOf } from '../send/webhook.ts';
 import type { SeatState } from '../state.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 
-export { DELIVERY_CLASSES };
-export type { DeliveryClass };
+/** A seat's effective class: the profile's measured classes, plus `typed-wake` — a seat with no
+ *  event adapter whose profile declares a tested typed wake (`typed_wake: screen`,
+ *  src/send/typed-wake.ts). That wake types one trigger line into the empty idle composer and
+ *  counts only when the working screen shows, so the seat can be woken while it is idle. */
+export type DeliveryClass = ProfileDeliveryClass | 'typed-wake';
 
 /** What the launch left behind, as each part is measured: the words a class is read from. */
 export type DeliveryFacts = {
@@ -59,12 +62,16 @@ export type DeliveryFacts = {
   /** Whether the seat configures a webhook adapter and both its files can be read right now:
    *  the routine takes every accepted message, so it wakes an idle seat like the channel. */
   webhook?: boolean;
+  /** Whether the seat's profile declares a typed wake (`typed_wake: screen`) and the pane is not
+   *  a person's: the guarded seam may type one trigger line into its empty idle composer. */
+  typedWake?: boolean;
 };
 
 /**
  * The class that decides whether a message can reach the seat while it is idle: `push` when an
- * event adapter wakes it, `between-turns` when its runtime queue takes the message, otherwise
- * `pull-on-turn` while some watcher serves its turns, or `none` with nothing at all.
+ * event adapter wakes it, `between-turns` when its runtime queue takes the message, `typed-wake`
+ * when its profile's typed wake can give it the turn, otherwise `pull-on-turn` while some watcher
+ * serves its turns, or `none` with nothing at all.
  *
  * The profile's declared class is not consulted here: the facts are what the launch installed,
  * which is what the stranger at the other end of a send can rely on. A declared `push` seat
@@ -75,15 +82,16 @@ export function effectiveDeliveryClass(facts: DeliveryFacts): DeliveryClass {
   if (facts.human === true) return 'none';
   if (facts.channel || facts.socket || facts.webhook === true) return 'push';
   if (facts.endpoint) return 'between-turns';
+  if (facts.typedWake === true) return 'typed-wake';
   if (facts.watcher !== 'none') return 'pull-on-turn';
   return 'none';
 }
 
-/** Whether a message can reach a seat of this class while it sits idle. `push` and
- *  `between-turns` can; `pull-on-turn` and `none` cannot, which is why dispatch spends no
- *  attempt on them. */
+/** Whether a message can reach a seat of this class while it sits idle. `push`,
+ *  `between-turns` and `typed-wake` can; `pull-on-turn` and `none` cannot, which is why dispatch
+ *  spends no attempt on them. Every reader — status, dispatch, next, up, plan, check — asks this. */
 export function wakeableWhileIdle(cls: DeliveryClass): boolean {
-  return cls === 'push' || cls === 'between-turns';
+  return cls === 'push' || cls === 'between-turns' || cls === 'typed-wake';
 }
 
 /** The class a CLI's shipped profile measured, or `none` for a CLI this build has no profile
@@ -106,17 +114,18 @@ export const WEBHOOK_QUEUED_WORDS = 'queued; its webhook fires when the bus take
  *  already stored (the pull-only walk's trigger) reports that beside the store. */
 export type WakeOutcome = { attempted: boolean; woke?: true; reason?: string };
 
-/** The facts a class's sentence needs beyond the class itself: a person's pane is never typed, a
- *  CLI whose profile declares `typed_wake: screen` can take one line at send time, and a wake
- *  this run made says what it saw. */
+/** The facts a class's sentence needs beyond the class itself: a person's pane is never typed,
+ *  and a wake this run made says what it saw. */
 export type DeliveryWordsContext = {
   human?: boolean;
-  /** The seat's profile declares a typed wake (src/send/typed-wake.ts). */
-  typedWake?: boolean;
   /** The watch may type its retry for this seat once a message passes its unread window. */
   watchWake?: boolean;
   /** The typed wake this run made. */
   wake?: WakeOutcome;
+  /** The seat's profile takes a message only through the CLI's own session call (`session_cli`,
+   *  a new remote session per brief) and registers no inbox: a queued message is read by nothing
+   *  on this machine, and a restart does not change that. */
+  sessionOnly?: boolean;
 };
 
 /** The class in plain words, for a console line after the leg's own word. Never a bare
@@ -125,7 +134,7 @@ export type DeliveryWordsContext = {
  *  the run's, never inferred from the profile: a wake that ran and did not deliver says so, and
  *  one the run never reached says that instead. */
 export function deliveryWords(cls: DeliveryClass, seat: string, context: DeliveryWordsContext = {}): string {
-  const { human = false, typedWake = false, watchWake = false, wake } = context;
+  const { human = false, watchWake = false, wake, sessionOnly = false } = context;
   const wakeLine = wake === undefined
     ? ''
     : wake.woke === true
@@ -139,6 +148,15 @@ export function deliveryWords(cls: DeliveryClass, seat: string, context: Deliver
       return 'woken through its event adapter';
     case 'between-turns':
       return 'woken through its runtime queue';
+    case 'typed-wake':
+      if (wake === undefined) {
+        return watchWake
+          ? `woken by a typed wake into its empty composer, and by the watch's typed retry once a message passes its unread window; a busy or drafted composer keeps the message in its bus inbox`
+          : 'woken by a typed wake into its empty composer; a busy or drafted composer keeps the message in its bus inbox';
+      }
+      return lead(wake.woke === true || watchWake
+        ? `${seat} reads it at its next turn${wake.woke === true ? '' : ", and the watch's typed retry tries again once it passes its unread window"}`
+        : `${seat} reads it at its next turn, and nothing retries the wake; a person or a restart must give it a turn`);
     case 'pull-on-turn':
       // A wake this run typed gave it the turn; the rest sentence must not say nothing did.
       return lead(wake?.woke === true
@@ -146,17 +164,10 @@ export function deliveryWords(cls: DeliveryClass, seat: string, context: Deliver
         : `${seat} reads it at its next turn, and nothing here gives it one (pull-only)`);
     case 'none':
       if (human) return lead(`${seat} has no way to be woken while idle`);
-      if (!typedWake) return lead(`nothing wakes ${seat} while it is idle; a person or a restart must give it a turn`);
-      // The same for a seat with no watcher: the wake this run typed is the one thing that
-      // gave it a turn, so the sentence names what else could, never that nothing could.
-      if (wake?.woke === true) {
-        return lead(watchWake
-          ? `nothing else wakes ${seat} while it is idle except the watch's typed retry once a message passes its unread window, into an empty composer`
-          : `nothing else wakes ${seat} while it is idle`);
+      if (sessionOnly) {
+        return lead(`${seat} takes a message only as a new remote session (its CLI's own session call, public repositories only) and reads no inbox; nothing reads a queued message until a person hands it over, and a restart does not change that`);
       }
-      return lead(watchWake
-        ? `nothing wakes ${seat} while it is idle except a send-time typed wake and the watch's typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn`
-        : `nothing wakes ${seat} while it is idle except a send-time typed wake into an empty composer; a person or a restart must give it a turn`);
+      return lead(`nothing wakes ${seat} while it is idle; a person or a restart must give it a turn`);
   }
 }
 
@@ -186,7 +197,7 @@ export type DeliveryEvidence = {
   human: boolean;
   /** The CLI's profile declares `typed_wake: screen`: a send may type one line into a composer
    *  it saw empty twice (src/send/typed-wake.ts, the rule's one exemption). It is not an event
-   *  adapter, so it never changes the class — only what the words and a repair may promise. */
+   *  adapter: a seat no adapter or queue reaches is `typed-wake` because of it. */
   typedWake: boolean;
   /** The watch may type that same wake for this seat once a message passes its unread window:
    *  `typedWake`, and neither the profile nor the seat's own word turns the retry off. */
@@ -341,9 +352,11 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     inboundIsLive(inbound, dialed.path);
   // The webhook adapter is read from the two files its row names, right now: a route that cannot
   // be read is no evidence the seat wakes, and the words say why in the same breath.
-  const webhookRoute = input.declared?.webhook === undefined ? null : webhookRouteOf(input.declared.webhook);
+  const webhookRoute = input.declared?.webhook === undefined ? null : webhookRouteOf(input.declared.webhook, cli);
   const webhook = webhookRoute?.ok === true;
   const webhookReason = webhookRoute !== null && !webhookRoute.ok ? webhookRoute.reason : null;
+  const profile = profileFor(cli);
+  const typedWake = !human && (profile?.typedWake ?? null) !== null;
   const facts: DeliveryFacts = {
     declared: declaredClass,
     watcher,
@@ -352,19 +365,19 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     endpoint,
     ...(human ? { human: true } : {}),
     ...(webhook ? { webhook: true } : {}),
+    ...(typedWake ? { typedWake: true } : {}),
   };
   const cls = effectiveDeliveryClass(facts);
-  const profile = profileFor(cli);
-  const typedWake = !human && (profile?.typedWake ?? null) !== null;
   // The seat's own word wins over its profile's; the retry needs a typed wake either way.
   const watchWake = typedWake && (input.declared?.watchWake ?? profile?.watchWake === true);
+  const sessionOnly = !human && !typedWake && (profile?.sessionCli ?? null) !== null;
   return {
     seat: input.seat,
     class: cls,
     words: deliveryWords(cls, input.seat, {
       ...(human ? { human: true } : {}),
-      ...(typedWake ? { typedWake: true } : {}),
       ...(watchWake ? { watchWake: true } : {}),
+      ...(sessionOnly ? { sessionOnly: true } : {}),
     }),
     evidence: {
       cli,

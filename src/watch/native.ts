@@ -18,7 +18,9 @@ import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 //   records `mcp-inbox: no longer a leg` and continues to the next leg;
 // - for `typed`: writes the 0600 drop file, delivers the trigger when the seat is free (or marks
 //   the drop pending for `retryHeldDrops`), and appends the history line.
-import { chmodSync, mkdirSync } from 'node:fs';
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
 import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
@@ -29,7 +31,7 @@ import { isBareShellPane } from '../send/daemon.ts';
 import { deliverTrigger, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
-import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
+import { ensureRecord, signRecord, stampedPayload, withDeliveryStamp, type RecordPayload } from '../send/record.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import {
   dropTaken,
@@ -45,6 +47,7 @@ import { markTaken } from '../send/taken.ts';
 import { readState } from '../state.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
+import { mailTreeOf, seatMailDirIn } from '../queue/mail-tree.ts';
 
 const NATIVE_UNCONFIRMED_10M = 'native: unconfirmed after 10m';
 
@@ -103,15 +106,17 @@ function paneIdentityProblem(
  * build left — is written here, and an existing record is left untouched: it is the message, and
  * the handoff's own copy is the same message.
  */
-function writeRecordFile(record: PendingNative, home: string): string {
-  const dropsRoot = join(record.root, '.agents', 'send-drops');
+function writeRecordFile(record: PendingNative, home: string, stamped: boolean): string {
+  const dropsRoot = mailTreeOf(record.root);
   const sessionDir = join(dropsRoot, record.session);
   const dropDir = join(sessionDir, record.to);
   mkdirSync(dropDir, { recursive: true });
   chmodSync(dropsRoot, 0o700);
   chmodSync(sessionDir, 0o700);
   chmodSync(dropDir, 0o700);
-  const payload: RecordPayload = {
+  // E7b: the delivery era is decided once, here; this exact payload is signed and carried. A
+  // handoff taken from the stamped tree keeps its stamp whatever the floor says now (revision 3).
+  const built: RecordPayload = {
     kind: 'message',
     id: record.id,
     to: record.to,
@@ -125,7 +130,12 @@ function writeRecordFile(record: PendingNative, home: string): string {
     rule: record.rule,
     thread: record.thread ?? record.id,
   };
-  const written = ensureRecord(dropDir, signRecord(payload, home));
+  const payload: RecordPayload = stamped ? stampedPayload(withDeliveryStamp(built), home) : stampedPayload(built, home);
+  const signed = signRecord(payload, home);
+  const { value: written } = appendDeliverySync({ dropDir, record: signed }, () => {
+    const result = ensureRecord(dropDir, signed);
+    return { ok: result.ok, value: result };
+  }, { home, log: queueLog(dropDir) });
   if (!written.ok) throw new Error(written.reason);
   return written.path;
 }
@@ -142,6 +152,8 @@ async function expireOne(
   if (scene.nativeHeld?.has(record.to) === true) return;
   const taken = takePending(scene.team.project, scene.root, home, record.id);
   if (!taken.ok) return;
+  // E7b revision 3: a handoff taken from the stamped tree is stamped, by its origin alone.
+  const era = taken.stamped ? { stamped: true as const } : {};
 
   // A new record names the cascade's legs; an `mcp-inbox` word only comes from a record an
   // older build wrote, and is named as retired below.
@@ -169,7 +181,7 @@ async function expireOne(
       ? { spec: record.spec, resolved: record.resolved }
       : {};
   const toDir = join(record.root, '.agents');
-  const dropDir = join(toDir, 'send-drops', record.session, record.to);
+  const dropDir = seatMailDirIn(toDir, record.session, record.to);
   const elapsedMs = Math.max(0, scene.now.getTime() - Date.parse(record.ts));
 
   for (const leg of legs) {
@@ -189,7 +201,7 @@ async function expireOne(
       }
       try {
         try {
-          writeRecordFile(record, home);
+          writeRecordFile(record, home, taken.stamped);
         } catch {
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
@@ -207,7 +219,7 @@ async function expireOne(
             leg: 'drop',
           });
         }
-        appendHistory(record.project, record.root, home, {
+        appendHistory(record.project, record.root, home, { ...era,
           ts: scene.now.toISOString(),
           from: record.from,
           to: record.to,
@@ -262,7 +274,7 @@ async function expireOne(
           const procs = scene.sources.processes?.(pane, record.session) ?? null;
           const identityProblem = paneIdentityProblem(toDir, record.session, record.to, pane, procs);
           if (identityProblem !== null) {
-            appendHistory(record.project, record.root, home, {
+            appendHistory(record.project, record.root, home, { ...era,
               ts: scene.now.toISOString(),
               from: record.from,
               to: record.to,
@@ -281,7 +293,7 @@ async function expireOne(
         }
         let recordPath: string;
         try {
-          recordPath = writeRecordFile(record, home);
+          recordPath = writeRecordFile(record, home, taken.stamped);
         } catch {
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
@@ -310,7 +322,7 @@ async function expireOne(
               // The fallback's trigger is the seat's own receipt-writing read. A receipt that
               // landed inside the window — or just after its last poll — is the read itself.
               if (result.evidence === 'receipt' || receipt()) {
-                appendHistory(record.project, record.root, home, {
+                appendHistory(record.project, record.root, home, { ...era,
                   ts: scene.now.toISOString(),
                   from: record.from,
                   to: record.to,
@@ -341,7 +353,7 @@ async function expireOne(
                   before: result.prior ?? 'unknown',
                 });
               }
-              appendHistory(record.project, record.root, home, {
+              appendHistory(record.project, record.root, home, { ...era,
                 ts: scene.now.toISOString(),
                 from: record.from,
                 to: record.to,
@@ -369,7 +381,7 @@ async function expireOne(
               body: record.body,
               ts: scene.now.toISOString(),
             });
-            appendHistory(record.project, record.root, home, {
+            appendHistory(record.project, record.root, home, { ...era,
               ts: scene.now.toISOString(),
               from: record.from,
               to: record.to,
@@ -391,7 +403,7 @@ async function expireOne(
             body: record.body,
             ts: scene.now.toISOString(),
           });
-          appendHistory(record.project, record.root, home, {
+          appendHistory(record.project, record.root, home, { ...era,
             ts: scene.now.toISOString(),
             from: record.from,
             to: record.to,
@@ -413,7 +425,7 @@ async function expireOne(
           body: record.body,
           ts: scene.now.toISOString(),
         });
-        appendHistory(record.project, record.root, home, {
+        appendHistory(record.project, record.root, home, { ...era,
           ts: scene.now.toISOString(),
           from: record.from,
           to: record.to,
@@ -433,7 +445,7 @@ async function expireOne(
     }
   }
 
-  appendHistory(record.project, record.root, home, {
+  appendHistory(record.project, record.root, home, { ...era,
     ts: scene.now.toISOString(),
     from: record.from,
     to: record.to,

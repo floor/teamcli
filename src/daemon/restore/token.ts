@@ -17,7 +17,8 @@
 //    from any file in the machine folder as the anchor ensures that a same-user seat forging its
 //    own token file and descriptor 3 is refused and spends nothing.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, fstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, fstatSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { claimOneUseToken, pidAlive, sweepSpentClaims, type WriteTokenOptions } from '../one-use-token.ts';
 import { machineConfigDir, restoreInheritPath } from '../paths.ts';
 import { systemServiceManager, type ServiceManager } from '../service.ts';
@@ -32,6 +33,9 @@ export type RestoreChildRequest = {
   root: string;
   /** The team file the route was loaded from, when it is a `team-file` route. */
   teamFile?: string;
+  /** The session the daemon hosts this route under. The pass refuses when the team it loads
+   *  names another session, so a late pass never acts in a session the daemon did not watch. */
+  session?: string;
 };
 
 /** The on-disk claims written to `restore.inherit.<nonce>.json`. Holds `secretHash`, never the
@@ -60,6 +64,9 @@ export function restoreRequestProblem(raw: unknown): string | null {
   if (typeof request.root !== 'string' || request.root === '') return 'the token names no root';
   if (request.teamFile !== undefined && (typeof request.teamFile !== 'string' || request.teamFile === '')) {
     return 'the token names a malformed team file';
+  }
+  if (request.session !== undefined && (typeof request.session !== 'string' || request.session === '')) {
+    return 'the token names a malformed session';
   }
   return null;
 }
@@ -93,6 +100,7 @@ export function writeRestoreDoor(input: RestoreDoorMint, options: WriteTokenOpti
     home: input.home,
     root: input.root,
     ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+    ...(input.session === undefined ? {} : { session: input.session }),
     exp: new Date(now.getTime() + RESTORE_DOOR_MS).toISOString(),
     daemonPid: input.daemonPid ?? process.pid,
     secretHash: sha256(secret),
@@ -144,6 +152,7 @@ function cleanRequestOf(claims: RestoreChildRequest): RestoreChildRequest {
     home: claims.home,
     root: claims.root,
     ...(claims.teamFile === undefined ? {} : { teamFile: claims.teamFile }),
+    ...(claims.session === undefined ? {} : { session: claims.session }),
   };
 }
 

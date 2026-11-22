@@ -19,7 +19,8 @@
 // own. `team grant --send` (src/permissions/manage.ts) is the only writer.
 
 import type { KeyObject } from 'node:crypto';
-import { mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { grantsDir, readGrantRecords } from '../grant.ts';

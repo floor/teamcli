@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.22] - 2026-11-22
+
+0.5.20 and 0.5.21 were never published to npm: this release carries the 0.5.21 section below as well as this one.
+
+### Added
+
+- `desktop_control`, a team and seat setting (default `true`), says whether a seat may control the computer: computer use, the user's browser, desktop apps and the connectors that act under the user's own accounts. Set `false`, a Codex seat's line, recorded recipe and managed app-server carry the feature pins that turn them off, and a Claude Code seat's settings deny the computer and browser tools and the claude.ai connectors. It is read at launch; `team doctor` and `team check` name a seat set `false` whose recorded line lacks the pins, with `team restart <seat>`.
+- Every seat whose CLI has a tested typed wake (Cursor, Gemini CLI, Grok, Antigravity, and Codex without a bound queue) is wakeable while idle: its WAKE cell says `typed-wake`, and the idle dispatcher types the wake itself. The typed-wake rules are unchanged: an empty composer only, never over a draft, never a person's pane. A Jules seat is said to read no inbox.
+- The warm send host: with the daemon's `--send-server`, `team send`, `team reply` and `team ack` run in one warm process instead of starting the runtime each time. A line the host cannot take is run by the CLI itself; `TEAMCLI_SEND_HOST=0` skips the host for one run.
+- Each seat's status row says when a message last reached it and flags a failed route.
+- After a machine restart the daemon brings back the registered team sessions that ran, one start per session, on a fresh proof.
+- `team restart <seat>@<team>` restarts another team's seat, for that team's leads and the entity's main orchestrator; `team up <seat>` starts one seat.
+- `team drops --read --id` takes the 8-character id the reader line prints.
+
+- Each entity names one projects root per machine: the folder its repositories sit directly under, set with `team config set <entity>.root <folder>` (an absolute path or `~/…`, read with `get`, removed with `unset`) in the machine's own entities file, never in a team file. A team file writes `{root}` in place of that full path — in a launch line, a rule, a brief, a seat's folder, a trust path — and the word is filled with this machine's folder whenever the file is read, so the same file reads on every machine: `{root}/docs` is `~/Code/acme/docs` on one and `/home/acme/repos/docs` on another. The entity's and project's own rules read the word the same way. A file that writes `{root}` where its entity names no root, or that names no entity, is refused when it is read, on the line that writes it and naming the command that sets one, so a launch never runs a literal `{root}`; a file without the word reads exactly as before. Each entity's worktrees sit in `<root>/worktrees` unless `team config set <entity>.worktrees <folder>` names another (a server keeps `~/worktrees` beside `~/repos`), and a team file names that folder `{worktrees}`, with the same filling and refusal; the `vault-root` policy takes `{root}/…` and `{worktrees}/…` too. Editors that write a value back — `team swap`, `team add`, `team rename`, `team launchers migrate` — write full paths inside the entity's folders as the words again, on the lines they change. A folder holds only letters, digits and `/ . _ - @ +` after a leading `~/` and is never the filesystem's root, the home or a folder above it; where the machine has a signed charter, a folder is filled only when its real path lies inside a charter root, and the charter signs every root as its real path, so a link put in place later widens nothing. `team down` and `team status` still read a team whose folder is gone; an entity's or project's rule whose word cannot be filled refuses the team. An approval is bound to the paths as they were filled in, so moving a root needs fresh approvals. `team setup` signs the charter over these roots, and over a worktrees folder outside its root, when no `--roots` is given, and refuses when no entity names one, instead of guessing folders under the home or falling back to `~/Code`; a folder it finds there is named only as a suggestion. `team config set <entity>.root` creates the entity's entry, and the entities file, when a fresh machine has none. `team doctor` warns about every value that writes a full path inside the entity's root, and `team migrate --root` rewrites those paths as `{root}/…` line by line, keeping every comment: `--dry-run` lists each line it would change, and the owner's run writes them and prints each one.
+
+- `team git`, `team gh` and a provider seat's key read the system's secret store, on Linux as on macOS. On Linux the store is one encrypted dotenv file per entity, `~/.config/sops/<entity>.env.sops` (sops with the machine's age key; `TEAMCLI_SECRETS_FILE` names another absolute path), and its entries keep generic names, so no entity's name is ever part of a key's name: the GitHub token is `GITHUB_SEAT_TOKEN` and must be a fine-grained token (`github_pat_…`), the provider keys `DEEPSEEK_API_KEY`, `KIMI_API_KEY` and `GLM_API_KEY`. An identity's `github.secret` and an account's `secret` name another generic entry beside the `keychain` name, which macOS keeps reading as before; a plain name is read under its env form (`deepseek-api-key` is `DEEPSEEK_API_KEY`). A command or a seat with no entity opens no file. The pay-per-use names `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` are never read. A provider seat whose key the machine's store cannot look up is refused before its workspace is made. On macOS nothing changes: the Keychain lookup and the launch line are the ones they were.
+- A launch answers Claude Code's development-channels warning for the team's own inbox channel, so a Claude seat no longer waits at it on a machine where no one is at the pane. Claude Code has no supported way to approve a named development channel ahead of the start. The wait right after `up`, `restart`, `reload` or `add` launched the seat presses Enter on the dialog's marked first option, only on that seat's own pane, only for a line it launched with the flag for `server:team-inbox`, and only when the screen is exactly that dialog for that one channel; each answer is logged with the seat, the channel and the time. A second showing is not answered, and no other dialog ever is. On every platform.
+- `team doctor` reports, when the machine daemon runs, whether the daemon and the seats keep their temporary files in one folder. A Claude Code seat's session socket sits under its own temp folder and the daemon looks under its own alone, so two folders are a warning naming both. The daemon records its folder at its start; the seats' is measured when doctor runs in a seat's pane, and is otherwise the folder a pane `team up` starts gets. On every platform.
+- A vendor move by `team swap` (`<vendor>:<model>`) names the provider key on the seat's line as `ANTHROPIC_AUTH_TOKEN={secret:<item>}`, and every launch fills it with the system's secret store's own lookup of the item, so the same team file launches on Linux and on macOS. A line an earlier swap wrote keeps its own lookup and launches byte for byte as before. On macOS a new swap's filled word is the shipped `claude-code` launcher's: the Keychain lookup by service name (`find-generic-password -s <item> -w`, double-quoted), no longer narrowed by `-a "$USER"`; it finds the same item. A store with no lookup for the item refuses the seat before its workspace is made. Where the profile's own presence check cannot run (no Keychain tool on the machine), the swap asks the system's secret store for the team's entity whether it holds the item, so a vendor move works on Linux; a missing entry is refused naming the store, not a command.
+- `team daemon install`, `restart` and `uninstall` work on Linux: the machine daemon runs as the user's systemd user service, with the same retained runtime copy, bounded load retries, rollback and start admission as on macOS. On an account that does not linger, the install says the daemon stops at logout; an administrator's `loginctl enable-linger <user>` keeps it running on a headless server.
+- A machine with no owner signer of its own (a headless server) can pin the owner seat from the machine that holds the signers. `team owner-seat export --out <file>` writes the seat's public signer records and accepted signer names, signed with one confirmation on the owner's device; `team owner-seat pin --from <file>` pins it on the other machine. Both print one fingerprint for the owner to compare. The first pin is trust on first use, from the owner's terminal on that machine; a changed seat is pinned only from a newer export signed by a signer already pinned there.
+- Owner requests travel between the two machines as files until machines are linked. On the pinned machine a request names that machine inside its signed parameters, and `team approvals export <id> --out <file>` writes it out. On the signer machine `team approvals sign --from <file> --out <file>` shows the usual card, which names the other machine, and writes the signed answer. Back on the pinned machine `team approvals answer --from <file>` records it once it verifies against the pinned seat; the command then runs with `--approval <id>`. An answer never runs on another machine, expires with the window signed into its request (at most fifteen minutes there), and is spent once in the machine's approval ledger. A carried request carries every action's argument words, and the card is never shown, signed or run unless each action's argument hash is the hash of the words it shows.
+
+- A shared Linux server keeps its owner state where no entity account can change it. `team owner-seat install --account <names>`, run once as the administrator (`--dry-run` prints every step first), makes the owner helper's own user, the system owner folder, the helper's code folder, an approval ledger only the helper writes, and the one rule through which the named accounts start the helper. The pin and the machine record go in the system folder, pinned by the administrator; a request names the account that made it inside its signed parameters, and the card shows it; and an approval is spent only by the helper, which learns the calling account from the system, checks the request, the answer and the arguments about to run again against the system pin, and spends it once in that account's own ledger. An answer for one account is never accepted by another. The install reads every path it writes, and every folder above it, before it changes anything, and refuses a link or anything another user owns or may write; it never adopts a helper user it did not make and record. The helper starts through a launcher that writes out its whole environment, reads at most one small input for a few seconds, spends one approval at a time, and writes each spend to disk before it answers.
+- A request carried between machines that says it was made later than now (beyond two minutes) is never shown, signed, recorded or run, and an answer must say it was given inside the request's window and not later than now.
+- An entity's own record (`team config set|unset <entity>.root`, `.worktrees`, `.names.unique`, `.reminders`, `.rules`, and a project's rules) and the machine daemon (`team daemon install`, `uninstall`) take `--request [--reason <text>]` and `--approval <request-id>` on every machine, through the owner-seat answer alone: no charter, rule or lead admits them that way. On a machine whose owner seat is pinned from another machine, where they were refused, this is how they run. Their cards show the exact change (the operation, the key, the full value and the file; the daemon's verb, home, registered teams and opt-ins), shown whole before any confirmation that cannot carry it, the daemon's plan (its home and opt-ins, and the teams registered for the account as they are, since the unit hosts those; an owner-seat install takes no `--root`) is resolved once, bound by the answer and executed, a project's rules are named by the project's id, and they are answered once or denied, never through a standing rule. The answer is checked when the command starts and spent once just before the change (an entity write under the file's lock), so a run refused before that keeps it; a daemon change the service manager refuses after that has spent it, and a new answer is needed to retry. They are never bundled with other actions in one request. `team daemon restart` and `fault-watch` take no request yet. `team setup` on a pinned machine says how its actions run instead: such a machine keeps no charter of its own. The owner's own terminal and a general grant admit these commands as before, and a machine with its own owner seat is unchanged.
+
+- TeamCLI ships four launchers, configured by the seat: `grok-build`, `claude-code`, `codex` and `antigravity`. A seat names the launcher and its model, version, vendor and effort; the launcher builds the line, so a seat no longer needs a script of its own. `claude-code` reads the entity's provider launch accounts, so a Claude Code seat can run another vendor's model; the provider key is a keychain lookup run by the pane's shell and never reaches a record, a log or the line.
+- A read-only Claude Code seat runs in Claude Code's sandbox in `dontAsk` mode, not with the permission bypass. A read-only Grok seat runs in `dontAsk` mode with only Read and `team` allowed. Codex and Antigravity readers run the builder line, because their sandboxes stop `team` itself; their access is stated as such.
+- `team git` and `team gh` run git and gh for a seat with the entity's GitHub identity, so no GitHub token reaches a seat on a shipped launcher. `gh api` writes are refused in every spelling gh accepts, and GraphQL is refused. General grants never admit either command.
+- `team swap <seat> <shipped launcher>` moves a seat onto a shipped launcher, with `--model`, `--version`, `--vendor` and `--effort`.
+- Seats on a launcher get their own seat folder (`worktrees/<project>/<team>/<seat>`), made at launch when missing. A seat may name its own `access` and its own `brief` (a path, `~` allowed). `team config set seats.<name> {map}` adds a seat.
+- A Grok seat takes typed wakes up to 1500 bytes (`typed_wake_max` in the profile); the daemon admits a typed wake up to the seat's measured limit.
+- The `model-drift` policy (entity, project or team) decides a send to a seat whose screen runs another model than its record: `deliver` (the default) delivers every drift with a notice, so a seat whose model was changed on purpose stays reachable while its lead repairs the record; `rule` delivers only when the entity's model rule names the seat and allows the observed model, and otherwise refuses with nothing kept; `hold` refuses every drift until the seat is repaired.
+- `bun run test:fast` runs the whole suite in CI's shards at once and fails when a shard runs no tests.
+
+### Changed
+
+- `team send` is much faster. A send writes fewer files: one empty queue entry per send in place of a journal line, an entry body and an id file; one signed receipt per read; no fallback episode or unread hint on the happy path; one log line per send. A channel push is seen in tens of milliseconds: the serving seat keeps git's root answer, the sender looks for the push every 2 ms, and a seat's bus follower comes up past a long backlog. A queue an earlier build wrote is folded into the new form at its first use.
+- Every unix socket TeamCLI opens runs on Bun's native socket API through one shared connection; the relay package's own listener stays as it was.
+- A typed wake is one line for every waiting message: the count and the read that serves them all, with no sender text. The hourly cap on typed lines still holds, and a line it holds back is now said in the pass and in the unread and stuck reports.
+- A Claude seat takes the team-inbox channel first. The cross-session socket is used only when the team file declares `inbound: accept` (a launch's own accept no longer authorizes it) and never ahead of a connected channel, because the receiving CLI labels every socket frame as another Claude session's.
+- The live inbox folder keeps two days of read mail (was seven); the daemon runs the inbox archive once a day.
+- A bare seat name that two teams share is refused as ambiguous, naming both addresses, and a seat cannot send to itself.
+
+- On Linux the owner state is read from the system folder alone, never an account's home: a missing, unprotected or not-yet-pinned system folder refuses every owner answer and keeps a terminal from being the owner, rather than reading as unpinned. On macOS nothing changes.
+- On a machine whose owner seat is pinned from another machine, a terminal is not the owner, with a terminal or without one: an agent that opens a shell on the account is no longer taken for the owner there. Owner-only actions on that machine run on the owner's signed answer. Nothing else stands in for the owner there: dev mode lifts no gate for any caller, a general grant is refused, and the owner-authorization fingerprint admits nothing. A machine with its own owner seat is unchanged.
+- The pin, the machine record and the approval ledger are found by one rule that never reads the environment's home: a protected system folder (`/etc/teamcli`) first, then the account's own home from the user database. A machine that holds any of them counts as pinned, and a state that cannot be read or trusted refuses every answer rather than reading as unpinned.
+- An owner-action request signs its answer window (when it was made and when it expires) with its other parameters, and its card's argument words must hash to the arguments it admits, on every machine. A pending request from an earlier build, with no signed window, is no longer signed: it is recorded again with `--request`. One already answered before the upgrade runs only within fifteen minutes of its signed answer, whatever its unsigned expiry says.
+- The owner page draws each owner-action and team-create card from the request record itself, not from the inbox copy beside it, and signs only the request the card showed: the card's parameter hash travels with the answer, and a request that changed since it was shown is neither asked for a challenge nor signed. Each answer — an owner action, a team-create request, a grant — reads its request once and draws the card, the challenge and the signed answer from that one read, holding the shown hash against it. A fresh owner-action answer, from the page, a device-key prompt or the command line, needs the request's full argument words; an answer given before stays verifiable.
+
+- TeamCLI runs on Bun (1.4 or later), the runtime its tests run on: `team` starts with Bun, and `team daemon install` records Bun for the daemon. Node is no longer used.
+- Seats' generated settings files live in TeamCLI's machine folder (`~/.config/team/hooks/`), never in the project. A seat launched before the move keeps its socket route until its next launch. The settings approve TeamCLI's own inbox server and no other project server.
+- Claude Code seats take their rules as a file (`--append-system-prompt-file`, content-addressed under `~/.config/team/rules-text/`), not as text on the launch line.
+- A seat's record follows a new conversation in its own CLI process, and the seat's state moves with it.
+
+### Fixed
+
+- A Claude seat the terminal host resumed after a restart, outside its launch line, is no longer counted as a channel push: its record says the channel is off, a send skips the channel and says why, and the watch types its pointer at once. After the restore, each idle restored Claude seat is relaunched through its launch line with `--resume` of its own conversation, one at a time and only while the load guard admits a launch; a working seat waits until idle, and the entity's main orchestrator is named for the owner instead of restarted. A restored seat whose channel is still unproven after the bound is said once to the lead as `unreachable after restore`, and `team doctor` fails it.
+- Codex exits cleanly: `/exit` waits for Codex's slash popup before the Enter, and a line is cleared with backspaces, so the seat is no longer left neither closed nor cleared.
+- A fresh channel listener re-offers what an earlier listener pushed and the seat never acknowledged, instead of leaving it to one typed pointer per pass.
+- A read-only Claude seat may acknowledge its channel messages, so they are no longer delivered again.
+- A client's signed message is pushed on the seat's channel, instead of waiting for the seat's next inbox read.
+- A typed wake that was not submitted takes its own line back out of the composer.
+- The shared state read compares a file changed within 100 ms of its read by its text (git's racy-clean rule), so two same-size writes inside one clock tick are no longer missed.
+- The watch's status waiters run `herdr agent wait`; herdr 0.9.5 dropped the older command, so every waiter failed and respawned about once a second.
+- The daemon holds its single-instance lock with a kernel lock for its whole life and refuses to start without one, so two daemons can no longer start for one home after a crash.
+- A sandboxed seat sends and replies through its outbox, relayed within seconds.
+- A refused pre-launch record stops the launch, and the guard is asked again just before the command is typed.
+- An unrecognised screen is never typed into; the lead gets one notice per episode.
+
+- A carrier no longer marks a message read. A socket frame, a Codex runtime queue (`codex queue`), a headless resume, a typed wake or a channel push that took a body used to write the seat's own `<id>.read.json` at once, so a Codex seat in a long turn whose queue never surfaced the body showed it as read: `team drops --read` in that seat listed nothing but its brief, the watch never woke it at the next idle prompt, and `team ping` reported `read, no reply` for seats that never saw the ping. A carrier now writes the signed `delivered` receipt; only the seat's own reader (`team drops --read`, `inbox_read`, `team ack`, the channel's ack, a reply, its answer by send) writes `read`. The message stays unread until then, so `team drops --read` lists it and the watch wakes the idle seat once. A seat whose carrier did surface the body may be served it a second time by its own read. `team ping` prints each stage a receipt proves — `delivered <s> s` for a carrier's hand-over, then `read <s> s` or `no read receipt from the seat` (`delivered_ms` and status `delivered` in `--json`) — and counts as the seat's read only its own read receipt, reply or acknowledgement, never a writer-side copy or a lead's clearance. A carrier's receipt is marked `read_by: carrier`, checked against the record's own checkout, and is never the evidence the pre-channel archive sweep marks a read on. A launch brief keeps its bound read, and an active root's owned exposure claims are unchanged.
+- A Claude seat whose delivery order is led by the retired `mcp-inbox` word (the floor orchestrator's) walked the drop file alone when its channel was not proven, so replies to it on a dark root sat as drop files with nothing to wake it. Its walk now takes the socket its own files allow (`inbound: accept` and the launch's `crossSessionInbound: accept`, no held box) ahead of the drop, as a Claude seat with no declared order does.
+- A seat's record keeps its start folder as an absolute path, resolved against the team root as its declared cwd is: `team swap`, `team restart`, `team add`, `team up` and a relaunch no longer record the declared relative cwd, which made every client key's placement check refuse, so no client could send. A record an older version wrote with a relative folder is read against the team root instead of refused. A start folder that is no path at all still refuses (a key the check cannot place could sit in that seat's folder); the refusal names the seat, its state file and `team restart <seat>`, and `team doctor` warns about such a record before a client send does.
+- A closed workspace's CLI that outlives its pane is ended on Linux too. Under the system's service manager such an orphan is handed to that manager, not to pid 1, so it was never ended. The daemon now records, at its start, the service manager that started it (its pid and start, only when the manager names itself the daemon's parent), and a close ends an orphan handed to that recorded process while it is still the same process. On macOS nothing changes: only an orphan handed to pid 1 is ended.
+- A Claude Code seat reports its own model at session start and at every `/model` switch (two hooks in its settings); a model the entity rule allows becomes the seat's record, so a model the owner switched no longer carries a drift notice on every send.
+- The model-drift notice to a lead names the lead's team by id: a project with two teams no longer makes it ambiguous.
+
+- A send handed to the daemon's typed wake reports its outcome: delivered, not delivered with the reason (exit 1, the message kept in the inbox), or no outcome after 20 s. It is never left "pending".
+- A Codex conversation another app holds ("This conversation is open in another app") reads as blocked, not idle.
+- Closing a seat's pane ends its CLI when that process outlives the pane as an orphan.
+- `team restart` says when its launch line resumes a conversation of its own, instead of "without passing the old transcript".
+- The daemon says once, with its cause, that it cannot archive read mail, instead of every 30 seconds.
+- `bun run test:fast` fails when the machine's registry changes during the run.
+- After a host restart, kept panes get their names and sidebar labels back; a seat relaunched at its bare shell is renamed after its launch; a Grok or Cursor pane started elsewhere is repaired in a new workspace; a provider seat on the claude-code launcher is launched again, not adopted.
+- A launch waits for a new pane's shell prompt before typing its line.
+- `team daemon restart` after a new build runs the installed program, waits for a daemon's cold start and never stops a live one; `team daemon install` says when it drops the unit's `--presence` or `--watch`. The daemon re-reads its team when a sender or recipient is new or a seat was stopped, and writes at most one late-beat line a minute.
+- No SSH reaches a seat on a shipped launcher, and only real read-only lines count as read-only.
+- A seat folder is read as its team's root only when the team owns that seat; a recorded worktree wins over a defaulted seat folder, and a defaulted folder stays out of the approved record.
+- Grok's folder trust dialog is read as a trust screen, not as ready; `grok-build` passes `--trust` and takes its model from the seat's version.
+- A paused team or seat is left out of the watch's can't-work notices.
+
+## [0.5.21] - 2026-11-10
+
+### Added
+
+- `team launchers migrate` moves a launch line that runs a script inside a repository or a temp folder onto a launcher declaration in the launcher home. `--dry-run` lists every change and every stale record and writes nothing; without it the launch lines are rewritten and each old script becomes a forwarding stub. Local scripts are named in `~/.config/team/launcher-migrations.json` (format 1, exact absolute script path to a declaration name); unmapped and stale rows are reported and left unchanged. The owner, or a team's lead, runs it from a terminal, and general grants never admit it.
+
+- `team swap <seat> <preset>` installs that recipe and starts the seat fresh; `--dry-run` plans it and writes nothing.
+
+- `team drops archive` moves settled mail into `send-drops/<session>/<seat>/archive/<YYYY-MM>/` and marks unread drops delivered before the seat's channel started as read. Unread mail stays and nothing is deleted; `--dry-run` lists the moves and the marks and writes nothing.
+
+- `team mcp setup <seat>` prepares a hand-started Claude seat's scoped inbox channel, launch flag and calling-pane record, with a zero-write dry run and scoped removal.
+
+- The watch reports out-of-tokens as its own state: it tells the lead once with the seat, vendor and whether the seat held a task or a review, marks the seat unavailable so `team send` keeps new messages in its inbox without waking it, and warns the lead when weekly quota drops below 20%.
+
+### Changed
+
+- Generated claude-code launches accept inbound messages on the session socket by default; a seat or its launcher can still declare `inbound: hold` or `refuse`, and sender admission is unchanged.
+
+- A delivered message carries one header line: `<nickname> · <seat>@<team> · <UTC date and time> · admitted: <rule>`, the same on every delivery leg.
+
+- A team's lead and operator run every command for their own team without the owner, except grant, delegate, revoke, the owner's identity and keys, recording a served project (`also_in`), and migrate, which writes a team's first authority record. The owner can restore the old gates with `leads.authority: owner-asks`.
+
+- The owner-reserved scope now names major releases; minor and patch releases are the leads' within their gates.
+
+- `team mcp setup` admits the owner, the seat on its recorded pane, and that team's placed lead or operator, with no owner card. A seat of another team, or a pane that is not the recorded one, stays refused.
+
+- Seats come back after a host reboot: `team up` adopts a restored seat in place, including on a pane id the record has never seen, when the running CLI and the recorded conversation match the agent record, and relaunches it from its recorded line with `--resume` when it needs its launcher, declared model or quiet channel restored. A pane that cannot prove its identity is left out.
+
+- The team-inbox channel is on by default for claude-code seats: `channel` omitted or `on` prepares the channel on `team up` and `team restart`; `off` leaves that seat's launch and its MCP pair alone. Default-channel lobby seats start in `lobby/<seat>`.
+
+- A temporary seat added with `team add --like <seat> --until <stop>` starts in the common lobby without the team-inbox channel, stripping any channel flag it inherits from the source launch line; declared seats keep the default channel.
+
+- A command run from a seat's pane acts on that seat's own team even when the current folder sits inside another team's root.
+
+- A launch recipe that carries the old Codex background-server override is normalized, and a recognized Codex settings dialog is closed, not answered: no input is typed and no identity guard is weakened.
+
+### Fixed
+
+- A send to a claude-code seat whose record has no address uses its proven live session socket and records it; `team up` and `team restart` refresh it; with no live route the send says `not delivered: no live route` and keeps the message in the inbox.
+
+- `team route` reports a socket it may not use as `ineligible` with the reason, and `team send --dry-run` shows why a socket was skipped.
+
+- A send that cannot be delivered is kept: the pending record stays in the seat's inbox, the command prints `not delivered: <reason>` and exits 1, and the seat reads the message at its next turn or wake. A confirmed wake still reports delivery.
+
+- A restored seat sends as itself: unnamed recorded-CLI placement now needs conversation proof, and a send, route or reply that reports a different conversation is refused, including before a client thread is written.
+
+- The restore sweep leaves a live seat alone: it relaunches a seat or moves a record only with positive proof that the recorded pane is gone, and a wrapper launch's conversation check reads "not measured" instead of guessing. A pane that is really gone is still restored.
+
+- Process evidence comes from fixed system executable paths with a clean environment and no `PATH` fallback; if the system tool is missing or unusable, no identity evidence is drawn.
+
+- Owner-only file and session flags are refused before the team is read, for aimed `up`/`add` runs and `down`/`remove` targets, and a signed approval or charter cannot bypass them.
+
+- A supervised watch that stays in starting past its start limit, or whose child misses late beats, is restarted, at most three times an hour, and the placed lead is told once per restart.
+
+- Rewriting a marked sidebar table changes only the rows line, and the row gap only when `workspace.sidebar.row_gap` is set. Every other key in that table stays.
+
 ## [0.5.19] - 2026-11-07
 
 ### Fixed
@@ -2907,7 +3056,23 @@ The first release: set up, change and watch a project's team of AI agents from o
   footer, or a Yes/No choice below the last rule. An idle seat that only quotes "Do you want to proceed?"
   stays idle.
 
-[Unreleased]: https://github.com/floor/teamcli/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/floor/teamcli/compare/v0.5.22...HEAD
+[0.5.22]: https://github.com/floor/teamcli/releases/tag/v0.5.22
+[0.5.19]: https://github.com/floor/teamcli/releases/tag/v0.5.19
+[0.5.18]: https://github.com/floor/teamcli/releases/tag/v0.5.18
+[0.5.17]: https://github.com/floor/teamcli/releases/tag/v0.5.17
+[0.5.16]: https://github.com/floor/teamcli/releases/tag/v0.5.16
+[0.5.15]: https://github.com/floor/teamcli/releases/tag/v0.5.15
+[0.5.14]: https://github.com/floor/teamcli/releases/tag/v0.5.14
+[0.5.13]: https://github.com/floor/teamcli/releases/tag/v0.5.13
+[0.5.12]: https://github.com/floor/teamcli/releases/tag/v0.5.12
+[0.5.11]: https://github.com/floor/teamcli/releases/tag/v0.5.11
+[0.5.10]: https://github.com/floor/teamcli/releases/tag/v0.5.10
+[0.5.5]: https://github.com/floor/teamcli/releases/tag/v0.5.5
+[0.5.3]: https://github.com/floor/teamcli/releases/tag/v0.5.3
+[0.5.2]: https://github.com/floor/teamcli/releases/tag/v0.5.2
+[0.5.1]: https://github.com/floor/teamcli/releases/tag/v0.5.1
+[0.5.0]: https://github.com/floor/teamcli/releases/tag/v0.5.0
 [0.3.5]: https://github.com/floor/teamcli/releases/tag/v0.3.5
 [0.3.4]: https://github.com/floor/teamcli/releases/tag/v0.3.4
 [0.3.3]: https://github.com/floor/teamcli/releases/tag/v0.3.3

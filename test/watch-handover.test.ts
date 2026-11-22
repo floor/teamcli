@@ -22,6 +22,7 @@ import {
   WATCH_HANDOVER_MAX_AGE_MS,
 } from '../src/watch/handover.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -162,7 +163,7 @@ function live(): Live {
 }
 
 function sources(over: Partial<WatchSources> = {}, count = { passes: 0 }): WatchSources {
-  return {
+  return withHostedLoop({
     live: () => {
       count.passes += 1;
       return live();
@@ -185,21 +186,24 @@ function sources(over: Partial<WatchSources> = {}, count = { passes: 0 }): Watch
     pid: 4_242,
     home,
     ...over,
-  };
+  });
 }
 
-describe('the pane watch loop', () => {
-  test('leaves through its own seam when the live daemon asks, and deletes only its own record', async () => {
+describe('the hosted watch loop', () => {
+  test('a handover request does not stop the hosted loop, and the pane record stays', async () => {
+    const planted = { pid: 4_242, heartbeat: new Date(NOW).toISOString() };
     updateState(agents, (state) => {
-      (state.sessions.acme ??= emptySession()).watch = { pid: 4_242, heartbeat: new Date(NOW).toISOString() };
+      (state.sessions.acme ??= emptySession()).watch = planted;
     });
     request();
+    const count = { passes: 0 };
     const io = testIo(root, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, sources({ ownPane: () => 'gone' }));
+    const code = await runWatch(['--file', file], io, sources({ ownPane: () => 'gone' }, count));
     expect(code).toBe(0);
-    expect(io.out).toContain('handing over the session "acme"');
-    // The loop left before its first pass: no effect, no reading, no record of its own.
-    expect(readState(agents).sessions.acme?.watch).toBeUndefined();
+    expect(io.out).not.toContain('handing over');
+    expect(count.passes).toBeGreaterThan(0);
+    // A hosted loop is the asking side. It never deletes a pane record it did not write.
+    expect(readState(agents).sessions.acme?.watch).toEqual(planted);
     expect(existsSync(handoverPath(agents))).toBe(true);
   });
 

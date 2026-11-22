@@ -135,12 +135,13 @@ which is not written anywhere and reads the default:
 
 ```console
 $ team settings claude-keeper ; echo "exit $?"
-  KEY             VALUE        SOURCE     APPLIES
-  model           Claude Opus  team file  restart that resumes
-  effort          max          team file  restart that resumes
-  nickname        agamemnon    team file  at once
-  delivery_order  typed, drop  default    at once
-  human           false        default    at once
+  KEY              VALUE        SOURCE     APPLIES
+  model            Claude Opus  team file  restart that resumes
+  effort           max          team file  restart that resumes
+  nickname         agamemnon    team file  at once
+  delivery_order   typed, drop  default    at once
+  human            false        default    at once
+  desktop_control  true         default    restart that resumes
 exit 0
 ```
 
@@ -149,12 +150,13 @@ comes from:
 
 ```console
 $ team settings claude-beacon ; echo "exit $?"
-  KEY             VALUE        SOURCE     APPLIES
-  model           Claude Opus  team file  restart that resumes
-  effort          -            unset      restart that resumes
-  nickname        -            unset      at once
-  delivery_order  typed, drop  default    at once
-  human           false        default    at once
+  KEY              VALUE        SOURCE     APPLIES
+  model            Claude Opus  team file  restart that resumes
+  effort           -            unset      restart that resumes
+  nickname         -            unset      at once
+  delivery_order   typed, drop  default    at once
+  human            false        default    at once
+  desktop_control  true         default    restart that resumes
 exit 0
 ```
 
@@ -211,6 +213,12 @@ $ team settings claude-keeper --json ; echo "exit $?"
       "value": false,
       "source": "default",
       "applies": "at-once"
+    },
+    {
+      "key": "desktop_control",
+      "value": true,
+      "source": "default",
+      "applies": "restart-resume"
     }
   ]
 }

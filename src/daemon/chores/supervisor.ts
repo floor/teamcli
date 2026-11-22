@@ -1,3 +1,5 @@
+import { CHILD_STEPS_PREFIX, childStepsAt } from '../../diagnostics/child-steps.ts';
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // The daemon's half of the chores isolation: one supervised child per group of roots, on the
 // daemon's existing heartbeat.
 //
@@ -77,6 +79,8 @@ export type ChoresFleetInput = {
    *  per-root/shared fleet it always was. */
   machine?: ChoresMachineInput;
   log: (text: string) => void;
+  /** Diagnostic wall/sync spans since the previous existing beat; also drained on on-time beats. */
+  workSinceBeat?: () => string;
   /** The machine's 1-minute load average, read when a stall is recorded so the log line can
    *  carry it. The default reads the host's own load; a test injects a fixed reading. */
   loadAverage?: () => number;
@@ -122,6 +126,19 @@ export type ChoresFleet = {
   watchFor(root: string, presence: () => readonly ChoresWatchSeatHealth[] | null): HostedWatch | null;
   /** Ends every child and waits, bounded, for each to leave. Idempotent. */
   stop(why: string): Promise<void>;
+  /**
+   * Stops the chores child the daemon started for this one root and asks a replacement on the
+   * next beat. A shared child, a machine child, and a child this fleet did not start are left
+   * alone: stopping one of those would take another root with it. False when there is no such
+   * child running.
+   */
+  restartRoot(root: string, why: string): boolean;
+  /**
+   * What this fleet can say about one root being stuck: the uncapped missed-heartbeat count,
+   * and the watch phase when this child hosts that root's watch. Null when this fleet has no
+   * per-root child for the root.
+   */
+  stuckOf(root: string): { missed: number; watchPhase: string | null; watchStartedAt: string | null; cycles: number } | null;
 };
 
 export type ChoresPresenceRequest = {
@@ -193,6 +210,9 @@ type Group = {
   startedOnce: boolean;
   /** The child was signalled because it stopped answering; its exit is the restart's trigger. */
   killing: boolean;
+  /** A stuck-child restart asked for this child. Its replacement starts on the next beat,
+   *  without the storm floor that every other end keeps. */
+  replaceNow: boolean;
   /** How many children this group has replaced: the record's own count, never reset. */
   restarts: number;
   /** The exponent the next wait reads: the number of starts that failed since the last child
@@ -236,6 +256,9 @@ type Group = {
    *  daemon's record mirrors it; a root the child has not reported yet has no entry, and its
    *  reader sees the synthetic starting state instead. */
   watchState: Map<string, HostedWatchState>;
+  /** When this root's mirrored watch entered `starting`, on the daemon's clock. Cleared when
+   *  the phase leaves `starting`, so a later return is timed from the return. */
+  watchPhaseSince: Map<string, number>;
   /** The last chore each root's child finished, by the name that root's own frame carried. A
    *  replacement child starts with none: a cold process has run nothing for the root yet. */
   lastChore: Map<string, { name: string; at: string; ms: number | null }>;
@@ -293,6 +316,7 @@ function createGroup(
     ready: false,
     startedOnce: false,
     killing: false,
+    replaceNow: false,
     restarts: 0,
     backoff: 0,
     beats: 0,
@@ -310,6 +334,7 @@ function createGroup(
     lastPass: new Map(),
     pendingPresence: new Map(),
     watchState: new Map(),
+    watchPhaseSince: new Map(),
     lastChore: new Map(),
     presence: new Map(),
     markerCache: null,
@@ -349,6 +374,11 @@ function resetWatchMirror(
 ): void {
   for (const entry of group.routes) {
     if (entry.watch === undefined) continue;
+    if (phase === 'starting') {
+      group.watchPhaseSince.set(entry.route.root, group.startedAtMs === 0 ? input.now().getTime() : group.startedAtMs);
+    } else {
+      group.watchPhaseSince.delete(entry.route.root);
+    }
     group.watchState.set(entry.route.root, {
       routeId: routeId(entry.route),
       root: entry.route.root,
@@ -761,7 +791,13 @@ function recordChildLiveness(input: ChoresFleetInput, group: Group, frameAt: str
   return readAt;
 }
 
+const childStepSnapshots = new WeakMap<ChoresChild, string>();
+
 function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
+  traceBeatWork('chores child handling (sync)', () => handleChildEvent(input, group, child, event));
+}
+
+function handleChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild, event: ChoresChildEvent): void {
   if (group.child !== child) return;
   if (event.kind === 'note') {
     input.log(`chores ${rootList(group)}: ${event.text}`);
@@ -815,15 +851,30 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       settle({ kind: 'answered', proofs: message.proofs, notes: message.notes });
       return;
     }
-    case 'watch-state':
+    case 'watch-state': {
       // A root this group does not serve is dropped: the mirror is the group's own record.
       if (!group.routes.some((entry) => entry.route.root === message.root)) return;
+      const previous = group.watchState.get(message.root)?.phase;
       group.watchState.set(message.root, message.state);
+      if (message.state.phase === 'starting') {
+        if (previous !== 'starting') group.watchPhaseSince.set(message.root, input.now().getTime());
+      } else {
+        group.watchPhaseSince.delete(message.root);
+      }
       return;
-    case 'watch-pulse':
-      recordChildLiveness(input, group, message.at);
+    }
+    case 'watch-pulse': {
+      const heardAt = recordChildLiveness(input, group, message.at);
+      // Lead decision 2026-11-11 05:55Z: keep the existing startup limit as a no-progress
+      // limit. Only an actual watch work seam for this group's watched root refreshes it;
+      // independent timer heartbeats and diagnostic notes do not advance startup progress.
+      if (group.routes.some((entry) => entry.route.root === message.root && entry.watch !== undefined)
+        && group.watchState.get(message.root)?.phase === 'starting') {
+        group.watchPhaseSince.set(message.root, heardAt);
+      }
       input.watchPulse?.(message.root, new Date(message.at));
       return;
+    }
     case 'watch-cycle':
       recordChildLiveness(input, group, message.at);
       return;
@@ -837,6 +888,15 @@ function onChildEvent(input: ChoresFleetInput, group: Group, child: ChoresChild,
       return;
     }
     case 'note':
+      if (message.text.startsWith(CHILD_STEPS_PREFIX)) {
+        childStepSnapshots.set(child, message.text);
+        return;
+      }
+      if (message.text.startsWith('first-cycle completed:') || message.text.startsWith('first chores pass completed:')) {
+        const steps = childStepsAt(childStepSnapshots.get(child) ?? '', input.now().getTime());
+        input.log(`chores ${rootList(group)}: ${message.text}; ${steps ?? 'no step reading'}`);
+        return;
+      }
       input.log(`chores ${rootList(group)}: ${message.text}`);
       return;
     case 'reminder-note':
@@ -889,14 +949,20 @@ function onChildExit(input: ChoresFleetInput, group: Group, child: ChoresChild):
   );
   if (group.stopping) return;
   group.restarts += 1;
-  group.backoff += 1;
+  // A deliberate restart of one root starts its replacement on the next beat. The floor stays
+  // for every other end, where a replacement a moment later is how a kill storm chains.
+  const immediate = group.replaceNow;
+  group.replaceNow = false;
+  if (!immediate) group.backoff += 1;
   // The floor is measured from the end, so a child that leaves early in its minute still gets a
   // replacement at the first instant its root may start one.
   const endedAtMs = input.now().getTime();
-  const wait = Math.max(
-    Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1)),
-    RESTART_FLOOR_MS,
-  );
+  const wait = immediate
+    ? 0
+    : Math.max(
+        Math.min(group.policy.backoffCapMs, 1000 * 2 ** (group.backoff - 1)),
+        RESTART_FLOOR_MS,
+      );
   group.nextStartAtMs = endedAtMs + wait;
   const reason = exitReason(group.lastExit?.code ?? null, group.lastExit?.signal ?? null);
   group.why = `the child ${reason}`;
@@ -969,6 +1035,9 @@ function groupRow(
   };
 }
 
+/** At most one late-beat line a minute; the next line counts the late beats in between. */
+export const LATE_LINE_EVERY_MS = 60_000;
+
 export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
   const groups: Group[] = [];
   const inline = new Map<string, DaemonChoresState>();
@@ -1020,14 +1089,29 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
    *  daemon's own loop delivered late. The tick runs once per beat, so more than two intervals
    *  is one full beat late: a one-interval guard would trip on every on-time tick. */
   let lastTickMs: number | null = null;
+  /** The last late-beat line's instant, and the late beats since it that wrote none: a loaded
+   *  machine delivers most beats late, and one line per beat buried the log (4127 lines in a
+   *  morning on 2026-11-12). One line a minute carries the count of the beats it stands for. */
+  let lastLateLineMs: number | null = null;
+  let lateUnwritten = 0;
   return {
     tick(at: Date): void {
       const ms = at.getTime();
+      // Lateness uses only the existing configured heartbeat cadence (one full beat late).
+      // Lead diagnostic request, 2026-11-11: attribution introduces no separate threshold.
       const stalled = lastTickMs !== null && ms - lastTickMs > input.beatMs * 2;
-      if (stalled) {
-        // The beat itself is the stall record for the main loop: it is logged once, with the
-        // load, and no child is judged on the silence this daemon could not hear.
-        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}`);
+      let work = '';
+      try { work = input.workSinceBeat?.() ?? ''; }
+      catch { work = 'diagnostic unavailable'; }
+      if (stalled && lastLateLineMs !== null && ms - lastLateLineMs < LATE_LINE_EVERY_MS) {
+        lateUnwritten += 1;
+      } else if (stalled) {
+        // The beat itself is the stall record for the main loop: it is logged with the load, and
+        // no child is judged on the silence this daemon could not hear.
+        const more = lateUnwritten === 0 ? '' : `; ${String(lateUnwritten)} more late beat${lateUnwritten === 1 ? '' : 's'} since the last such line`;
+        input.log(`chores: the daemon beat arrived late, ${String(ms - (lastTickMs ?? ms))} ms after the previous one on a ${String(input.beatMs)} ms cadence; ${loadNote(input)}${more}${work === '' ? '' : `; work wall (overlap/await included), longest first: ${work}`}`);
+        lastLateLineMs = ms;
+        lateUnwritten = 0;
       }
       lastTickMs = ms;
       for (const group of groups) tickGroup(input, group, at, stalled);
@@ -1151,6 +1235,43 @@ export function createChoresFleet(input: ChoresFleetInput): ChoresFleet {
         stop: (): Promise<void> => Promise.resolve(),
         done: Promise.resolve(),
       };
+    },
+    restartRoot(root: string, why: string): boolean {
+      const group = groups.find((candidate) =>
+        candidate.mode === 'per-root' && candidate.routes.some((entry) => entry.route.root === root));
+      if (group === undefined || group.stopping || group.killing) return false;
+      const child = group.child;
+      // Only a child this fleet started and that is still the one it holds. A child already
+      // gone is the ordinary replacement path, not a second stop.
+      if (child === null || !child.alive) return false;
+      group.replaceNow = true;
+      group.killing = true;
+      group.spareWhy = null;
+      group.rowWhy = why;
+      group.why = why;
+      const steps = childStepsAt(childStepSnapshots.get(child) ?? '', input.now().getTime());
+      if (steps !== null) input.log(`chores ${rootList(group)}: ${why}; first-cycle steps at stop: ${steps}`);
+      child.kill(why, input.killGraceMs ?? DEFAULT_KILL_GRACE_MS, { evenIfWorking: true });
+      return true;
+    },
+    stuckOf(root: string): { missed: number; watchPhase: string | null; watchStartedAt: string | null; cycles: number } | null {
+      const group = groups.find((candidate) =>
+        candidate.mode === 'per-root' && candidate.routes.some((entry) => entry.route.root === root));
+      if (group === undefined) return null;
+      const ms = input.now().getTime();
+      const missed = group.child === null || group.lastBeatReadMs === null || group.beats < 2
+        ? 0
+        : overdueBeats(group.lastBeatReadMs, group.startedAtMs, ms, input.beatMs);
+      const hostsWatch = group.routes.some((entry) => entry.route.root === root && entry.watch !== undefined);
+      const mirror = group.watchState.get(root);
+      const watchPhase = hostsWatch ? (mirror?.phase ?? 'starting') : null;
+      const since = group.watchPhaseSince.get(root);
+      const watchStartedAt = hostsWatch
+        ? (since !== undefined
+            ? new Date(since).toISOString()
+            : (mirror?.startedAt ?? (group.startedAtMs === 0 ? input.since : new Date(group.startedAtMs).toISOString())))
+        : null;
+      return { missed, watchPhase, watchStartedAt, cycles: mirror?.cycles ?? 0 };
     },
     stop(why: string): Promise<void> {
       if (stopRun !== null) return stopRun;

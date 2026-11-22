@@ -24,8 +24,9 @@ const entityFile = join(home, '.config', 'team', 'entities.yaml');
 mkdirSync(dirname(entityFile), { recursive: true });
 writeFileSync(entityFile, `# independent entity words\natelier:\n  roots: [${base}]\n${input.scope === undefined ? '' : `  names:\n    unique: "${input.scope}"\n`}other:\n  roots: [${base}]\n  names:\n    unique: team\n`);
 const seatText = (name: string, role: string, persona: string, nickname = persona) => `  - name: ${name}\n    role: ${role}\n    label: ${persona} · ${role}\n    nickname: ${nickname}\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n${name === 'chief' ? '    leads: true\n' : ''}`;
+// a8966b2c2: a lead whose delivery order is only drop cannot be woken, so check exits 1.
 function teamText(name: string, project: string, entity: string, persona: string, nickname = persona) {
-  return `format: 1\nproject: ${name}\nin_project: ${project}\nentity: ${entity}\noperator: chief\nsession: ${name}\ntrust:\n  - ${join(base, name)}\n  - ${lobbyDir(home)}\n  - ${lobbyTrustEntry(home, { entity })}\nworkspace:\n  mode: shared\ndelivery_order: [drop]\nsender_name: nickname\nseats:\n${seatText('chief', 'orchestrator', `${name}-chief`)}${seatText('reviewer', 'reviewer', persona, nickname)}`;
+  return `format: 1\nproject: ${name}\nin_project: ${project}\nentity: ${entity}\noperator: chief\nsession: ${name}\ntrust:\n  - ${join(base, name)}\n  - ${lobbyDir(home)}\n  - ${lobbyTrustEntry(home, { entity })}\nworkspace:\n  mode: shared\ndelivery_order: [socket, drop]\nsender_name: nickname\nseats:\n${seatText('chief', 'orchestrator', `${name}-chief`)}${seatText('reviewer', 'reviewer', persona, nickname)}`;
 }
 const roots: Record<string, string> = {};
 const texts: Record<string, string> = {};

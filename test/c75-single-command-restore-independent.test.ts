@@ -771,10 +771,10 @@ describe('team up --all: the caller gate', () => {
   });
 });
 
-describe('the daemon start sweep: growing-gap retry', () => {
-  test('the wait doubles from the injected initial delay to the cap and ends pending at the budget', async () => {
-    // The production schedule is 5 s doubling to a 60 s cap over 315 s; the injected clock runs
-    // it at 1/1000 so the same algorithm is observed in milliseconds.
+describe('the daemon start sweep: a session that is not running is watched, not retried', () => {
+  test('a not-running route spends no retry budget and is re-tried at the attach poll until it runs', async () => {
+    // After a machine restart the owner attaches most sessions later: the route is watched at the
+    // injected attach poll instead of the 315 s load schedule, and is restored once it runs.
     let attempts = 0;
     const started = await startMachineDaemon({
       home,
@@ -785,31 +785,27 @@ describe('the daemon start sweep: growing-gap retry', () => {
       restoreRetryInitialDelayMs: 5,
       restoreRetryMaxDelayMs: 60,
       restoreRetryBudgetMs: 315,
+      restoreAttachPollMs: 5,
       restoreSweep: async () => {
         attempts += 1;
-        return { kind: 'not-running', state: 'absent' };
+        if (attempts < 4) return { kind: 'not-running', state: 'stopped' };
+        return { kind: 'ran', summary: { ...ZERO_SUMMARY, repaired: 1, repaired_seats: ['lead-1'], line: '1 seat repaired, 0 skipped (working), 0 refused' }, failed: false };
       },
     });
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
-      const log = await waitForLog(daemonLogPath(home), 'restore: pending', 5000);
-      const waits = [...log.matchAll(/restore: waiting (\d+)(ms|s) for the terminal host to restore 1 session/g)].map(
-        (match) => Number(match[1]) * (match[2] === 's' ? 1000 : 1),
-      );
-      expect(waits).toEqual([5, 10, 20, 40, 60, 60, 60, 60]);
-      // The initial pass plus one pass per wait, and the budget stops the loop exactly at 315.
-      expect(attempts).toBe(9);
-      expect(log).toContain('(attempt 1, elapsed 0ms/315ms)');
-      expect(log).toContain('(attempt 8, elapsed 255ms/315ms)');
-      expect(log).toContain('restore: pending (1 session still restoring in the terminal host after 315ms;');
-      expect(log).not.toContain('nothing restored');
+      const log = await waitForLog(daemonLogPath(home), '1 seat repaired', 5000);
+      expect(attempts).toBe(4);
+      expect(log).toContain('the restore runs when it is attached');
+      expect(log).not.toContain('restore: waiting');
+      expect(log).not.toContain('restore: pending');
     } finally {
       await started.daemon.close();
     }
   }, 20_000);
 
-  test('the production defaults are a 5 s first wait over a 315 s budget, and a route that comes up stops the retry', async () => {
+  test('the production attach poll is 30 s: a stopped route is not re-tried inside the old 5 s first wait', async () => {
     let attempts = 0;
     const started = await startMachineDaemon({
       home,
@@ -820,22 +816,54 @@ describe('the daemon start sweep: growing-gap retry', () => {
       // No retry knobs: the daemon's own defaults decide the schedule.
       restoreSweep: async () => {
         attempts += 1;
-        if (attempts === 1) return { kind: 'not-running', state: 'absent' };
+        return { kind: 'not-running', state: 'stopped' };
+      },
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitForLog(daemonLogPath(home), 'the restore runs when it is attached', 3000);
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      expect(attempts).toBe(1);
+      expect(readFileSync(daemonLogPath(home), 'utf8')).not.toContain('restore: waiting');
+    } finally {
+      await started.daemon.close();
+    }
+  }, 30_000);
+
+  test('the attach watch reads the sessions itself and runs no restore child until the session runs', async () => {
+    const calls: string[] = [];
+    let attached = false;
+    let reads = 0;
+    const started = await startMachineDaemon({
+      home,
+      roots: [mainTeam.root],
+      startedBy: 'test',
+      version: '0.5.12-test',
+      heartbeatMs: 10_000,
+      restoreAttachPollMs: 5,
+      restoreSessions: async () => { reads++; return new Map([[mainTeam.session, attached]]); },
+      restoreSweep: async (root) => {
+        calls.push(root);
+        if (calls.length === 1) return { kind: 'not-running', state: 'stopped' };
         return { kind: 'ran', summary: { ...ZERO_SUMMARY, repaired: 1, repaired_seats: ['lead-1'], line: '1 seat repaired, 0 skipped (working), 0 refused' }, failed: false };
       },
     });
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
-      const waiting = await waitForLog(daemonLogPath(home), 'restore: waiting 5s', 3000);
-      expect(waiting).toContain('restore: waiting 5s for the terminal host to restore 1 session (attempt 1, elapsed 0ms/315s)');
-      const log = await waitForLog(daemonLogPath(home), '1 seat repaired', 12_000);
-      expect(attempts).toBe(2);
-      expect(log).not.toContain('restore: pending');
+      await waitForLog(daemonLogPath(home), 'the restore runs when it is attached', 3000);
+      const deadline = Date.now() + 3000;
+      while (reads < 5 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(reads).toBeGreaterThanOrEqual(5);
+      expect(calls.length).toBe(1);
+      attached = true;
+      await waitForLog(daemonLogPath(home), '1 seat repaired', 3000);
+      expect(calls.length).toBe(2);
     } finally {
       await started.daemon.close();
     }
-  }, 30_000);
+  }, 20_000);
 });
 
 describe("the restore door's admission contract at the seam", () => {

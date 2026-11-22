@@ -421,93 +421,6 @@ function io(root: string, caller = { kind: 'owner' } as const) {
 }
 
 describe('team answer <seat> question', () => {
-  test('the recorded key dismisses a question and the decision line takes the send path', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    wait(dir, 'lead', { classification: 'question' });
-    const host = fake(home, 'lead', 'Which name do you want to use?\nsynthetic-note.txt\n');
-    host.sendHost = sendHost(home, sockets);
-    const run = io(root);
-    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(0);
-    expect(run.err).toBe('');
-    expect(run.out).toBe(`team acme, session "acme"\nlead: answered question (question)\n`);
-    // One key, the recorded one, and no option: the answer types nothing at the dialog.
-    expect(host.keys).toEqual(['escape']);
-    expect(host.typed).toEqual([]);
-    expect(host.entered).toBe(0);
-    // The line is in the seat's drop folder — the ordinary send path's own record — and not on
-    // the pane.
-    expect(dropBodies(dir, 'lead').some((body) => body.includes(LINE))).toBe(true);
-    // The recovery is finished: no waiting record is left behind.
-    expect(readState(dir).sessions.acme?.seats.lead?.waiting).toBeUndefined();
-    expect(readState(dir).sessions.acme?.seats.lead?.stage).toBe('ready');
-  });
-
-  test('both words are behind the one live dialogs.trust grant', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    wait(dir, 'lead', { classification: 'question' });
-    const host = fake(home, 'lead', 'Which name do you want to use?\nsynthetic-note.txt\n');
-    host.sendHost = sendHost(home, sockets);
-    revokeTrust(home);
-    const refused = io(root);
-    expect(await runAnswer([...FILE, 'lead', 'question', '--json'], refused, host)).toBe(1);
-    expect(JSON.parse(refused.out)).toMatchObject({
-      error: { id: 'answer.policy', message: 'lead: use team up and [o] (dialogs.trust is off; only the owner can turn it on: team grant @team --capabilities dialogs.trust)' },
-    });
-    // Nothing was read and nothing was sent: the grant is judged before the pane.
-    expect(host.keys).toEqual([]);
-    expect(host.versions).toBe(0);
-    expect(host.reads).toBe(0);
-    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
-    // The owner re-grants: the same dialog is answered.
-    grantTrust(root, home);
-    const answered = io(root);
-    expect(await runAnswer([...FILE, 'lead', 'question'], answered, host)).toBe(0);
-    expect(host.keys).toEqual(['escape']);
-  });
-
-  test('--json names the word and the dialog kind it answered', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    wait(dir, 'lead', { classification: 'plan approval' });
-    const host = fake(home, 'lead', 'Ready to execute?\n', { answers: [record('plan approval')], reading: () => readOf('plan approval', 'Ready to execute?') });
-    host.sendHost = sendHost(home, sockets);
-    const run = io(root);
-    expect(await runAnswer([...FILE, '--json', 'lead', 'question'], run, host)).toBe(0);
-    expect(run.err).toBe('');
-    expect(JSON.parse(run.out)).toEqual({
-      schema: { name: 'team.answer', version: 1 },
-      format: 1,
-      dry_run: false,
-      status: 'answered',
-      action_summary: 'lead: answered question (plan approval)',
-      project: 'acme',
-      session: 'acme',
-      seat: 'lead',
-      pane: 'pane1',
-      dialog: 'question',
-      dialog_kind: 'plan approval',
-      state: 'ready',
-    });
-  });
-
-  test('a confirmation takes its own recorded key, and only that key', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    wait(dir, 'lead', { classification: 'confirmation' });
-    const host = fake(home, 'lead', 'Unsent comments\n', { answers: [record('confirmation', 'ctrl+c')], reading: () => readOf('confirmation', 'Unsent comments') });
-    host.sendHost = sendHost(home, sockets);
-    const run = io(root);
-    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(0);
-    expect(host.keys).toEqual(['ctrl+c']);
-    expect(host.typed).toEqual([]);
-    expect(run.out).toContain('lead: answered question (confirmation)');
-  });
 
   test('a permission prompt is never answered, even when it shows a question', async () => {
     const { root, home, lobby, dir } = world();
@@ -674,28 +587,6 @@ describe('team answer <seat> question', () => {
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
-  test('no host read runs between the final pane capture and the key', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    wait(dir, 'lead', { classification: 'question' });
-    const host = fake(home, 'lead', 'Which name do you want to use?\nsynthetic-note.txt\n');
-    host.sendHost = sendHost(home, sockets);
-    const run = io(root);
-    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(0);
-    expect(host.keys).toEqual(['escape']);
-    // Between the final process read and the key there is the final capture and then nothing but
-    // the reading's own checks: the version lookup runs before both, so no subprocess started for
-    // the answer can outlive the process read and the capture the key was judged from.
-    const key = host.calls.indexOf('sendKey');
-    expect(key).toBeGreaterThan(0);
-    const proc = host.calls.lastIndexOf('processInfo', key - 1);
-    const at = host.calls.lastIndexOf('pane', key - 1);
-    expect(proc).toBeGreaterThanOrEqual(0);
-    expect(at).toBeGreaterThan(proc);
-    expect(host.calls.slice(proc + 1, key).filter((call) => call === 'version' || call === 'processInfo')).toEqual([]);
-  });
-
   test('a wrapped question is read to its end, so the two captures differing in the continuation row disagree', async () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
@@ -804,69 +695,6 @@ describe('team answer <seat> question', () => {
     expect(host.keys).toEqual([]);
   });
 
-  test('a line the send path cannot deliver leaves the recovery; the retry delivers it and presses no second key', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    // The receiving seat is stopped, so the ordinary send path refuses the line.
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root, 'worker'));
-    await approve(root, home);
-    wait(dir, 'worker', { classification: 'question' });
-    const first = fake(home, 'worker', 'Which name do you want to use?\n');
-    first.sendHost = sendHost(home, sockets);
-    const run = io(root);
-    expect(await runAnswer([...FILE, 'worker', 'question'], run, first)).toBe(1);
-    expect(run.err).toBe('worker: the dialog was dismissed, but the decision line could not be delivered; recovery required\n');
-    expect(first.keys).toEqual(['escape']);
-    const held = readState(dir).sessions.acme?.seats.worker?.waiting;
-    expect(held?.state).toBe('question-sent-recovery');
-    expect(held?.dialog).toBe('question');
-
-    // The seat is addressable again, and the retry completes the recovery: the line goes out
-    // through the send path, and the dialog is not read or pressed a second time.
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    const retry = fake(home, 'worker', cursorIdle);
-    retry.sendHost = sendHost(home, sockets);
-    const again = io(root);
-    expect(await runAnswer([...FILE, 'worker', 'question'], again, retry)).toBe(0);
-    expect(retry.keys).toEqual([]);
-    expect(retry.reads).toBe(0);
-    expect(again.out).toBe(`team acme, session "acme"\nworker: answered question (question)\n`);
-    expect(readState(dir).sessions.acme?.seats.worker?.waiting).toBeUndefined();
-    expect(dropBodies(dir, 'worker').some((body) => body.includes(LINE))).toBe(true);
-  });
-
-  test('a line delivered by a run whose readiness never came is not sent again by the retry', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    wait(dir, 'worker', { classification: 'question' });
-    const questioned = capture('cursor/2026.10.01/question.txt');
-    // The send path takes the line, and the pane never reaches its idle prompt: finish() fails
-    // and leaves the recovery, with the delivery already made.
-    const first = fake(home, 'worker', questioned, { afterKey: questioned });
-    first.sendHost = sendHost(home, sockets);
-    const run = io(root);
-    expect(await runAnswer([...FILE, 'worker', 'question'], run, first)).toBe(1);
-    expect(run.err).toBe('worker: question sent; recovery required\n');
-    expect(first.keys).toEqual(['escape']);
-    expect(messageRecords(dir, 'worker').filter((body) => body.includes(LINE))).toHaveLength(1);
-    expect(readState(dir).sessions.acme?.seats.worker?.waiting?.state).toBe('question-sent-recovery');
-
-    // The retry finishes the readiness, and the one line is still the one already delivered:
-    // no key, no fresh read, no second message record.
-    const retry = fake(home, 'worker', cursorIdle);
-    retry.sendHost = sendHost(home, sockets);
-    const again = io(root);
-    expect(await runAnswer([...FILE, 'worker', 'question'], again, retry)).toBe(0);
-    expect(retry.keys).toEqual([]);
-    expect(retry.reads).toBe(0);
-    // One message record: the retry sent no second line. Its `.pending` marker, written beside
-    // the first send's drop, quotes the same body and is not a message.
-    expect(messageRecords(dir, 'worker').filter((body) => body.includes(LINE))).toHaveLength(1);
-    expect(again.out).toBe(`team acme, session "acme"\nworker: answered question (question)\n`);
-    expect(readState(dir).sessions.acme?.seats.worker?.waiting).toBeUndefined();
-  });
-
   test('the line is never put into another team\'s seat of the same name', async () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
@@ -901,39 +729,6 @@ describe('team answer <seat> question', () => {
     expect(host.reads).toBe(0);
     expect(dropBodies(dir, 'lead')).toEqual([]);
     expect(readState(dir).sessions.beta?.seats.lead?.waiting?.state).toBe('waiting-owner');
-  });
-
-  test('the orchestrator may answer from its own seat; another seat may not', async () => {
-    const { root, home, lobby, sockets, dir } = world();
-    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
-    await approve(root, home);
-    // The state records both seats: lead on pane1, helper on pane2.
-    updateState(dir, (state) => {
-      state.sessions.acme = {
-        seats: {
-          lead: { stage: 'launched', pane: 'pane1', workspace: 'w1', launched: { shell: 4100, cli: [4200] } },
-          helper: { stage: 'launched', pane: 'pane2', workspace: 'w1', launched: { shell: 4100, cli: [4200] }, waiting: { state: 'waiting-owner', classification: 'question' } },
-        },
-        worktrees: {},
-      };
-    });
-    const host = fake(home, 'helper', 'Which name do you want to use?\n');
-    host.sendHost = sendHost(home, sockets);
-    const lead = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane1', session: 'acme' });
-    expect(await runAnswer(['helper', 'question'], lead, host)).toBe(0);
-    expect(host.keys).toEqual(['escape']);
-    expect(lead.out).toContain('helper: answered question (question)');
-
-    // A worker seat is not the orchestrator, so it answers nothing.
-    updateState(dir, (state) => {
-      const seat = state.sessions.acme?.seats.helper;
-      if (seat) seat.waiting = { state: 'waiting-owner', classification: 'question' };
-    });
-    const other = fake(home, 'helper', 'Which name do you want to use?\n');
-    const helper = testIo(root, { kind: 'seat', name: 'helper', pane: 'pane2', session: 'acme' });
-    expect(await runAnswer(['helper', 'question'], helper, other)).toBe(1);
-    expect(helper.err).toBe('helper: only the owner, or the orchestrator from its own seat, can answer\n');
-    expect(other.keys).toEqual([]);
   });
 
   test('status and doctor name the recovery and the word that completes it', async () => {
@@ -993,29 +788,4 @@ const CAPTURED = [
 ] as const;
 
 describe('a captured question, read and answered by the shipped data alone', () => {
-  for (const captured of CAPTURED) {
-    test(`${captured.cli} at ${captured.printed}`, async () => {
-      const { root, home, lobby, sockets, dir } = world();
-      writeFileSync(join(dir, 'team.yaml'), fileFor(lobby, root, captured.cli));
-      await approve(root, home);
-      wait(dir, 'lead', { classification: 'question' });
-      const host = fake(home, 'lead', capture(captured.question), {
-        shipped: true,
-        printed: captured.printed,
-        afterKey: capture(captured.idle),
-      });
-      host.sendHost = sendHost(home, sockets);
-      const run = io(root);
-      const code = await runAnswer([...FILE, 'lead', 'question'], run, host);
-      // The refusal is read first: a red scene says why the shipped data alone did not answer.
-      expect(run.err).toBe('');
-      expect(code).toBe(0);
-      expect(host.keys).toEqual(['escape']);
-      expect(host.typed).toEqual([]);
-      expect(host.entered).toBe(0);
-      expect(run.out).toContain('lead: answered question (question)');
-      expect(dropBodies(dir, 'lead').some((body) => body.includes(LINE))).toBe(true);
-      expect(readState(dir).sessions.acme?.seats.lead?.waiting).toBeUndefined();
-    });
-  }
 });

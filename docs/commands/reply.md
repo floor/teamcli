@@ -11,7 +11,7 @@ A record that does not verify, or one addressed to another seat, is refused and 
 written. A message an earlier build left in `.agents/messages/` carries no thread: it is read,
 not answered.
 
-Answering is a read (ADR `zeus-message-path`, D3): once the reply record is written, the seat's
+Answering is a read (ADR `architect-message-path`, D3): once the reply record is written, the seat's
 signed `read` receipt for the answered id is published under its own name beside it,
 `<id>.read.json` with `read_by: reply`, and the `replied` receipt follows under `replied`'s name.
 The read is an annotation beside the reply, never a condition of it: a receipt that cannot be

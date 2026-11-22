@@ -22,7 +22,8 @@
 
 import { clientPaneGuard } from './pane-guard.ts';
 import { randomBytes, type KeyObject } from 'node:crypto';
-import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import type { Args } from '../args.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -46,12 +47,15 @@ import {
   recordNameOk,
   isRecordSidecarName,
   signReceiptPayload,
+  statusOf,
   verifyRecord,
   type RecordPayload,
   type ReceiptPayload,
   type SignedReceipt,
 } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { readHistory } from '../send/history.ts';
+import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { claimClientRequest } from './replay.ts';
 import {
   KEY_ISOLATION_LINE,
@@ -66,6 +70,7 @@ import {
 } from './records.ts';
 import { CLIENT_REPLY_ID_PATTERN, verifyClientRead, type ClientReadRequest } from './verify.ts';
 import { recordDir } from '../commands/messages.ts';
+import { seatDropDir, seatMailParts } from '../queue/mail-tree.ts';
 
 /** The default page bound, and the largest page a read admits. */
 export const CLIENT_READ_DEFAULT_LIMIT = 20;
@@ -81,7 +86,7 @@ function inboxNameOk(name: string): boolean {
 
 /** The inbox folder: `<root>/.agents/send-drops/<session>/.clients/<clientId>`. */
 export function clientInboxFolder(root: string, session: string, clientId: string): string {
-  return join(root, '.agents', 'send-drops', session, '.clients', clientId);
+  return join(seatDropDir(root, session, '.clients'), clientId);
 }
 
 /** The read receipt beside one reply: `<id>.read.json`. */
@@ -145,7 +150,7 @@ function checkInboxFolder(folder: string): FolderCheck {
  */
 export function ensureClientInbox(root: string, session: string, clientId: string): { ok: true; dir: string } | { ok: false; why: string } {
   if (!CLIENT_WORD_PATTERN.test(clientId)) return { ok: false, why: `"${clientId}" is not a client id` };
-  const clients = join(root, '.agents', 'send-drops', session, '.clients');
+  const clients = seatDropDir(root, session, '.clients');
   const dir = join(clients, clientId);
   for (const folder of [clients, dir]) {
     try {
@@ -159,6 +164,28 @@ export function ensureClientInbox(root: string, session: string, clientId: strin
     if (!check.ok) return check;
   }
   return { ok: true, dir };
+}
+
+/**
+ * The read-only form of {@link ensureClientInbox}: checks the inbox folders that exist and creates
+ * none. An absent `.clients` or `.clients/<clientId>` is an empty inbox, not a refusal, so a read
+ * from a caller that may not write the team's `.agents` (a sandboxed seat) still answers.
+ */
+export function checkClientInbox(root: string, session: string, clientId: string): { ok: true; dir: string; absent: boolean } | { ok: false; why: string } {
+  if (!CLIENT_WORD_PATTERN.test(clientId)) return { ok: false, why: `"${clientId}" is not a client id` };
+  const clients = seatDropDir(root, session, '.clients');
+  const dir = join(clients, clientId);
+  for (const folder of [clients, dir]) {
+    try {
+      lstatSync(folder);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, dir, absent: true };
+      return { ok: false, why: `the client inbox folder "${folder}" cannot be read` };
+    }
+    const check = checkInboxFolder(folder);
+    if (!check.ok) return check;
+  }
+  return { ok: true, dir, absent: false };
 }
 
 /**
@@ -449,9 +476,85 @@ type ClientReading = {
   notes: string[];
   differences: OutputDifference[];
   ack?: { id: string; status: 'acknowledged' | 'already-acked' | 'refused'; written: boolean; message?: string };
+  /** The status events of the messages this client sent (`clientSentStatuses`). */
+  sent: SentRow[];
 };
 
 type AckOutcome = NonNullable<ClientReading['ack']>;
+
+/** Where one message this client sent stands, from the signed evidence beside it: `queued` while
+ *  nothing took it, `delivered` once a leg did, `read` and `replied` once the seat's own signed
+ *  receipt says so, or a reply on its thread is in this inbox. */
+export type SentStatus = 'queued' | 'delivered' | 'read' | 'replied';
+
+export type SentRow = { id: string; to: string; team: string; at: string; status: SentStatus };
+
+/** The history outcomes that mean a leg took the message. */
+const DELIVERED_OUTCOMES = new Set(['delivered', 'delivered (read)', 'delivered (late)', 'delivered (typed wake)', 'sent (channel)', 'answered']);
+
+/** One team a client's sends can land in: its history store and its drop tree. */
+export type SentTeam = { project: string; root: string; session: string };
+
+/**
+ * The status events of the messages this client sent, across every team its grants reach (the
+ * teams of its entity, the coordinator's first), newest last: the read side of the sender-bound
+ * `message.delivered`, `message.read` and `message.replied` events a seat's own send gets on the
+ * bus. A client has no bus subscription; it reads its inbox, so the same events reach it here, on
+ * the route it already uses for replies. Every status is derived from what is signed: each team's
+ * history line for the delivery, the seat's signed receipt for a read or a reply (`statusOf`), and
+ * a verified reply on the message's own thread in this inbox. Only this client's own sends are
+ * read (`from: client:<id>`). Nothing here is written, and a line or receipt that does not verify
+ * proves nothing.
+ */
+export function clientSentStatuses(
+  input: { home: string; teams: readonly SentTeam[]; clientId: string; key: KeyObject; replies: readonly ShownReply[]; limit: number },
+): SentRow[] {
+  const from = `client:${input.clientId}`;
+  const first = new Map<string, { to: string; at: string; team: SentTeam }>();
+  const delivered = new Set<string>();
+  for (const team of input.teams) {
+    const read = readHistory(team.project, team.root, input.home);
+    if (!read.ok) continue;
+    for (const entry of read.entries) {
+      if (entry.from !== from) continue;
+      if (!first.has(entry.id)) first.set(entry.id, { to: entry.to, at: entry.ts, team });
+      if (DELIVERED_OUTCOMES.has(entry.outcome)) delivered.add(entry.id);
+    }
+  }
+  const answered = new Set(input.replies.map((reply) => reply.thread));
+  const rows = [...first.entries()]
+    .sort((left, right) => (left[1].at < right[1].at ? -1 : left[1].at > right[1].at ? 1 : 0))
+    .slice(-input.limit);
+  return rows.map(([id, sent]) => {
+    const dropDir = seatDropDir(sent.team.root, sent.team.session, sent.to);
+    const signed = statusOf(dropDir, id, { to: sent.to, root: sent.team.root, session: sent.team.session }, input.key);
+    const status: SentStatus = answered.has(id) || signed === 'replied'
+      ? 'replied'
+      : signed === 'read'
+        ? 'read'
+        : signed === 'delivered' || delivered.has(id)
+          ? 'delivered'
+          : 'queued';
+    return { id, to: sent.to, team: sent.team.project, at: sent.at, status };
+  });
+}
+
+/** The teams a client's grants reach: the coordinator's, then every registry team of the same
+ *  entity, each once. A registry that cannot be read leaves the coordinator's alone. */
+export function sentTeamsOf(home: string, coordinator: EntityCoordinator): SentTeam[] {
+  const teams: SentTeam[] = [{ project: coordinator.entity, root: coordinator.teamRoot, session: coordinator.session }];
+  let records: Record<string, TeamRecord>;
+  try {
+    records = readTeams(home);
+  } catch {
+    return teams;
+  }
+  for (const record of Object.values(records)) {
+    if (record.entity !== coordinator.entity || record.root === coordinator.teamRoot) continue;
+    teams.push({ project: record.project, root: record.root, session: record.session });
+  }
+  return teams;
+}
 
 type ClientReadOutcome =
   | {
@@ -467,14 +570,20 @@ type ClientReadOutcome =
   | { ok: false; kind: 'key' | 'refused'; why: string };
 
 /**
- * Admits one read under the grant lock: re-reads the presented grant, resolves the checkout from
- * the registry (never from cwd), requires the signed binding to be the current coordinator, builds
- * and verifies the signed v2 request, requires the grant still active, claims the request id, and
- * only then scans the inbox. Any failure leaves no row scanned and no receipt written.
+ * Admits one read: re-reads the presented grant, resolves the checkout from the registry (never
+ * from cwd), requires the signed binding to be the current coordinator, builds and verifies the
+ * signed v2 request, requires the grant still active, and only then scans the inbox. Any failure
+ * leaves no row scanned and no receipt written.
+ *
+ * An ack (`input.ack` set) runs under the grant lock, claims the request id and creates the inbox
+ * folders, since it writes a receipt. A plain read writes nothing: no lock, no claim, no folder.
+ * It has no effect a replay could repeat, and a caller whose sandbox refuses writes to the grants
+ * folder and the team's `.agents` can still read its replies.
  */
 function admitRead(
   input: { home: string; grantFile: string; keyFile: string; since: string | null; ack: string | null; limit: number; requestId?: string; now: Date },
 ): ClientReadOutcome {
+  const writes = input.ack !== null;
   const presented = readClientGrantFile(input.home, input.grantFile);
   if (!presented.ok) return { ok: false, kind: 'refused', why: presented.why };
   const grant = presented.grant;
@@ -516,22 +625,30 @@ function admitRead(
   ) {
     return { ok: false, kind: 'refused', why: `the coordinator binding changed before the read; nothing was read` };
   }
-  const claim = claimClientRequest(current.teamRoot, active.grant.clientId, verified.request.request_id, input.now);
-  if (!claim.ok) return { ok: false, kind: 'refused', why: claim.why };
-  const inbox = ensureClientInbox(current.teamRoot, current.session, active.grant.clientId);
+  if (writes) {
+    const claim = claimClientRequest(current.teamRoot, active.grant.clientId, verified.request.request_id, input.now);
+    if (!claim.ok) return { ok: false, kind: 'refused', why: claim.why };
+  }
+  const inbox = writes
+    ? ensureClientInbox(current.teamRoot, current.session, active.grant.clientId)
+    : checkClientInbox(current.teamRoot, current.session, active.grant.clientId);
   if (!inbox.ok) return { ok: false, kind: 'refused', why: inbox.why };
   const keyState = messageKeyState(input.home);
   if (keyState.kind !== 'key') {
     const why = keyState.kind === 'missing' ? 'no message key; nothing was shown' : `${keyState.why}; nothing was shown`;
     return { ok: false, kind: 'key', why };
   }
-  const scanned = scanClientInbox({
-    home: input.home,
-    root: current.teamRoot,
-    session: current.session,
-    clientId: active.grant.clientId,
-    key: keyState.key,
-  });
+  // An inbox found absent is read as empty for this invocation and never listed: a folder that
+  // appears after the check has not passed it. The next read checks it.
+  const scanned: ReturnType<typeof scanClientInbox> = 'absent' in inbox && inbox.absent
+    ? { ok: true, scan: { shown: [], refused: [] } }
+    : scanClientInbox({
+      home: input.home,
+      root: current.teamRoot,
+      session: current.session,
+      clientId: active.grant.clientId,
+      key: keyState.key,
+    });
   if (!scanned.ok) return { ok: false, kind: 'refused', why: scanned.why };
   return {
     ok: true,
@@ -611,24 +728,29 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
   const limit = clientLimitOf(args.values.limit);
   if (limit === null) return usage(`--limit is a page bound between 1 and ${String(CLIENT_READ_MAX_LIMIT)}`);
 
+  const admit = (): ClientReadOutcome =>
+    admitRead({
+      home: sources.home,
+      grantFile,
+      keyFile,
+      since,
+      ack: ackId,
+      limit,
+      ...(args.values['request-id'] !== undefined ? { requestId: args.values['request-id'] } : {}),
+      now: sources.now(),
+    });
   let outcome: ClientReadOutcome;
-  try {
-    outcome = withClientGrantLock(
-      sources.home,
-      () =>
-        admitRead({
-          home: sources.home,
-          grantFile,
-          keyFile,
-          since,
-          ack: ackId,
-          limit,
-          ...(args.values['request-id'] !== undefined ? { requestId: args.values['request-id'] } : {}),
-          now: sources.now(),
-        }),
-    );
-  } catch (error) {
-    return refused(error instanceof Error ? error.message : 'the client grant lock could not be taken');
+  if (ackId === null) {
+    // A plain read writes nothing, so it takes no lock: a held lock or a grants folder the caller
+    // may not write never stops it.
+    outcome = admit();
+  } else {
+    try {
+      outcome = withClientGrantLock(sources.home, admit);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : 'the client grant lock could not be taken';
+      return refused(`${why}; the ack writes a receipt and was not made. A read without --ack writes nothing and can page with --since <id>`);
+    }
   }
   if (!outcome.ok) return outcome.kind === 'key' ? keyRefusal(outcome.why) : refused(outcome.why);
 
@@ -728,7 +850,7 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
 
   const differences: OutputDifference[] = outcome.scan.refused.map((row) => ({
     what: row.why,
-    repair: `the owner checks the record in ${join('.agents', 'send-drops', outcome.coordinator.session, '.clients', outcome.grant.clientId, row.id)} and removes it, or has the sending seat re-send it`,
+    repair: `the owner checks the record in ${join(...seatMailParts(outcome.coordinator.session, '.clients'), outcome.grant.clientId, row.id)} and removes it, or has the sending seat re-send it`,
     who: 'the owner',
   }));
   const reading: ClientReading = {
@@ -739,9 +861,36 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
     refused: outcome.scan.refused,
     notes: differences.length === 0 && selected.length === 0 && ack?.status !== 'refused' ? ['nothing is waiting'] : [],
     differences,
+    sent: clientSentStatuses({
+      home: sources.home,
+      teams: sentTeamsOf(sources.home, outcome.coordinator),
+      clientId: outcome.grant.clientId,
+      key: outcome.key,
+      replies: ordered,
+      limit,
+    }),
     ...(ack !== undefined ? { ack } : {}),
   };
-  printReading(io, reading, json, sources.now());
+  // A plain read holds no lock, so its admission is not its last word: the page and the statuses
+  // were gathered after it. The presented grant and the coordinator binding are read again with a
+  // fresh clock before anything is printed; a revocation, expiry or rebinding that landed while
+  // the page was gathered refuses the read with nothing shown.
+  const printedAt = sources.now();
+  const still = activeClientGrant(sources.home, outcome.presented, printedAt);
+  const acked = ack?.written === true ? ` (the ack receipt for ${ack.id} was written first)` : '';
+  if (!still.ok) return refused(`the grant was revoked or expired while the read ran; nothing was shown${acked}: ${still.why}`);
+  const bound = resolveEntityCoordinator(sources.home, still.grant.entity, { seat: still.grant.recipientSeat, clientId: still.grant.clientId, teamId: still.grant.teamId, ...(still.grant.team !== undefined ? { team: still.grant.team } : {}) });
+  if (
+    !bound.ok ||
+    bound.coordinator.teamId !== outcome.coordinator.teamId ||
+    bound.coordinator.recipientId !== outcome.coordinator.recipientId ||
+    bound.coordinator.recipientSeat !== outcome.coordinator.recipientSeat ||
+    !sameFolder(bound.coordinator.teamRoot, outcome.coordinator.teamRoot) ||
+    bound.coordinator.session !== outcome.coordinator.session
+  ) {
+    return refused(`the coordinator binding changed while the read ran; nothing was shown${acked}`);
+  }
+  printReading(io, reading, json, printedAt);
 
   if (differences.length > 0 || ack?.status === 'refused') {
     return refused(
@@ -795,6 +944,7 @@ function printReading(io: Io, reading: ClientReading, json: boolean, now: Date):
             refused: reading.refused.length,
           },
           ...(reading.ack !== undefined ? { ack: reading.ack } : {}),
+          sent: reading.sent,
           key_isolation: KEY_ISOLATION_LINE,
         },
         null,
@@ -815,6 +965,18 @@ function printReading(io: Io, reading: ClientReading, json: boolean, now: Date):
   );
   for (const row of reading.rows) {
     lines.push('', `${row.reply.id}:`, ...bodyLines(row.body ?? ''));
+  }
+  if (reading.sent.length > 0) {
+    lines.push(
+      '',
+      'Sent by this client:',
+      ...renderTable({
+        headers: ['ID', 'TO', 'TEAM', 'SENT', 'STATUS'],
+        rows: reading.sent.map((row) => [row.id, row.to, row.team, formatRelativeTime(row.at, now), row.status]),
+        indent: '  ',
+        style,
+      }),
+    );
   }
   if (reading.notes.length > 0) lines.push('', ...renderNotes(reading.notes));
   if (reading.differences.length > 0) lines.push('', ...renderDifferences(reading.differences, style));

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
 import { runApprove } from '../../src/approve/command.ts';
 import { runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
+import { writePolicySet } from '../../src/policy/index.ts';
 import type { HerdrAgent, PaneProcesses } from '../../src/herdr.ts';
 import type { LaunchedIdentity } from '../../src/launch/identity.ts';
 import { installKey } from '../../src/store/keys.ts';
@@ -243,7 +244,13 @@ describe('a seat-run down keeps a lead whatever herdr calls its pane', () => {
   });
 
   describe('a distinct operator', () => {
-    beforeEach(() => approve(distinctOperatorFile()));
+    beforeEach(() => {
+      approve(distinctOperatorFile());
+      // The release default (`leads.authority: own-team`) now admits a distinct operator for
+      // its own team; `owner-asks` restores the owner gate these refusals pin.
+      const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+      if (!asked.ok) throw new Error(asked.why);
+    });
 
     // Down is the owner's or a `leads` seat's: the operator runs it only as a delegate now, and
     // this file names none. The refusal comes before the pane is read, so nothing is closed.

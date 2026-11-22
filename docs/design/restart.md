@@ -33,7 +33,7 @@ team restart --changed [--abandon] [--dry-run] [--session <name>] [--file <path>
 2. **Owner-only flags**: `--session` and `--file` are the owner's alone (`restart.session-owner`, `restart.file-owner`, exit 1). When a lead runs `team restart <seat>` from its lobby without `--file`, `launchedTeamFile` resolves the project's `team config`.
 3. **Recorded pane verification**: a lead caller must run from the pane recorded for its seat in `.agents/state.json` (`standingOf(dir, session, caller)`). Missing or mismatched pane records are refused (`restart.caller`, exit 1).
 4. **No self-restart from a seat**: a seat caller cannot restart its own recorded pane because closing the workspace kills the calling shell mid-command before the relaunch runs (`restart.self`, exit 1: ``team restart: the <seat> cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it``).
-5. **No seat-initiated `--abandon` on lead seats**: a seat caller may not pass `--abandon` when targeting the orchestrator's or the operator's seat (`restart.lead`, exit 1: `team restart: a seat caller does not abandon the orchestrator's or the operator's seat; this call is <caller>`).
+5. **No seat-initiated `--abandon` on the orchestrator**: a seat caller may not pass `--abandon` when targeting the orchestrator's seat (`restart.lead`, exit 1: `team restart: a seat caller does not abandon the orchestrator's seat; this call is <caller>`). The operator seat is abandonable.
 
 ---
 
@@ -127,7 +127,7 @@ An idle seat holding unsent text is restarted, not refused. The run, in order:
    ```
    <seat>: input box: holds unsent text, copied to <path> and pasted back once the new pane is ready
    <seat>: turn: not working (unsent)
-   <seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
+   <seat>: context: relaunch runs "<launch>" in a new workspace <resume words>
    ```
 4. Closes the old workspace without typing into it — the copied text is what waits for the new
    pane, so no exit sequence is typed over it — and relaunches as usual.
@@ -159,7 +159,7 @@ Whenever `team restart` closes a running or exited pane, it first prints three l
 ```
 <seat>: input box: empty | holds unsent text | holds unsent text, copied to <path> and pasted back once the new pane is ready | not read (the screen is not recognised)
 <seat>: turn: not working (<state>) | mid-turn (working)
-<seat>: context: workspace close ends the pane; relaunch runs "<launch>" in a new workspace <resume words>
+<seat>: context: relaunch runs "<launch>" in a new workspace <resume words>
 ```
 
 `<launch>` is the line the relaunch runs, never the bare declaration: a conversation resume the
@@ -238,7 +238,7 @@ Once the old pane is stopped and closed:
 | `1` | `restart.caller` | the caller may not run `team restart` (or passed an owner-only flag) |
 | `1` | `restart.detached` | a run with no terminal |
 | `1` | `restart.herdr` | herdr does not answer |
-| `1` | `restart.lead` | a seat caller passed `--abandon` for the orchestrator's or the operator's seat |
+| `1` | `restart.lead` | a seat caller passed `--abandon` for the orchestrator's seat |
 | `1` | `restart.no-session` | the herdr session is not running |
 | `1` | `restart.not-ready` | preflight or launch did not produce a ready seat |
 | `1` | `restart.replaced` | the old pane holds a process that is not the seat's CLI |

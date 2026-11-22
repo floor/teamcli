@@ -1,3 +1,4 @@
+// Codex launches omit the obsolete OAuth refresh override after the dialog fix.
 // A launch line's own permission options and the profile's unattended defaults. A default is
 // added as one complete option — its flag and its value — so a line that already carries the
 // option keeps its own value and suppresses the whole default, while a line without it still
@@ -6,6 +7,7 @@
 import { describe, expect, test } from 'bun:test';
 import { codexEndpointConfig, remoteCodexCommand } from '../../src/launch/plan.ts';
 import { profileFor } from '../../src/profiles/index.ts';
+import { seatPins, seatPinWords } from '../../src/launch/features.ts';
 import { launchCommand, resumeCarry } from '../../src/profiles/profile.ts';
 
 const codex = profileFor('codex')!;
@@ -15,43 +17,52 @@ const gemini = profileFor('gemini')!;
 const launched = (profile: ReturnType<typeof profileFor>, line: string): string =>
   launchCommand(profile!, line, 'RULES.');
 
+/** The profile's computer- and browser-use pins, as every Codex launch carries them: after the
+ *  options, before the CLI's own `--`. */
+const PIN_CONFIG = seatPinWords(seatPins(codex, true));
+const PINS = PIN_CONFIG.map((word) => ` ${word}`).join('');
+const pinned = (line: string): string => {
+  const at = line.indexOf(' -- ');
+  return at < 0 ? `${line}${PINS}` : `${line.slice(0, at)}${PINS}${line.slice(at)}`;
+};
+
 describe('an explicit Codex permission option keeps its value and suppresses the default', () => {
   test('short equals form with the default values', () => {
     expect(launched(codex, 'codex -a=never -s=danger-full-access')).toBe(
-      'AGENT_UNATTENDED=1 codex -a=never -s=danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -a=never -s=danger-full-access --no-alt-screen'),
     );
   });
 
   test('long equals form with explicit values', () => {
     expect(launched(codex, 'codex --ask-for-approval=on-request --sandbox=workspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex --ask-for-approval=on-request --sandbox=workspace-write --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex --ask-for-approval=on-request --sandbox=workspace-write --no-alt-screen'),
     );
   });
 
   test('long space-separated form with explicit values', () => {
     expect(launched(codex, 'codex --ask-for-approval on-request --sandbox workspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex --ask-for-approval on-request --sandbox workspace-write --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex --ask-for-approval on-request --sandbox workspace-write --no-alt-screen'),
     );
   });
 
   test('the short flag suppresses a default written in its long alias and the reverse', () => {
     expect(launched(codex, 'codex -a on-request')).toBe(
-      'AGENT_UNATTENDED=1 codex -a on-request -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -a on-request -s danger-full-access --no-alt-screen'),
     );
     expect(launched(codex, 'codex --sandbox=workspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex --sandbox=workspace-write -a never --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex --sandbox=workspace-write -a never --no-alt-screen'),
     );
   });
 
   test('explicit default values are not repeated as bare words', () => {
     expect(launched(codex, 'codex -a never -s danger-full-access')).toBe(
-      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen'),
     );
   });
 
   test('an explicit --no-alt-screen suppresses only that default', () => {
     expect(launched(codex, 'codex --no-alt-screen')).toBe(
-      'AGENT_UNATTENDED=1 codex --no-alt-screen -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex --no-alt-screen -a never -s danger-full-access'),
     );
   });
 });
@@ -63,22 +74,22 @@ describe('an attached short value is the same permission option', () => {
   // value, not an unknown word.
   test('both attached shorts suppress both default pairs', () => {
     expect(launched(codex, 'codex -aon-request -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen'),
     );
   });
 
   test('one attached short suppresses only its own default', () => {
     expect(launched(codex, 'codex -aon-request')).toBe(
-      'AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen'),
     );
     expect(launched(codex, 'codex -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen'),
     );
   });
 
   test('a quoted prompt naming an attached short does not suppress the default', () => {
     expect(launched(codex, 'codex "use -aon-request"')).toBe(
-      'AGENT_UNATTENDED=1 codex "use -aon-request" -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex "use -aon-request" -a never -s danger-full-access --no-alt-screen'),
     );
   });
 });
@@ -86,19 +97,19 @@ describe('an attached short value is the same permission option', () => {
 describe('a line without permission flags receives the complete defaults', () => {
   test('no flags at all', () => {
     expect(launched(codex, 'codex -m gpt-6.1-sol')).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -a never -s danger-full-access --no-alt-screen'),
     );
   });
 
   test('an unrelated argument equal to a default value does not remove it', () => {
     expect(launched(codex, 'codex -m never')).toBe(
-      'AGENT_UNATTENDED=1 codex -m never -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m never -a never -s danger-full-access --no-alt-screen'),
     );
   });
 
   test('a quoted prompt that names the flags is not read as one', () => {
     expect(launched(codex, 'codex "write -a never -s danger-full-access to the file"')).toBe(
-      'AGENT_UNATTENDED=1 codex "write -a never -s danger-full-access to the file" -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex "write -a never -s danger-full-access to the file" -a never -s danger-full-access --no-alt-screen'),
     );
   });
 
@@ -106,16 +117,16 @@ describe('a line without permission flags receives the complete defaults', () =>
   // the line's own word after it stays positional.
   test('an argument after -- is positional and does not suppress defaults', () => {
     expect(launched(codex, 'codex -- -a on-request')).toBe(
-      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false -- -a on-request',
+      pinned('AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -- -a on-request'),
     );
   });
 
   test('an attached-looking word after -- does not suppress the defaults either', () => {
     expect(launched(codex, 'codex -- -sdanger-full-access')).toBe(
-      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false -- -sdanger-full-access',
+      pinned('AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -- -sdanger-full-access'),
     );
     expect(launched(codex, 'codex -- -anever -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false -- -anever -sworkspace-write',
+      pinned('AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen -- -anever -sworkspace-write'),
     );
   });
 });
@@ -123,13 +134,13 @@ describe('a line without permission flags receives the complete defaults', () =>
 describe('the codex daemon policy lands beside the permission options', () => {
   test('daemon off inserts --no-daemon before a default --no-alt-screen', () => {
     expect(launchCommand(codex, 'codex -m gpt-6.1-sol', 'RULES.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -a never -s danger-full-access --no-daemon --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -a never -s danger-full-access --no-daemon --no-alt-screen'),
     );
   });
 
   test('daemon off with every option explicit adds only --no-daemon', () => {
     expect(launchCommand(codex, 'codex -a on-request -s workspace-write --no-alt-screen', 'RULES.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe(
-      'AGENT_UNATTENDED=1 codex -a on-request -s workspace-write --no-alt-screen --no-daemon -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -a on-request -s workspace-write --no-alt-screen --no-daemon'),
     );
   });
 });
@@ -176,28 +187,26 @@ describe('the resume path keeps one set of permission values', () => {
   test('a resume of an explicit long-form line keeps its values and gains only --no-alt-screen', () => {
     const command = resumed('codex -m gpt-6.1-sol --ask-for-approval on-request --sandbox workspace-write');
     expect(command).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol --ask-for-approval on-request --sandbox workspace-write resume ses_abc --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol --ask-for-approval on-request --sandbox workspace-write resume ses_abc --no-alt-screen'),
     );
     expect(codexEndpointConfig(command)).toEqual([
-      '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"',
-      '-c', 'features.mcp_oauth_refresh_coordination=false',
+      '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"', ...PIN_CONFIG,
     ]);
     expect(remoteCodexCommand(command)).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen'),
     );
   });
 
   test('an attached short value reaches the endpoint and sheds from the remote line', () => {
     const command = resumed('codex -m gpt-6.1-sol -aon-request -sworkspace-write');
     expect(command).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -aon-request -sworkspace-write resume ses_abc --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -aon-request -sworkspace-write resume ses_abc --no-alt-screen'),
     );
     expect(codexEndpointConfig(command)).toEqual([
-      '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"',
-      '-c', 'features.mcp_oauth_refresh_coordination=false',
+      '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"', ...PIN_CONFIG,
     ]);
     expect(remoteCodexCommand(command)).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen'),
     );
   });
 
@@ -215,14 +224,13 @@ describe('the resume path keeps one set of permission values', () => {
   test('a resume of a line without permission flags gains exactly one default pair', () => {
     const command = resumed('codex -m gpt-6.1-sol');
     expect(command).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc -a never -s danger-full-access --no-alt-screen'),
     );
     expect(codexEndpointConfig(command)).toEqual([
-      '-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"',
-      '-c', 'features.mcp_oauth_refresh_coordination=false',
+      '-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"', ...PIN_CONFIG,
     ]);
     expect(remoteCodexCommand(command)).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen'),
     );
   });
 
@@ -230,7 +238,7 @@ describe('the resume path keeps one set of permission values', () => {
     const carried = resumeCarry('codex', 'codex -m gpt-6.1-sol resume ses_abc', 'ses_abc');
     expect(carried.kind).toBe('line');
     expect(launched(codex, (carried as { line: string }).line)).toBe(
-      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      pinned('AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc -a never -s danger-full-access --no-alt-screen'),
     );
   });
 });

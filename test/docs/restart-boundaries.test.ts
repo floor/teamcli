@@ -28,8 +28,9 @@ const SRC = '../../src/commands/restart.ts';
 const OWNER_ROW = 'run it, from a terminal outside herdr; `--session` and `--file` are the owner\'s own';
 const NO_TERMINAL_ROW =
   'nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane``';
+// The caller row now reserves the orchestrator's seat alone; pin the current three refusals.
 const LEAD_ROW =
-  'never its own recorded pane, never `--abandon` on the orchestrator\'s or the operator\'s seat, and never `--abandon` on a `working` seat';
+  'never its own recorded pane, never `--abandon` on the orchestrator\'s seat, and never `--abandon` on a `working` seat';
 const BUSY_ENUMERATION =
   'working, blocked at a prompt, at its own exit question, or holding unsent text';
 const FILE_FLAG = 'deprecated: a legacy team file to read instead of the team\'s registry record; the owner\'s alone';

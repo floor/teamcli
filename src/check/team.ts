@@ -25,7 +25,8 @@ import {
   recordStartMatches,
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
-import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
+import { launchLineProblem, realLaunchPlace, type LaunchPlace } from '../launch/launcher-home.ts';
+import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointStartConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
@@ -46,7 +47,7 @@ import { daemonDifferences, daemonProblemNotes, daemonReading } from '../daemon/
 import { canonicalRoot } from '../daemon/routes.ts';
 import { canonicalRoot as ownerCanonicalRoot, readOwnerActionRecord } from '../client/owner-action.ts';
 import { actionRequestsFolder } from '../client/team-create.ts';
-import { hostedWatchCheckNotes, hostedWatchDifferences, paneWatchCheckNotes } from '../daemon/watch_display.ts';
+import { hostedWatchCheckNotes, hostedWatchDifferences, hostedWatchRunning, paneWatchCheckNotes, watchRepairOf } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
@@ -66,7 +67,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
-import { ownStartFolderProblem, placedStartFolders } from '../worktree/place.ts';
+import { ownStartFolderProblem, placedStartFolders, seatCwdRefusal } from '../worktree/place.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import {
   collapseNotes,
@@ -87,7 +88,8 @@ import {
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
-import { featureMismatch } from '../launch/features.ts';
+import { pinMismatch, seatPins } from '../launch/features.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
@@ -126,7 +128,7 @@ import {
   type SettingLevel,
 } from '../settings/inherit.ts';
 import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
-import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
+import { emptySession, liveHold, pidAlive, readState, recordedStartFolder, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
@@ -154,6 +156,9 @@ import {
 } from './sidebar.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+import { seatDropDir, stampedListing } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export type { CheckSidebarSources };
 
@@ -220,6 +225,10 @@ export type CheckSources = {
    *  the stop signals and the waits between them. Absent when no producer is wired: a run then
    *  refuses `--close-orphans` rather than touching a process it cannot re-prove. */
   closeOrphans?: OrphanCloseSources;
+  /** Temp-folder and repository detection for a launch line that runs a script. Absent: the
+   *  real temp roots (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/private/tmp`) and a walk for a git
+   *  directory. A fixture world supplies a detector that treats its own base as neither. */
+  launchPlace?: LaunchPlace;
 };
 
 export type CodexEndpointCheckSources = {
@@ -254,6 +263,7 @@ function heldIn(session: string): ReadonlySet<number> | null {
  * names the seat there. The rest is the same code, not a copy of it.
  */
 export const realCheckSources: CheckSources = {
+  launchPlace: realLaunchPlace(),
   live(session, team, state) {
     const running = sessionRunning(session);
     if (running === null) return null;
@@ -354,6 +364,7 @@ export const realCheckSources: CheckSources = {
     heldHere: (session) => heldIn(session),
     signal: (pid, signal) => {
       try {
+        hostedCommit('process.kill');
         process.kill(pid, signal === 'terminate' ? 'SIGTERM' : 'SIGKILL');
         return true;
       } catch {
@@ -429,6 +440,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
       // orchestrator continues with the warning; the owner's own path above never reaches here.
       const lift = devModeOwnerLift(io, {
         command: 'check',
+        gate: 'repair',
         refusal: msg,
         ...(sources.home !== undefined ? { home: sources.home } : {}),
         team: current.team,
@@ -660,6 +672,11 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()),
     undefined,
     continuityIds,
+    undefined,
+    undefined,
+    undefined,
+    sources.daemon !== undefined && hostedWatchRunning(sources.daemon, root, session),
+    watchRepairOf(sources.daemon),
   );
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
@@ -693,6 +710,17 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     sources.now(),
     continuityIds,
   );
+  // Each seat's `desktop_control`, read once: the pins its recorded line and its managed
+  // server must carry follow it.
+  const desktopWords = new Map<string, boolean>();
+  const desktopOf = (name: string): boolean => {
+    let on = desktopWords.get(name);
+    if (on === undefined) {
+      on = seatDesktopControl({ team, seat: name, home: sources.home ?? null, root });
+      desktopWords.set(name, on);
+    }
+    return on;
+  };
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
     // `compare()`'s plain words: one line per held seat, the richer one.
@@ -706,13 +734,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...labelDifferences(team, state, live, paneDisplays, repairedDisplayPanes),
     ...sidebarChecked.differences,
     ...startFolderDifferences(team, state, root, sources.home ?? homedir(), session),
-    ...featureDifferences(team, state),
-    ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
+    ...seatCwdDifferences(team, state, root),
+    ...featureDifferences(team, state, desktopOf),
+    ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources, desktopOf),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
     // A team file left beside a registry team that says something else: never silent.
     ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
+    ...leadWakeOrderDifferences(team, root, sources.home, sources.now()),
     ...socketSkipped.differences,
     // The daemon's watch for this checkout: not running when the route carries one, or running
     // with its outbound gate closed, is a difference — the watch is not enforcing anything.
@@ -733,6 +763,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // repair. Under dev mode both fold into the quiet notes above.
     ...record.differences,
     ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
+    ...launchLineDifferences(team, root, sources.home ?? homedir(), sources.launchPlace ?? realLaunchPlace()),
     ...staleDifferences(stale),
     ...unrecordedWorkspaceDifferences(team, state, live, root, sources.home, session, sources),
     // A live agent CLI no pane holds: named with its pid, age and the record it answers to, with
@@ -1503,7 +1534,7 @@ function generalBriefDifferences(
       }
       continue;
     }
-    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const dropDir = seatDropDir(root, session, seat.name);
     const expected = {
       ...generalBriefRecord({
         to: seat.name,
@@ -1609,7 +1640,7 @@ function unreadDifferences(
       ...(brief === undefined ? [] : [brief.id]),
       ...(brief?.superseded ?? []),
     ]);
-    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const dropDir = seatDropDir(root, session, seat.name);
     const context = { to: seat.name, root, session, lead: team.orchestrator };
     const unread = listUnread(dropDir, context, home).filter((message) => {
       if (briefIds.has(message.id)) return false;
@@ -1644,7 +1675,7 @@ function unreadDifferences(
     // owner's name or a seat's standing. A record that cannot be opened or verified is named as
     // what it is — an unverified message — and keeps its age, its id and its count.
     let who = 'an unverified message';
-    const looked = readRecord(join(dropDir, oldest.id), oldest.id);
+    const looked = readRecord(liveRecordPath(dropDir, oldest.id), oldest.id);
     if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
       const from = looked.record.payload.from;
       who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
@@ -1656,11 +1687,7 @@ function unreadDifferences(
       ? `${readNow}; no turn-start reader is installed, so team reload ${seat.name} installs the launch's hooks`
       : wakeableWhileIdle(delivery.class)
         ? `a wake route stands for ${seat.name} and the message is still unread; ${readNow}`
-        : delivery.evidence.watchWake
-          ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake, and the watch's typed retry has not delivered this message; ${readNow}, or a person or a restart must give it a turn`
-          : delivery.evidence.typedWake
-            ? `nothing wakes ${seat.name} while it is idle except a send-time typed wake into an empty composer; ${readNow}, or a person or a restart must give it a turn`
-            : `nothing gives ${seat.name} a turn while it is idle; ${readNow}, or a person or a restart must give it a turn`;
+        : `nothing gives ${seat.name} a turn while it is idle; ${readNow}, or a person or a restart must give it a turn`;
     out.push({
       what: `${seat.name}: ${who} has been unread for ${String(minutes)} min${more} (id ${oldest.id})`,
       repair,
@@ -1683,13 +1710,19 @@ function olderReadReceipt(
   } catch {
     return false;
   }
-  for (const name of names) {
-    const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(read|replied)\.json$/.exec(name);
-    if (match === null) continue;
-    const id = match[1]!;
-    if (id === claimId) continue;
-    const status = match[2] as 'read' | 'replied';
-    if (receiptHolds(join(dropDir, name), id, status, context, key)) return true;
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return false;
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    for (const name of names) {
+      const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(read|replied)\.json$/.exec(name);
+      if (match === null) continue;
+      const id = match[1]!;
+      if (id === claimId) continue;
+      const status = match[2] as 'read' | 'replied';
+      if (receiptHolds(join(dropDir, name), id, status, context, key)) return true;
+    }
   }
   return false;
 }
@@ -1916,18 +1949,20 @@ function labelDrifts(
 // process's command line, and a record that holds no line says unknown rather than a guess. The
 // repair is the relaunch that writes the pinned line; a seat the state does not record was not
 // left running by this session and is not named.
-function featureDifferences(team: TeamFile, state: SessionState): Difference[] {
+function featureDifferences(team: TeamFile, state: SessionState, desktopOf: (seat: string) => boolean = () => true): Difference[] {
   const out: Difference[] = [];
   for (const seat of team.seats) {
     if (seat.stopped) continue;
-    const features = profileFor(seat.cli)?.features ?? [];
-    if (features.length === 0) continue;
+    // The seat's own pins: on, the default, the ones the profile lifts are not asked (for Codex,
+    // none is); set false, every feature pin and the computer, browser and connector pairs.
+    const pins = seatPins(profileFor(seat.cli), desktopOf(seat.name));
+    if (pins.features.length === 0 && pins.config.length === 0) continue;
     const held = state.seats[seat.name];
     if (!held) continue;
     // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
     // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
     // than as carrying a pin written after a script the CLI never receives.
-    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
+    const said = pinMismatch(held.launch_line, pins, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
     out.push({ what: `${seat.name}: ${said}`, repair: `team restart ${seat.name}` });
   }
@@ -2002,6 +2037,7 @@ function unmanagedCodexServerDifferences(
   session: string,
   continuityIds: ReadonlyMap<string, string | null> | undefined,
   sources: CheckSources,
+  desktopOf: (seat: string) => boolean = () => true,
 ): Difference[] {
   const out: Difference[] = [];
   if (live !== null && !live.running) return out;
@@ -2125,7 +2161,7 @@ function unmanagedCodexServerDifferences(
       });
       continue;
     }
-    const plannedFlags = codexEndpointConfig(lineText);
+    const plannedFlags = codexEndpointStartConfig(lineText, desktopOf(seat.name));
     if (!endpointContainsConfig(record.config, plannedFlags)) {
       out.push({
         what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint config lacks the seat's start flags)`,
@@ -2419,6 +2455,18 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
   return out;
 }
 
+/** A launch line that runs a script from a repository or a temp folder. The repair is the
+ *  migration command, which rewrites the line. */
+function launchLineDifferences(team: TeamFile, root: string, home: string, place: LaunchPlace): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const problem = launchLineProblem(seat.launch, root, home, place);
+    if (problem === null) continue;
+    out.push({ what: `${seat.name}: ${problem}`, repair: 'team launchers migrate' });
+  }
+  return out;
+}
+
 /**
  * Whether the launch line runs the CLI through something other than the CLI's own program word:
  * a wrapper script, or a nested shell this build hands its generated settings to at the end of
@@ -2435,6 +2483,53 @@ function wrapperLaunch(cli: string, launch: string): boolean {
   if (words[at] === 'exec' || words[at] === 'command') at += 1;
   const program = words[at];
   return program !== undefined && (program.split('/').pop() ?? program) !== binary;
+}
+
+/** Legs of a delivery order that start a turn. `drop` leaves the message in the folder. */
+const WAKING_ORDER_LEGS = new Set<DeliveryLeg>(['socket', 'native', 'typed', 'session']);
+
+/** A lead whose order cannot start a turn: drop only, or no waking leg. The repair names
+ *  the route to add. The watch still wakes that lead from unread mail. */
+function leadWakeOrderDifferences(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  now: Date,
+): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const lead = (team.orchestrator !== '' && seat.name === team.orchestrator)
+      || (team.operator !== '' && seat.name === team.operator);
+    if (!lead) continue;
+    let order: readonly DeliveryLeg[];
+    try {
+      if (home === undefined) {
+        order = deliveryOrder({
+          ...(team.deliveryOrder !== null ? { team: team.deliveryOrder } : {}),
+          ...(seat.deliveryOrder !== undefined ? { seat: seat.deliveryOrder } : {}),
+        });
+      } else {
+        order = deliveryOrder(deliveryChainOf({
+          root,
+          seat: seat.name,
+          home,
+          file: team,
+          projectOfTeam: (id) => ofTeam(home, id),
+          now,
+        }));
+      }
+    } catch {
+      continue;
+    }
+    if (order.some((leg) => WAKING_ORDER_LEGS.has(leg))) continue;
+    const shown = order.length === 0 ? 'empty' : order.join(', ');
+    out.push({
+      what: `${seat.name}: a lead's delivery order cannot wake it (${shown})`,
+      repair: `add socket or typed to delivery_order for ${seat.name}`,
+    });
+  }
+  return out;
 }
 
 /**
@@ -2867,6 +2962,21 @@ function viewOf(attention: Attention, name: string, _status: string): Difference
   }
 }
 
+/** A seat whose cwd is outside the project and no trust path, and is not the worktree recorded
+ *  for that seat. The file still loads; this names the seat and leaves the others to be read. */
+function seatCwdDifferences(team: TeamFile, state: SessionState, root: string): Difference[] {
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    const why = seatCwdRefusal(seat, state.worktrees, root);
+    if (why === null) continue;
+    out.push({
+      what: why,
+      repair: `set ${seat.name}'s cwd to the worktree recorded for it, or to a folder inside the project`,
+    });
+  }
+  return out;
+}
+
 /** The same own-folder rule used by launches, read without changing a running seat. */
 function startFolderDifferences(team: TeamFile, state: SessionState, root: string, home: string, session: string): Difference[] {
   const peers = placedStartFolders(team.seats, state);
@@ -2894,12 +3004,13 @@ function inboxRegistrationNotes(team: TeamFile, state: SessionState, live: Live)
   for (const seat of team.seats) {
     if (seat.human === true) continue;
     const recorded = state.seats[seat.name];
-    if (recorded?.stage !== 'ready' || recorded.start_cwd === undefined) continue;
+    const startFolder = recordedStartFolder(recorded);
+    if (recorded?.stage !== 'ready' || startFolder === undefined) continue;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (agent === undefined || agent.pane !== recorded.pane) continue;
-    const read = inboxRegistration(recorded.cli ?? seat.cli, recorded.start_cwd);
+    const read = inboxRegistration(recorded.cli ?? seat.cli, startFolder);
     if (read === null || read.registered) continue;
-    out.push(`${seat.name}: its CLI registers a team inbox in ${read.target}, and ${join(recorded.start_cwd, read.target)} holds none: sends wait in its drop folder; team reload ${seat.name} registers it`);
+    out.push(`${seat.name}: its CLI registers a team inbox in ${read.target}, and ${join(startFolder, read.target)} holds none: sends wait in its drop folder; team reload ${seat.name} registers it`);
   }
   return out;
 }

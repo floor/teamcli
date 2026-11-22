@@ -1,3 +1,4 @@
+import { createBeatWork, observeBeatWork, traceBeatWork } from '../diagnostics/beat-work.ts';
 // The one machine-wide daemon process: it serves the machine socket (protocol v1, health only
 // until the verified-principal binding lands) and hosts the existing per-clone send and bus
 // servers in this one process, so no second or third daemon process is started beside it.
@@ -9,33 +10,37 @@
 // A crash is the service manager's job (the unit restarts a failed process). A hang is not, so
 // the daemon refreshes a heartbeat and records any request it has held too long; a probe that
 // gets no answer is reported as running with an unanswered probe, never as healthy.
+import { ACTOR_LEVEL } from '../queue/floor.ts';
 import { randomUUID } from 'node:crypto';
-import {
-  appendFileSync,
-  chmodSync,
-  existsSync,
-  lstatSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { connect } from 'node:net';
-import { homedir } from 'node:os';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
+import { flockBound, flockExclusive } from '../lock/flock.ts';
+import { cpus, homedir, loadavg } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
-import { launchTeamFile } from '../file/load.ts';
+import { holdGitRoots, launchTeamFile } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
+import { getTeam, noteStoppedTeamRunning, readTeams, teamIdOf } from '../registry/teams.ts';
+import { currentRunMemo } from '../run-memo.ts';
 import type { TeamFile } from '../file/types.ts';
-import { paneProcessesAsync, type PaneProcesses } from '../herdr.ts';
+import { paneProcessesAsync, sessionListAsync, sessionRunningAsync, startStoppedServer, type PaneProcesses } from '../herdr.ts';
+import { bootId, dropSessionsRunning, readBootQueue, readSessionsRunning, writeBootQueue, writeSessionsRunning, type StartFacts } from './restore/boot-sessions.ts';
+import { runBootWork, type BootRunDeps } from './restore/boot-run.ts';
 import { eventThresholdsInForce, DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { runRestoreSweepInChild } from './restore/spawn.ts';
+import { createRestoreAttachWatch, sessionsRunningMap, type RestorePending } from './restore/attach-watch.ts';
+import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
-import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
+import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { probeDaemonSocket, probeDaemonSocketReading, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
 import { choresPolicyFor } from './chores/policy.ts';
@@ -68,6 +73,10 @@ import {
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
+import { sendDaemonDirect } from '../reminder/direct-send.ts';
+import { realHost } from '../commands/send.ts';
+import { logLine as teamLogLine } from '../log.ts';
+import { createStuckBook, type StuckFacts } from './stuck-child.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import { reminderTick, type ReminderSend, type ReminderSpec } from '../reminder/run.ts';
 import {
@@ -78,6 +87,20 @@ import {
   type DaemonRootState,
   type DaemonStuckRequest,
 } from './state.ts';
+import type { ReaperRecord } from '../orphan-reaper.ts';
+import { sweepCountsAreNews } from './sweep-said.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+
+/** How long a load-held restore keeps retrying (60 s apart at most) before it says "run team up --all".
+ *  Measured 2026-11-17: after a machine restart the load stayed over the guard for about six minutes. */
+export const RESTORE_RETRY_BUDGET_MS = 30 * 60_000;
+/** The load per core under which the daemon starts the next session a restart stopped. */
+export const BOOT_SESSION_LOAD_PER_CORE = 3;
+/** The wait after one restarted session before the next is started. */
+export const BOOT_SESSION_GAP_MS = 20_000;
+/** How often the running-routes record is rewritten: the window in which a session stopped by
+ *  hand just before a power-off is not yet seen as stopped. */
+export const BOOT_OBSERVE_EVERY_MS = 10_000;
 
 /** One checkout as hosted by this process; the state record keeps the same shape. */
 export type MachineRootStatus = DaemonRootState;
@@ -137,14 +160,23 @@ export type NextPrincipalCheck = (input: {
 export type NextDispatchHandler = (input: NextHandlerInput) => Promise<NextAnswer>;
 
 export type StartMachineDaemonInput = {
+  /** A test's stand-in for the kernel lock; production uses the shared flock binding. */
+  kernelLock?: DaemonKernelLock;
   home?: string;
   /** The checkouts whose send and bus endpoints this one process hosts. */
   roots: string[];
-  /** The checkouts were read from registry teams whose lifecycle is running, not from --root. */
+  /** The checkouts were read from non-archived registry teams, not from --root. */
   rootsFromRegistry?: boolean;
   /** Re-read on each heartbeat and on root.added. A root it names is hosted when it is not already. */
   runningRoots?: () => readonly string[];
   startedBy?: string;
+  /** The process this user's orphans are handed to besides pid 1, read at the start
+   *  (src/orphan-reaper.ts) and kept in the state record for every later reader. */
+  reaper?: ReaperRecord | null;
+  /** The temporary folder this process answers (`os.tmpdir()`), kept in the state record so
+   *  `team doctor` can compare it with the seats'. The send endpoint looks for a Claude Code
+   *  seat's session socket under it. */
+  tempDir?: string;
   version: string;
   /** The packaged commit this build was installed from; null or absent in a source checkout. */
   gitHead?: string | null;
@@ -201,7 +233,7 @@ export type StartMachineDaemonInput = {
   brokerWork?: (route: HostedRoute) => BrokerWorkSource | undefined;
   /**
    * Whether each hosted route also runs the presence ingester, the activity reconciler and the
-   * publisher that copies applied transitions to the bus event log on the daemon's own 250 ms
+   * publisher that copies applied transitions to the bus event log on the daemon's own 500 ms
    * pass. Off by default: the integration lands closed, and a daemon started only to host
    * endpoints ingests nothing. Internal, like `watchHosting`; not a setting and not printed.
    */
@@ -240,6 +272,9 @@ export type StartMachineDaemonInput = {
    * machine was not told about. Ignored when `presenceSubscriptions` is injected.
    */
   presenceCodexEndpoint?: (route: HostedRoute, stateDir: string, seat: string) => string | null | undefined;
+  /** Read each Codex seat's endpoint from its own state record, in the same snapshot as its
+   *  binding (the production daemon); `presenceCodexEndpoint` is then not consulted. */
+  presenceCodexEndpointFromState?: boolean;
   /**
    * Seats this route expected to carry a managed native channel but whose target resolution or
    * start did not succeed, with the truthful why. Each becomes an explicit unproven source, so a
@@ -267,27 +302,46 @@ export type StartMachineDaemonInput = {
    * terminal-host call. A reader that cannot answer returns null, the conservative rule.
    */
   paneProcesses?: (pane: string, session: string) => PaneProcesses | null | Promise<PaneProcesses | null>;
-  /** The presence pass interval; 250 ms in production. A test shortens it. */
+  /** The presence pass interval; 500 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
    * The daemon-start restore sweep: after the sockets, routes, state record and
    * shutdown machinery are wired, one guarded pass per canonical route repairs the seats its
    * recorded session lost. On by default, because a host restart is exactly when it is needed;
    * `false` turns it off, and a function replaces the runner for a test that must observe the
-   * schedule without launching. A route with no recorded seats, or whose session is not running,
+   * schedule without launching. Registered stopped, defined and archived teams are excluded.
+   * A route with no recorded seats, or whose session is not running,
    * is skipped, and the sweep never cold-starts a team.
    */
-  restoreSweep?: boolean | ((root: string, teamFile: string | undefined) => Promise<RestoreSweepResult>);
+  restoreSweep?: boolean | ((root: string, teamFile: string | undefined, scope?: { session: string }) => Promise<RestoreSweepResult>);
   /**
-   * The growing-gap retry schedule when a canonical route's session is not yet running in the
-   * terminal host at daemon start: `restoreRetryInitialDelayMs` (5 s default) doubles each retry
+   * The growing-gap retry schedule when a restore is deferred only by its load guard, or one of
+   * its seats was refused on a timeout (retried once):
+   * `restoreRetryInitialDelayMs` (5 s default) doubles each retry
    * up to `restoreRetryMaxDelayMs` (60 s default) over a total bound of `restoreRetryBudgetMs`
-   * (315 s / 5m 15s default). A test shortens these to observe the retry schedule without
+   * (`RESTORE_RETRY_BUDGET_MS`, 30 min: a machine restart holds the load guard well past five
+   * minutes while every session resumes at once). A test shortens these to observe the retry schedule without
    * waiting the production window.
    */
+  /** False: the first daemon after a machine restart does not start the sessions that ran
+   *  before it (`./restore/boot-sessions.ts`). On by default in production. */
+  bootSessions?: boolean;
   restoreRetryInitialDelayMs?: number;
   restoreRetryMaxDelayMs?: number;
   restoreRetryBudgetMs?: number;
+  /**
+   * A route whose session is not running (after a machine restart the owner attaches most
+   * sessions later) is watched instead of retried: one terminal-host session list every
+   * `restoreAttachPollMs` (30 s default), and the route's restore runs once its session reads
+   * running. A test shortens it.
+   */
+  restoreAttachPollMs?: number;
+  /**
+   * The session read the restore's attach watch polls: name to running, or null when the
+   * terminal host did not answer. Production reads the terminal host's session list. With an
+   * injected `restoreSweep` and no reader, the watch lets the injected runner answer.
+   */
+  restoreSessions?: () => Promise<ReadonlyMap<string, boolean> | null>;
   /**
    * The reminders this daemon runs on its beat, read fresh on every beat so an edited config is
    * picked up without a restart. Absent, no reminder runs; reading the configured list into
@@ -353,7 +407,26 @@ const STUCK_MS = 10_000;
  *  The pass checks the boundary before each item, so a slice is one item long at most past this
  *  mark. */
 const FALLBACK_BEAT_SLICE_MS = 10;
-const PRESENCE_EVERY_MS = 250;
+/** Four passes inside the 2 s health grace (`PRESENCE_HEALTH_GRACE_MS`): one slow or skipped pass
+ *  never reads as a dead channel, and the idle cost is half the old 250 ms beat. */
+const PRESENCE_EVERY_MS = 500;
+/** How long a Codex seat whose attachment is not serving (unproven, stopped, or no managed session
+ *  yet) waits before its target is resolved again. A binding change never waits for it. */
+export const PRESENCE_REBIND_RETRY_MS = 5_000;
+
+/** One seat's production source resolution: a started runtime source for the binding it was
+ *  started for, an expected attachment that could not be made, or no native channel at all. */
+type SeatSourceResolution =
+  | { kind: 'runtime'; runtime: PresenceSourceRuntime; binding: string }
+  | { kind: 'unproven'; why: string }
+  | { kind: 'skip'; why: string };
+
+/** What the rebind step remembers per Codex seat: the binding its live source was started for
+ *  (null for a placeholder or no source) and when an unserved attachment may be resolved again. */
+type RebindSlot = { binding: string | null; retryAt: number };
+/** A restore refusal that is a launch timeout (16 Nov reboot: "tester-gemini: timeout"); the
+ *  route gets one more pass on the retry schedule. */
+const TIMEOUT_REASON = /\btime[ds]?[ -]?out\b/i;
 /** Failed restarts of one send endpoint in a row before the daemon gives up and exits. */
 const SEND_RESTART_GIVE_UP = 5;
 /** How long a restart waits for an old send handle to close before trying the new listener; a
@@ -400,7 +473,9 @@ async function settlesWithin(run: Promise<unknown>, ms: number): Promise<boolean
   }
 }
 
-type LockResult = { ok: true } | { ok: false; holder: number | null };
+type LockResult =
+  | { ok: true; release: () => void }
+  | { ok: false; holder: number | null; unbound?: true };
 
 function readLockPid(path: string): number | null {
   try {
@@ -413,24 +488,73 @@ function readLockPid(path: string): number | null {
   }
 }
 
-/** One lock file, 0600. A live holder is returned; a dead holder's file is removed once. */
-function acquireLock(path: string, pid: number): LockResult {
-  for (let attempt = 0; attempt < 2; attempt++) {
+/** The kernel lock the daemon's single instance stands on: the shared flock binding, or a test's
+ *  stand-in for it. */
+export type DaemonKernelLock = { bound(): boolean; exclusive(fd: number): boolean };
+const KERNEL_LOCK: DaemonKernelLock = { bound: flockBound, exclusive: flockExclusive };
+
+/** The refusal a runtime with no flock binding meets: no by-name lock stands in for it. */
+export const DAEMON_NEEDS_FLOCK = 'the daemon needs a kernel lock (flock through Bun); this runtime has none: run it with bun';
+
+/** Whether the descriptor is still the file at `path`: a lock taken on a file a releasing holder
+ *  had already unlinked locks nothing anyone else can see. */
+function lockStillNamed(fd: number, path: string): boolean {
+  try {
+    const open = fstatSync(fd);
+    const named = lstatSync(path);
+    return open.isFile() && named.isFile() && open.dev === named.dev && open.ino === named.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The daemon's single-instance lock, held by the kernel for the process's lifetime. The file is
+ * opened in place and flocked; only the holder writes its pid into it. A crash or a kill closes
+ * the descriptor and the kernel frees the lock at once, so a dead holder's file is never removed
+ * by path: two starts after a crash cannot each remove it and each take a fresh one. A start
+ * keeps the lock only while the descriptor is still the file at the path (a clean release
+ * unlinks it while still holding it, and a start that flocked the old file opens it again).
+ */
+function acquireLock(path: string, pid: number, kernel: DaemonKernelLock): LockResult {
+  // Asked before anything is opened: a runtime with no binding creates no lock file at all.
+  if (!kernel.bound()) return { ok: false, holder: null, unbound: true };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let fd: number;
     try {
-      writeFileSync(path, `${String(pid)}\n`, { flag: 'wx', mode: 0o600 });
-      chmodSync(path, 0o600);
-      return { ok: true };
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return { ok: false, holder: null };
-    }
-    const holder = readLockPid(path);
-    if (holder !== null && pidAlive(holder)) return { ok: false, holder };
-    try {
-      unlinkSync(path);
+      fd = openSync(path, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW, 0o600);
     } catch {
-      return { ok: false, holder };
+      return { ok: false, holder: readLockPid(path) };
     }
+    const held = kernel.exclusive(fd);
+    if (!held) {
+      closeSync(fd);
+      return { ok: false, holder: readLockPid(path) };
+    }
+    if (!lockStillNamed(fd, path)) {
+      closeSync(fd);
+      continue;
+    }
+    try {
+      fchmodSync(fd, 0o600);
+      ftruncateSync(fd, 0);
+      writeSync(fd, `${String(pid)}\n`, 0);
+    } catch {
+      closeSync(fd);
+      return { ok: false, holder: null };
+    }
+    let released = false;
+    return {
+      ok: true,
+      release: () => {
+        if (released) return;
+        released = true;
+        // Unlinked while still held: a start that opened this file before the unlink finds it
+        // no longer named once it gets the lock, and opens the path again.
+        try { if (lockStillNamed(fd, path)) unlinkSync(path); } catch { /* already gone */ }
+        try { closeSync(fd); } catch { /* already closed */ }
+      },
+    };
   }
   return { ok: false, holder: readLockPid(path) };
 }
@@ -488,6 +612,9 @@ type EndpointWatch = {
    *  loop, so one probe can miss while a synchronous herdr read holds the loop; only
    *  SEND_PROBE_MISSES misses in a row mark it failed, and an answer afterwards restores it. */
   sendMisses: number;
+  /** When a probe of this root's send endpoint last got an answer, on the monotonic clock
+   *  (`performance.now()`); the start of the watch until the first answer. */
+  sendAnsweredAt: number;
   /** Starts this root's send endpoint again; null while this daemon never attempted one. The
    *  closure is the exact start the root got, so a restart reads the same team, host and
    *  presence answers. */
@@ -507,12 +634,31 @@ type EndpointWatch = {
 };
 const SEND_PROBE_MISSES = 3;
 const SEND_PROBE_TIMEOUT_MS = 2_000;
+/** A probe that took longer than its timeout times this factor was held by the event loop. */
+export const SEND_PROBE_LAG_FACTOR = 1.5;
+
+/** What one send-endpoint probe says: answered; a miss the endpoint is answerable for; or no
+ *  reading, because the probe's own timeout fired well past its bound while the shared event loop
+ *  was held. */
+export function sendProbeReading(answered: boolean, elapsedMs: number, sinceAnsweredMs = 0, timedOut = false): 'answered' | 'miss' | 'held' {
+  if (answered) return 'answered';
+  // However the loop is held, an endpoint unanswered for this long is missing: the restart and
+  // the fatal budget still run for an endpoint that died while the loop stalls.
+  if (sinceAnsweredMs > SEND_ABSENT_MS) return 'miss';
+  // A probe that only ran out of time says nothing on its own: the endpoint shares this busy
+  // loop, and every root's endpoint timed out together under load (2026-11-15 11:46Z and
+  // 12:04Z, 13 restarts each). The absence bound above still catches one that died.
+  if (timedOut) return 'held';
+  return elapsedMs > SEND_PROBE_TIMEOUT_MS * SEND_PROBE_LAG_FACTOR ? 'held' : 'miss';
+}
+
+/** An endpoint with no answered probe for this long counts its misses whatever the loop did. */
+export const SEND_ABSENT_MS = 60_000;
 
 /** A bus socket has no ping op, so one successful connect is the whole liveness answer. */
 function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
-    const socket = connect({ path: socketPath });
     const finish = (ok: boolean): void => {
       if (settled) return;
       settled = true;
@@ -520,10 +666,10 @@ function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
       socket.destroy();
       resolve(ok);
     };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, { open: () => finish(true), close: () => finish(false) });
     const timer = setTimeout(() => finish(false), timeoutMs);
-    socket.on('error', () => finish(false));
-    socket.on('connect', () => finish(true));
-    socket.on('close', () => finish(false));
+    Bun.connect(options).catch(refused);
   });
 }
 
@@ -536,7 +682,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const home = input.home ?? homedir();
   const now = input.now ?? (() => new Date());
   const startedBy = input.startedBy ?? 'manual';
-  const features: DaemonFeatures = input.features ?? { broker: 'absent' };
+  // The watch word is this run's own: whether it was started to host a watch per route.
+  const features: DaemonFeatures = { ...(input.features ?? { broker: 'absent' }), watch: input.watchHosting === true ? 'on' : 'off' };
   const stuckMs = input.stuckMs ?? STUCK_MS;
   const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
@@ -547,8 +694,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const since = now().toISOString();
 
   ensureMachineDir(home);
-  const lock = acquireLock(lockPath, pid);
+  const lock = acquireLock(lockPath, pid, input.kernelLock ?? KERNEL_LOCK);
   if (!lock.ok) {
+    if (lock.unbound === true) return { kind: 'bind-failed', reason: DAEMON_NEEDS_FLOCK };
     if (lock.holder !== null && pidAlive(lock.holder)) {
       const answer = await probeDaemonHealth(socketPath, { id: `start-${randomUUID()}` });
       if (answer.kind === 'answered') return { kind: 'already-running', pid: answer.health.pid };
@@ -557,15 +705,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     return { kind: 'bind-failed', reason: 'the daemon single-instance lock could not be taken' };
   }
 
+  const beatWork = createBeatWork();
+  const stopBeatWork = observeBeatWork(beatWork);
+  // The beat reads every hosted root's team file: git names each root once per hold, never as
+  // a synchronous child on every endpoint refresh.
+  const releaseGitRoots = holdGitRoots();
   const releaseLock = (): void => {
-    if (readLockPid(lockPath) === pid) {
-      try {
-        unlinkSync(lockPath);
-      } catch {
-        // Already gone.
-      }
-    }
+    stopBeatWork();
+    releaseGitRoots();
+    lock.release();
   };
+
+  // The socket is probed, and a stale one removed, only while this process holds the lock: no
+  // second start can stand between its own probe and its own unlink, so one daemon binds per home.
 
   const entry = lstatSync(socketPath, { throwIfNoEntry: false });
   if (entry && !entry.isSocket()) {
@@ -611,8 +763,26 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // Filled once the roots loop has resolved every route; a status entry gains its `watch`
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
+  /** Restarts of a stuck watch or a late chores child, per root, so three in an hour is the cap. */
+  const stuckBook = createStuckBook();
+  /** When this root's watch entered `starting`. A restart gets a fresh limit. A watch already
+   *  starting when it is first seen keeps that start; one that had left `starting` is timed
+   *  from the return. */
+  const watchStartingAt = new Map<string, number>();
+  const watchLeftStarting = new Set<string>();
   /** The presence work per accepted route, and this process's one in-flight run per route. */
   const presenceWork: {
+    /** Sources retired by a rebind whose close has not settled yet; the daemon's close drains
+     *  them beside the live sources, so a retired source cannot stage behind a claimed close. */
+    retired: Set<Promise<unknown>>;
+    /** The production re-resolution for this route's Codex seats, or null when the sources were
+     *  injected (`presenceSubscriptions`): a seat whose binding moved on gets its successor's
+     *  source in the same pass, and an attachment that is not serving is retried. */
+    rebind: {
+      seats: readonly { name: string; cli: string }[];
+      resolve: (seat: { name: string; cli: string }) => SeatSourceResolution;
+      slots: Map<string, RebindSlot>;
+    } | null;
     route: HostedRoute;
     /** The team file's folder; the seat's current binding is read from its state record. */
     stateDir: string;
@@ -786,7 +956,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
 
-  const health = (options?: { roots?: boolean }): DaemonHealthSnapshot => {
+  const readHealthSnapshot = (options?: { roots?: boolean }): DaemonHealthSnapshot => {
     const at = now();
     // Roots are the per-seat state read. Only an answer that returns them builds the snapshot.
     const withRoots = options?.roots !== false;
@@ -804,6 +974,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       ...(withRoots && routes.length > 0 ? { roots: rootsSnapshot(at) } : {}),
     });
   };
+
+  const health = (options?: { roots?: boolean }): DaemonHealthSnapshot =>
+    traceBeatWork('health snapshot (sync)', () => readHealthSnapshot(options));
 
   // The state record's writes, serialized off this loop: at most one physical write in
   // flight, a newer text replacing a queued one, and no write at all when the text is the
@@ -843,7 +1016,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     while (stateWriteDrain !== null) await stateWriteDrain;
   };
 
-  const writeState = (afterClose = false): Promise<void> => {
+  const writeState = (afterClose = false): Promise<void> => traceBeatWork('state snapshot (sync)', () => {
     if (closed && !afterClose) return Promise.resolve();
     for (const one of hostedWatches) one.status.watch = one.watch.state();
     for (const refresh of passRefreshers) refresh();
@@ -866,13 +1039,16 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       gitHead: input.gitHead ?? null,
       heartbeatAt,
       socket: socketPath,
+      floorLevel: ACTOR_LEVEL,
       features,
       stuck: stuckNow(),
       roots: [...roots],
       ...(heartbeatSeconds === null ? {} : { heartbeatSeconds }),
       ...(mailboxRouter === null ? {} : { mailbox: { heartbeatAt: mailboxRouter.state().heartbeatAt } }),
+      ...(input.reaper === undefined || input.reaper === null ? {} : { reaper: input.reaper }),
+      ...(input.tempDir === undefined ? {} : { tempDir: input.tempDir }),
     }));
-  };
+  }, 'sync');
 
   /**
    * One v2 `op=next` frame, from the frame to the handler's answer. The route is resolved and its
@@ -976,6 +1152,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // in-flight tracking, and the same socket file, permission and stale-path ownership below.
   let adoptNotifiedRoot: ((root: string) => Promise<void>) | null = null;
   const pendingRootAdds: string[] = [];
+  hostedCommit('relay.createHostServer');
   const host = createHostServer({
     socketPath,
     frameLimit: DAEMON_FRAME_LIMIT,
@@ -1094,10 +1271,39 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // therefore mean 2N+1 endpoints in one process until the machine endpoint serves route
   // delivery and a shared per-seat queue behind the relay package boundary.
   const hosting = new Set<string>();
+  // Reserve a registry run before the first awaited state write. A later checkout row (or
+  // simultaneous notice) must not start beside the lobby route this process already admitted.
+  const registryRuns = new Map<string, string>();
   const hostCheckout = async (rootArg: string): Promise<void> => {
     const key = resolve(rootArg);
     if (hosting.has(key)) return;
     hosting.add(key);
+    const loaded = readTeamConfig(rootArg, { home });
+    const loadedRoot = loaded.ok ? canonicalRoot(loaded.root) : null;
+    if (loaded.ok && input.rootsFromRegistry === true && loadedRoot !== null) {
+      let lobby = lobbyOf(home, loaded.root, loaded.team);
+      if (!loaded.team.lobby) {
+        // A lobby-only row need not be keyed by the lobby folder's digest. Recover that
+        // row's recorded lobby without changing the configuration or its admission checks.
+        try {
+          const recorded = new Set(Object.values(readTeams(home)).filter((record) =>
+            record.lifecycle !== 'archived' && record.project === loaded.team.project
+              && record.session === loaded.team.session && record.entity === loaded.team.entity
+              && canonicalRoot(record.root || record.lobby) === loadedRoot,
+          ).map((record) => record.lobby).filter(Boolean).map((folder) => canonicalRoot(folder) ?? resolve(folder)));
+          if (recorded.size === 1) lobby = [...recorded][0]!;
+        } catch {
+          // Keep the ordinary lobby reader's answer; the registry rescan names read failures.
+        }
+      }
+      const run = JSON.stringify([loaded.team.project, loaded.team.session, loaded.team.entity, canonicalRoot(lobby) ?? resolve(lobby)]);
+      const earlier = registryRuns.get(run);
+      if (earlier !== undefined) {
+        logLine(`root ${rootArg}: this registry team is already hosted at ${earlier}`);
+        return;
+      }
+      registryRuns.set(run, loaded.root);
+    }
     const status: MachineRootStatus = {
       root: rootArg, team: null, send: 'starting', bus: 'starting', why: null, sendWhy: null, busWhy: null,
       ...(input.rootsFromRegistry === true ? { source: 'registry' as const } : {}),
@@ -1110,6 +1316,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       busRoot: null,
       busState: freshBusWatch(),
       sendMisses: 0,
+      sendAnsweredAt: performance.now(),
       sendStart: null,
       sendHandle: null,
       busHandle: null,
@@ -1129,7 +1336,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // checkout being brought up, never an empty startup record beside a live socket.
       return writeState();
     };
-    const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
       status.send = 'failed';
@@ -1195,45 +1401,61 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         health.seatExpected(source.seat);
         sources.push(source);
       };
-      /** The production wiring: resolve each declared seat's explicit Codex target under the
+      /** The production wiring: resolve one declared seat's explicit Codex target under the
        *  signed `codex-daemon` policy, and start a source only for a resolved target. A `skip`
        *  is a seat with no managed native channel, whose route hook answer is its own; an
        *  `unproven` target is an expected attachment that could not be made, never a skip. No
-       *  endpoint is guessed: without one the resolver itself answers `unproven`. */
+       *  endpoint is guessed: without one the resolver itself answers `unproven`. The same
+       *  resolution runs again from the presence pass whenever the seat's binding moves on or
+       *  its attachment is not serving (see `rebindSources`). */
+      const resolveSeat = (seat: { name: string; cli: string }): SeatSourceResolution => {
+        const read = codexPresenceTarget({
+          enabled: true,
+          home,
+          stateDir,
+          root: canonical,
+          herdrSession: loaded.team.session,
+          session: loaded.team.session,
+          seat: { name: seat.name, cli: seat.cli },
+          endpoint: input.presenceCodexEndpointFromState === true
+            ? null
+            : input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
+          ...(input.presenceCodexEndpointFromState === true ? { endpointFromState: true } : {}),
+          now: now(),
+        });
+        if (read.kind === 'skip') return { kind: 'skip', why: read.why };
+        if (read.kind === 'unproven') return { kind: 'unproven', why: read.why };
+        // The target resolver only returns a target under an `on` policy, so the start gate
+        // is already verified; a start refusal is still an explicit unproven attachment.
+        const started = codexPresenceFor({
+          target: read.target,
+          policy: 'on',
+          feature: true,
+          now,
+          frame: (text) => native.codexFrame(read.target, text),
+        });
+        if (started.kind === 'subscribed') {
+          return { kind: 'runtime', runtime: started.source, binding: read.target.binding };
+        }
+        return { kind: 'unproven', why: started.why };
+      };
+      const rebindSlots = new Map<string, RebindSlot>();
       const productionSources = (): {
         runtimes: PresenceSourceRuntime[];
         unproven: Array<{ seat: string; why: string }>;
       } => {
         const runtimes: PresenceSourceRuntime[] = [];
         const unproven: Array<{ seat: string; why: string }> = [];
+        const retryAt = now().getTime() + PRESENCE_REBIND_RETRY_MS;
         for (const seat of loaded.team.seats) {
-          const read = codexPresenceTarget({
-            enabled: true,
-            home,
-            stateDir,
-            root: canonical,
-            herdrSession: loaded.team.session,
-            session: loaded.team.session,
-            seat: { name: seat.name, cli: seat.cli },
-            endpoint: input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
-            now: now(),
+          const resolved = resolveSeat(seat);
+          rebindSlots.set(seat.name, {
+            binding: resolved.kind === 'runtime' ? resolved.binding : null,
+            retryAt,
           });
-          if (read.kind === 'skip') continue;
-          if (read.kind === 'unproven') {
-            unproven.push({ seat: seat.name, why: read.why });
-            continue;
-          }
-          // The target resolver only returns a target under an `on` policy, so the start gate
-          // is already verified; a start refusal is still an explicit unproven attachment.
-          const started = codexPresenceFor({
-            target: read.target,
-            policy: 'on',
-            feature: true,
-            now,
-            frame: (text) => native.codexFrame(read.target, text),
-          });
-          if (started.kind === 'subscribed') runtimes.push(started.source);
-          else unproven.push({ seat: seat.name, why: started.why });
+          if (resolved.kind === 'skip') continue;
+          if (resolved.kind === 'unproven') unproven.push({ seat: seat.name, why: resolved.why });
+          else runtimes.push(resolved.runtime);
         }
         return { runtimes, unproven };
       };
@@ -1302,6 +1524,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           }),
         sources,
         sourceRuns: sources.map(() => null),
+        retired: new Set(),
+        rebind: input.presenceSubscriptions === undefined
+          ? {
+              seats: loaded.team.seats.filter((seat) => seat.cli === 'codex'),
+              resolve: resolveSeat,
+              slots: rebindSlots,
+            }
+          : null,
         health,
         proofs: new Map(),
         proofMiss: new Map(),
@@ -1464,6 +1694,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     choresFleet = createChoresFleet({
       home,
       beatMs: heartbeatMs,
+      workSinceBeat: () => beatWork.take(),
       since,
       now,
       routes: routes.flatMap((route) => {
@@ -1540,7 +1771,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (source === undefined) return null;
     let reading: PresenceSourceStatus;
     try {
-      reading = source.status(at);
+      reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(at));
     } catch (error) {
       return `the runtime source status failed: ${messageOf(error)}`;
     }
@@ -1768,6 +1999,108 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  /** Retires one source: its close starts now (the Codex source stops admissions and releases its
+   *  key synchronously) and is drained by the daemon's close if it has not settled by then. */
+  const retireSource = (one: (typeof presenceWork)[number], source: PresenceSource, run: Promise<void> | null): void => {
+    let closing: Promise<unknown>;
+    try {
+      closing = Promise.resolve(source.close());
+    } catch (error) {
+      closing = Promise.reject(error);
+    }
+    const drain = Promise.allSettled([closing, ...(run === null ? [] : [run])]);
+    one.retired.add(drain);
+    void drain.then(() => one.retired.delete(drain));
+  };
+
+  /** Whether a source with the seat's current binding has stopped admitting for good: the Codex
+   *  source stops on a binding it could not confirm (including an unreadable state) and never
+   *  restarts itself. */
+  const sourceStopped = (one: (typeof presenceWork)[number], source: PresenceSource, at: Date): boolean => {
+    try {
+      const reading = source.status(at);
+      if (reading.channel === 'gone') return false;
+      return reading.channel === 'stopped' || reading.reason === 'binding-changed' || reading.admitting === false;
+    } catch {
+      return true;
+    }
+  };
+
+  /**
+   * Follows each Codex seat's current incarnation. A seat's runtime source belongs to one presence
+   * binding; a relaunch (`team restart`, `team reload`, `team up` repair, a re-anchor after a
+   * reboot, the boot restore) mints a new one, and the old source stops for good. Here, in the
+   * presence pass and before any pump:
+   * - a seat whose current binding differs from its source's is retired and its successor's
+   *   source is started in the same pass;
+   * - an unproven placeholder, a source that stopped on its own and a Codex seat that resolved
+   *   `skip` are resolved again once `PRESENCE_REBIND_RETRY_MS` has passed, so a seat that came
+   *   up after the daemon gets its source.
+   * An unreadable state changes nothing this pass. A seat that had a source and now resolves
+   * `skip` keeps an explicit unproven answer rather than silently becoming a hook seat.
+   */
+  const rebindSources = (one: (typeof presenceWork)[number]): void => {
+    const rebind = one.rebind;
+    if (rebind === null || closed) return;
+    let state: State;
+    try {
+      state = readState(one.stateDir);
+    } catch {
+      return;
+    }
+    const at = now();
+    for (const seat of rebind.seats) {
+      if (closed) return;
+      const slot = rebind.slots.get(seat.name) ?? { binding: null, retryAt: 0 };
+      const index = one.sources.findIndex((candidate) => candidate.seat === seat.name);
+      const source = index === -1 ? undefined : one.sources[index];
+      const current = presenceBindingFrom(state, one.route.session, seat.name);
+      const moved = slot.binding !== null && source !== undefined && current !== slot.binding;
+      const retry = at.getTime() >= slot.retryAt && (
+        slot.binding === null || source === undefined || sourceStopped(one, source, at)
+      );
+      if (!moved && !retry) continue;
+      // The old source goes first: its key is released before the successor is started.
+      if (source !== undefined && index !== -1) retireSource(one, source, one.sourceRuns[index] ?? null);
+      const resolved = rebind.resolve(seat);
+      let next: PresenceSource | null = null;
+      let binding: string | null = null;
+      if (resolved.kind === 'runtime') {
+        const adopted = adoptPresenceSource(resolved.runtime, at);
+        if ('source' in adopted) {
+          next = adopted.source;
+          binding = resolved.binding;
+        } else {
+          // A started source that cannot be adopted still holds its key: it is closed, not leaked.
+          const closer = resolved.runtime.close ?? resolved.runtime.cancel;
+          try {
+            void closer?.call(resolved.runtime)?.catch?.(() => undefined);
+          } catch {
+            // Nothing was adopted; a close that throws leaves nothing to drain here.
+          }
+          next = unprovenSource(seat.name, adopted.why);
+        }
+      } else if (resolved.kind === 'unproven' || source !== undefined) {
+        next = unprovenSource(seat.name, resolved.why);
+      }
+      rebind.slots.set(seat.name, { binding, retryAt: at.getTime() + PRESENCE_REBIND_RETRY_MS });
+      if (next === null) continue;
+      if (index === -1) {
+        one.sources.push(next);
+        one.sourceRuns.push(null);
+        one.health.seatExpected(seat.name);
+      } else {
+        one.sources[index] = next;
+        one.sourceRuns[index] = null;
+      }
+      one.proofs.delete(seat.name);
+      one.proofMiss.delete(seat.name);
+      if (binding !== null && moved) {
+        logLine(`presence ${one.route.root}: ${seat.name}: rebound to ${binding}`);
+      }
+    }
+  };
+
   /** One bounded, independent pump per source: at most one step is in flight for a source, so a
    *  source whose step is slow or hung holds only its own seat's answer — never the route's
    *  ingest, activity or publication, and never a sibling's sample. The sample is stamped when
@@ -1778,14 +2111,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (source === undefined || one.sourceRuns[index] !== null) return;
     const run = (async () => {
       try {
-        await source.step(now());
+        await traceBeatWork(`presence source step (wall):${one.route.root}`, () => source.step(now()));
       } catch (error) {
+        if (one.sources[index] !== source) return;
         sampleSource(one, source, failedReading(source, `the runtime source step failed: ${messageOf(error)}`), now());
         return;
       }
+      // A source a rebind retired while this step was in flight no longer speaks for the seat:
+      // its late answer must not overwrite the successor's sample.
+      if (one.sources[index] !== source) return;
       let reading: PresenceSourceStatus;
       try {
-        reading = source.status(now());
+        reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(now()));
       } catch (error) {
         sampleSource(one, source, failedReading(source, `the runtime source status failed: ${messageOf(error)}`), now());
         return;
@@ -1808,7 +2145,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       if (closed) return;
       let reading: PresenceSourceStatus;
       try {
-        reading = source.status(at);
+        reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(at));
       } catch (error) {
         one.proofs.delete(source.seat);
         one.proofMiss.set(source.seat, `the runtime source status failed: ${messageOf(error)}`);
@@ -1906,9 +2243,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
    */
   const runPresence = (one: (typeof presenceWork)[number]): Promise<void> => {
     let run: Promise<void>;
-    run = (async () => {
+    run = traceBeatWork(`presence (wall):${one.route.root}`, () => (async () => {
       // Same pass and opt-in as presence; native publication has no dispatch consumer.
-      one.native.step();
+      traceBeatWork(`native feed (sync):${one.route.root}`, () => one.native.step());
       let healthy = false;
       let why: string | null = null;
       try {
@@ -1932,6 +2269,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // own one-flight pump, so the route's ingest, activity and publication below, and every
       // sibling source, never wait for one source's step. A seat's answer never changes the
       // route's ingest answer.
+      traceBeatWork(`presence rebind (sync):${one.route.root}`, () => rebindSources(one));
       for (let index = 0; index < one.sources.length; index += 1) pumpSource(one, index);
       // The readings cross to the child exactly as this daemon sampled them. A source that cannot
       // answer, or answers for another seat, is sent as that reason, so the child holds the seat
@@ -1940,7 +2278,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const readings: ChoresPresenceReading[] = [];
       for (const source of one.sources) {
         try {
-          const reading = source.status(at);
+          const reading = traceBeatWork(`presence source status (sync):${one.route.root}`, () => source.status(at));
           readings.push(reading.seat === source.seat
             ? { seat: source.seat, status: presenceStatusOf(reading) }
             : { seat: source.seat, failed: 'the runtime source answered for another seat' });
@@ -1976,7 +2314,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
       // Only after the activity step may a source's staged identity be proven applied: the
       // ingester wrote the projection and the activity reconciler fenced it in this pass.
-      reconcileSeats(one);
+      traceBeatWork(`presence proof reconciliation (sync):${one.route.root}`, () => reconcileSeats(one));
       try {
         // Publication is a separate concern from the native channel's health: a bus append that
         // fails is reported and retried by a later pass, and never marks presence unhealthy.
@@ -2002,7 +2340,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
     })().finally(() => {
       if (presenceRuns.get(one.route.root) === run) presenceRuns.delete(one.route.root);
-    });
+    }));
     return run;
   };
 
@@ -2150,6 +2488,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         watch.status.sendFailedAt = null;
         watch.status.sendWhy = null;
         watch.sendMisses = 0;
+        watch.sendAnsweredAt = performance.now();
         watch.sendState.failures = 0;
         watch.sendState.nextAt = 0;
         logLine(`root ${watch.status.root}: send restarted`);
@@ -2159,6 +2498,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         watch.status.sendFailedAt = null;
         watch.status.sendWhy = null;
         watch.sendMisses = 0;
+        watch.sendAnsweredAt = performance.now();
         watch.sendState.failures = 0;
         watch.sendState.nextAt = 0;
         logLine(`root ${watch.status.root}: send answering again`);
@@ -2196,7 +2536,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               // step, under the same capped backoff a bus revive uses.
               await restartHostedSend(watch);
             } else if (status.send === 'serving' || status.send === 'already-running') {
-              if (watch.sendSocket !== null && !(await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS))) {
+              // Elapsed time on the monotonic clock: the injected wall clock may stand still.
+              const probeBegan = performance.now();
+              const how = watch.sendSocket === null ? 'answered' : await probeDaemonSocketReading(watch.sendSocket, SEND_PROBE_TIMEOUT_MS);
+              const answered = how === 'answered';
+              const probeEnded = performance.now();
+              if (answered) watch.sendAnsweredAt = probeEnded;
+              // The endpoint shares this event loop: a probe whose own timeout fired well past its
+              // bound was held by the loop (a synchronous read elsewhere), not refused by the
+              // endpoint. Such a miss is not counted; a restart would only close the connections
+              // the endpoint holds (2026-11-15: every root's endpoint restarted every few
+              // minutes, and senders lost their typed handoffs).
+              const probe = sendProbeReading(answered, probeEnded - probeBegan, probeEnded - watch.sendAnsweredAt, how === 'timeout');
+              if (probe === 'miss') {
                 watch.sendMisses += 1;
                 if (watch.sendMisses >= SEND_PROBE_MISSES) {
                   watch.sendMisses = 0;
@@ -2209,7 +2561,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                   logLine(`root ${status.root}: send endpoint stopped answering (${String(SEND_PROBE_MISSES)} probes in a row)`);
                   await restartHostedSend(watch);
                 }
-              } else {
+              } else if (probe === 'answered') {
                 watch.sendMisses = 0;
               }
             }
@@ -2318,7 +2670,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         );
       }
       const report = entry.report;
-      if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+      if (report !== null && sweepCountsAreNews('beat', entry.root, report)) {
         logLine(
           `fallback sweep ${entry.root}: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
         );
@@ -2363,10 +2715,93 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       logLine(`reminders: the beat failed — ${messageOf(error)}`);
     });
   };
+  /**
+   * One root at a time. A watch still in `starting` past this team's limit, or a chores child
+   * that has missed more heartbeats than the limit, is stopped and started again. Only the
+   * child this daemon started for that root; every other root and this daemon keep running.
+   * Three such restarts in an hour is the cap, and the one past it is left for a person.
+   */
+  const restartStuckChildren = (at: Date): void => {
+    if (closed) return;
+    for (const hosted of hostedWatches) {
+      const root = hosted.watch.route.root;
+      const team = teams.get(root);
+      if (team === undefined) continue;
+      const reading = hosted.watch.state();
+      const stuck = choresFleet?.stuckOf(root) ?? null;
+      const hostsWatch = stuck !== null && stuck.watchPhase !== null;
+      const phase = stuck !== null && stuck.watchPhase !== null ? stuck.watchPhase : reading.phase;
+      const startedAt = stuck !== null && stuck.watchPhase !== null ? stuck.watchStartedAt : reading.startedAt;
+      const cycles = stuck !== null && stuck.watchPhase !== null ? stuck.cycles : reading.cycles;
+      const missed = stuck?.missed ?? 0;
+      const watchStuck = phase === 'starting';
+      const late = missed > (team.watch.childLateLimit ?? 30);
+      // The chores child is the one to stop when it hosts the watch or it is the late child.
+      // An in-process watch is stopped through its own fault, which restarts it on the next beat.
+      const child: StuckFacts['child'] = (hostsWatch || late) && stuck !== null ? 'chores' : 'watch';
+      if (child === 'watch' && !watchStuck) continue;
+      if (child === 'chores' && !watchStuck && !late) continue;
+      const reportedStart = startedAt === null ? Number.NaN : Date.parse(startedAt);
+      if (phase !== 'starting') {
+        watchStartingAt.delete(root);
+        watchLeftStarting.add(root);
+      } else if (!watchStartingAt.has(root)) {
+        watchStartingAt.set(
+          root,
+          watchLeftStarting.has(root) || Number.isNaN(reportedStart) ? at.getTime() : reportedStart,
+        );
+      }
+      // Lead decision 2026-11-11 05:55Z: a hosted child reports its latest real watch work
+      // seam as the startup clock. Preserve the existing configured silence bound and never
+      // let an older mirror move the clock backwards. Ordinary heartbeats do not change it.
+      if (hostsWatch && phase === 'starting' && Number.isFinite(reportedStart)) {
+        watchStartingAt.set(root, Math.max(watchStartingAt.get(root) ?? reportedStart, reportedStart));
+      }
+      const facts: StuckFacts = {
+        nowMs: at.getTime(),
+        watchPhase: phase,
+        watchStartedAtMs: phase === 'starting' ? watchStartingAt.get(root) ?? null : null,
+        cycles,
+        missed,
+        watchStartLimitMs: (team.watch.watchStartLimit ?? 120) * 1000,
+        childLateLimit: team.watch.childLateLimit ?? 30,
+        child,
+      };
+      const decision = stuckBook.consider(root, facts);
+      if (decision.action === 'none') continue;
+      if (decision.action === 'restart') {
+        const stopped = child === 'chores'
+          ? (choresFleet?.restartRoot(root, decision.text) ?? false)
+          : hosted.watch.fault(decision.text);
+        if (!stopped) continue;
+        stuckBook.committed(root, at.getTime());
+        // The child just started again. The next limit is measured from this beat, so a watch
+        // that is still `starting` inside that limit is not stopped on the following beat.
+        watchStartingAt.set(root, at.getTime());
+        watchLeftStarting.add(root);
+      }
+      const entry = routeTeams.get(root);
+      if (entry !== undefined) teamLogLine(dirname(entry.handle), 'daemon', 'daemon', decision.text, at);
+      const lead = team.orchestrator;
+      if (lead === '') continue;
+      void traceBeatWork('daemon notice (wall)', () => sendDaemonDirect(
+        {
+          reminder: 'stuck-child',
+          due: at.toISOString(),
+          recipients: [{ root, session: team.session, seat: lead }],
+          notice: 'stuck-child',
+        },
+        { root, seat: lead, body: decision.text },
+        { ...realHost, home },
+      )).catch((error: unknown) => {
+        logLine(`root ${root}: the stuck-child notice was not sent — ${messageOf(error)}`);
+      });
+    }
+  };
   beat = () => {
     if (input.runningRoots !== undefined && !closed) {
       try {
-        for (const root of input.runningRoots()) {
+        for (const root of traceBeatWork('registry discovery (sync)', () => input.runningRoots!())) {
           void hostCheckout(root).catch((error: unknown) => {
             logLine(`registry roots: ${messageOf(error)}`);
           });
@@ -2376,7 +2811,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
     }
     try {
-      faultInbox.consume(faultTargets);
+      traceBeatWork('fault inbox (sync)', () => faultInbox.consume(faultTargets));
     } catch (error) {
       logLine(`fault request: ${(error as Error).message}`);
     }
@@ -2384,12 +2819,15 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // pass that is still running is never awaited here, so one slow or hanging route cannot
     // stop the daemon's liveness or another route's cycles. Each route is isolated, and the beat
     // is marked so a pass that displaced this one carries the next due beat itself.
-    hostedBeat.tick();
+    traceBeatWork('watch tick (sync)', () => hostedBeat.tick());
     // The chores fleet is a nudge and a check, never a wait: a stuck child is signalled here and
     // its replacement starts on a later beat, so this tick returns at once whatever it is doing.
-    choresFleet?.tick(now());
-    mailboxRouter?.tick(now());
-    void refreshHostedEndpoints();
+    traceBeatWork('chores tick (sync)', () => choresFleet?.tick(now()));
+    // After the fleet has judged this beat: a watch still starting, or a chores child past its
+    // late limit, is stopped and started for that root alone.
+    traceBeatWork('stuck-child handling (sync)', () => restartStuckChildren(now()));
+    traceBeatWork('mail child tick (sync)', () => mailboxRouter?.tick(now()));
+    void traceBeatWork('endpoint refresh (wall)', () => refreshHostedEndpoints());
     // One fallback sweep rides the existing heartbeat: no second timer, process or socket. Each
     // hosted root reads its own validated team file and its markers' durable due instants; the
     // pass keeps no state of its own, and close stops it with this timer. A root a chores fleet
@@ -2518,8 +2956,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   /** Closes one source and maps its answer: `close` resolves to quiescence only once the drain
    *  actually finished; a rejection retains ownership and is retried by a later close. */
   const closeSource = (workIndex: number, sourceIndex: number): Promise<unknown> => {
-    const slot = presenceSourceCloses[workIndex]?.[sourceIndex];
     const source = presenceWork[workIndex]?.sources[sourceIndex];
+    const slots = presenceSourceCloses[workIndex];
+    // A source a rebind added after start has no slot yet; it gets one here.
+    if (slots !== undefined && source !== undefined && slots[sourceIndex] === undefined) {
+      slots[sourceIndex] = { attempt: null, closed: false, why: null };
+    }
+    const slot = slots?.[sourceIndex];
     if (slot === undefined || source === undefined || slot.closed) return Promise.resolve();
     if (slot.attempt === null) {
       let attempt: Promise<unknown>;
@@ -2673,6 +3116,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     const sourceDrains: Promise<void>[] = [];
     for (const one of presenceWork) {
       for (const run of one.sourceRuns) if (run !== null) sourceDrains.push(run);
+      for (const drain of one.retired) sourceDrains.push(drain.then(() => undefined));
     }
     await Promise.allSettled(sourceDrains);
     // A later attempt retries the sources whose close did not resolve. It runs before any
@@ -2755,43 +3199,300 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   if (input.restoreSweep !== false && routes.length > 0) {
     const runner = typeof input.restoreSweep === 'function'
       ? input.restoreSweep
-      : (root: string, teamFile: string | undefined) =>
+      : (root: string, teamFile: string | undefined, scope?: { session: string }) =>
           runRestoreSweepInChild({
             home,
             root,
             ...(teamFile === undefined ? {} : { teamFile }),
+            ...(scope === undefined ? {} : { session: scope.session }),
             signal: restoreAbort.signal,
           });
+    // A hosted route whose registry row still says stopped is the same team when the row's id
+    // is the canonical root, that root still realpath's to the row, and the terminal host
+    // reports the row's own session running. The write is the compare-and-set; a failed proof
+    // leaves the row stopped and the refusal below is today's.
+    const noteLiveStopped = async (route: HostedRoute): Promise<boolean> => {
+      let canonical: string;
+      try { canonical = realpathSync(route.root); }
+      catch { return false; }
+      const id = teamIdOf(canonical);
+      const memo = currentRunMemo();
+      memo?.teamsTolerant.delete(home);
+      memo?.teamsStrict.delete(home);
+      let record: ReturnType<typeof getTeam>;
+      try { record = getTeam(home, id); }
+      catch { return false; }
+      if (record === null || record.lifecycle !== 'stopped') return false;
+      let stored: string;
+      try { stored = realpathSync(record.root); }
+      catch { return false; }
+      if (stored !== canonical) return false;
+      const provedSession = record.session;
+      const running = await sessionRunningAsync(provedSession, { signal: restoreAbort.signal });
+      if (running !== true) return false;
+      let wrote = false;
+      try { wrote = noteStoppedTeamRunning(home, id, canonical, provedSession); }
+      catch { return false; }
+      if (!wrote) return false;
+      logLine(`registry ${canonical}: ${id} stopped to running`);
+      return true;
+    };
+    // The restore's pending reading on the route's own state row: display data the status line
+    // reads, written with the next state snapshot. Cleared when the route's pass has run.
+    const notePending = (route: HostedRoute, pending: RestorePending | null): void => {
+      const status = roots.find((row) => row.root === route.root);
+      if (status === undefined) return;
+      if (pending === null) delete status.restore;
+      else status.restore = pending;
+    };
+    const restoreSessions = input.restoreSessions
+      ?? (typeof input.restoreSweep === 'function'
+        ? undefined
+        : () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })));
+    const waitAbortable = (ms: number): Promise<boolean> =>
+      new Promise((resolveWait) => {
+        if (closed || restoreAbort.signal.aborted) {
+          resolveWait(false);
+          return;
+        }
+        const onAbort = (): void => {
+          clearTimeout(waitTimer);
+          resolveWait(false);
+        };
+        const waitTimer = setTimeout(() => {
+          restoreAbort.signal.removeEventListener('abort', onAbort);
+          resolveWait(!closed && !restoreAbort.signal.aborted);
+        }, ms);
+        restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
+      });
+    /** Why a watched route is no longer the one the daemon hosts, or null while it still is. */
+    const hostedRouteChange = (route: HostedRoute): string | null => {
+      const hosted = routes.find((one) => one.root === route.root);
+      if (hosted === undefined) return 'the root is no longer hosted';
+      if (hosted.session !== route.session || hosted.team !== route.team) return 'the hosted route changed';
+      const entry = routeTeams.get(route.root);
+      if (entry === undefined) return 'the root is no longer hosted';
+      let loaded: ReturnType<typeof readTeamConfig>;
+      try { loaded = readRouteTeam(entry, home); }
+      catch (error) { return `the team could not be read: ${messageOf(error)}`; }
+      if (!loaded.ok) return `the team could not be read: ${loaded.errors[0]?.message ?? 'unknown error'}`;
+      if (loaded.team.session !== route.session) {
+        return `the team's session is now "${loaded.team.session}", not the watched "${route.session}"`;
+      }
+      if (loaded.team.project !== route.team) return `the team is now "${loaded.team.project}", not the watched "${route.team}"`;
+      return null;
+    };
+    // Production only: an injected runner (a test) never starts a terminal-host server.
+    const bootSessionsEnabled = input.bootSessions !== false && typeof input.restoreSweep !== 'function';
+    // The root's hosted route with its team file read again now, and the registry's entry for
+    // that root read again now. Synchronous, so the start's last proof awaits nothing.
+    const factsNow = (root: string, boot: string | null): StartFacts => {
+      const route = routes.find((one) => one.root === root);
+      let hosted: StartFacts['hosted'];
+      if (route === undefined) hosted = { problem: 'the root is no longer hosted' };
+      else {
+        const change = hostedRouteChange(route);
+        hosted = change === null ? { root: route.root, team: route.team, session: route.session } : { problem: change };
+      }
+      let registry: StartFacts['registry'] = null;
+      try {
+        const canonical = realpathSync(root);
+        const memo = currentRunMemo();
+        memo?.teamsTolerant.delete(home);
+        memo?.teamsStrict.delete(home);
+        const record = getTeam(home, teamIdOf(canonical));
+        if (record !== null && realpathSync(record.root) === canonical) {
+          registry = { root: canonical, team: record.project, session: record.session, lifecycle: record.lifecycle };
+        }
+      } catch {
+        registry = null;
+      }
+      return { boot, hosted, registry };
+    };
+    const bootDeps = (): BootRunDeps => ({
+      bootId: () => bootId(),
+      readObserved: () => readSessionsRunning(home),
+      readQueue: () => readBootQueue(home),
+      writeQueue: (queue) => writeBootQueue(home, queue),
+      writeObserved: (record) => writeSessionsRunning(home, record),
+      dropObserved: () => dropSessionsRunning(home),
+      sessions: () => sessionsRunningMap(() => sessionListAsync({ signal: restoreAbort.signal })),
+      start: (session, hooks) => startStoppedServer(session, { signal: restoreAbort.signal }, hooks, processStartOf),
+      // Gone only on proof: no such process, or a different start time read (a reused pid). A
+      // live pid whose start time does not read, or was never read, is not gone.
+      childState: (child) => {
+        if (!pidAlive(child.pid)) return 'gone';
+        if (child.start === null) return 'unknown';
+        const now = processStartOf(child.pid);
+        if (now === null) return 'unknown';
+        return now === child.start ? 'alive' : 'gone';
+      },
+      // The session's run lock, from the route's own team folder, taken without waiting.
+      lock: (root, session) => {
+        const entry = routeTeams.get(root);
+        if (entry === undefined) return { held: 'the root is no longer hosted' };
+        let loaded: ReturnType<typeof readTeamConfig>;
+        try { loaded = readRouteTeam(entry, home); }
+        catch (error) { return { held: `the team could not be read: ${messageOf(error)}` }; }
+        if (!loaded.ok) return { held: 'the team could not be read' };
+        const taken = acquireRunLock(dirname(loaded.path), session);
+        return 'held' in taken ? { held: runLockText(taken.held, session, dirname(loaded.path), taken.startedAt) } : taken;
+      },
+      // Read at the moment of each start: this boot's id, then the synchronous facts.
+      facts: async (root): Promise<StartFacts> => factsNow(root, await bootId()),
+      factsNow: (root, boot) => factsNow(root, boot),
+      hosted: () => routes.map((route) => ({ root: route.root, team: route.team, session: route.session })),
+      lifecycleProblem: (root, team) => restoreLifecycleProblem(home, root, team),
+      loadPerCore: () => (loadavg()[0] ?? 0) / Math.max(1, cpus().length),
+      wait: (ms) => waitAbortable(ms),
+      now: () => Date.now(),
+      log: logLine,
+      loadMaxPerCore: BOOT_SESSION_LOAD_PER_CORE,
+      gapMs: BOOT_SESSION_GAP_MS,
+      retryMs: 15_000,
+      budgetMs: RESTORE_RETRY_BUDGET_MS,
+      observeEveryMs: BOOT_OBSERVE_EVERY_MS,
+    });
     restoreSweepRun = (async (): Promise<void> => {
+      // A machine restart: the registered sessions that ran when it went down come back first,
+      // one at a time under the load guard, and the attach watch below restores each once it
+      // reads running. The running-routes record is kept current for the next restart.
+      const bootRun = bootSessionsEnabled ? runBootWork(bootDeps()) : Promise.resolve();
       let pendingRoutes: HostedRoute[] = [];
-      for (const route of routes) {
-        if (closed) return;
+      const loadReasons = new Map<string, string>();
+      /** Routes whose pass refused a seat on a timeout: retried once on the retry schedule. */
+      const timeoutRetry = new Set<string>();
+      const timeoutRetried = new Set<string>();
+      const loadHeld = (route: HostedRoute, result: RestoreSweepResult): boolean => {
+        if ((result.kind !== 'refused' && result.kind !== 'ran') || result.retry !== 'load') return false;
+        const reason = result.detail ?? 'the load guard refused this restore';
+        if (loadReasons.get(route.root) !== reason) logLine(`restore ${route.root}: waiting for load guard: ${reason}`);
+        loadReasons.set(route.root, reason);
+        notePending(route, { reason: 'load', since: new Date().toISOString(), detail: reason });
+        return true;
+      };
+      // A seat refused only because its launch timed out (a loaded machine after a restart) gets
+      // one more pass; a survivor counts nowhere on that pass, so it repairs only what is left.
+      const timedOut = (route: HostedRoute, result: RestoreSweepResult): boolean => {
+        if (result.kind !== 'ran' || timeoutRetried.has(route.root)) return false;
+        if (!result.summary.refused_seats.some((entry) => TIMEOUT_REASON.test(entry.reason))) return false;
+        timeoutRetry.add(route.root);
+        return true;
+      };
+      const watch = createRestoreAttachWatch({
+        pollMs: Math.max(1, input.restoreAttachPollMs ?? 30_000),
+        loadBudgetMs: Math.max(0, input.restoreRetryBudgetMs ?? RESTORE_RETRY_BUDGET_MS),
+        // Without a session reader (an injected test runner), the runner answers for the session.
+        sessionsRunning: restoreSessions
+          ?? (async () => new Map(watch.roots().flatMap((root) => {
+            const route = routes.find((one) => one.root === root);
+            return route === undefined ? [] : [[route.session, true] as const];
+          }))),
+        attempt: async (route) => {
+          const entry = routeTeams.get(route.root);
+          if (entry === undefined) return 'done';
+          // A late attach may come long after the route was watched: the pass runs only while the
+          // daemon still hosts this root under the same team and session the watch was keyed on,
+          // and the child is told that session so its own fresh load refuses any other.
+          const changed = hostedRouteChange(route);
+          if (changed !== null) {
+            logLine(`restore ${route.root}: ${changed}; the watched restore was dropped, nothing was restored`);
+            return 'done';
+          }
+          let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          if (lifecycleProblem !== null && await noteLiveStopped(route)) {
+            lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+          }
+          if (lifecycleProblem !== null) {
+            logLine(`restore ${route.root}: ${lifecycleProblem}`);
+            return 'done';
+          }
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file, { session: route.session }));
+          if (result.kind === 'not-running') return 'not-running';
+          if (result.kind === 'ran') logLine(`restore ${route.root}: ${result.summary.line}`);
+          if ((result.kind === 'ran' || result.kind === 'refused') && result.retry === 'load') return 'load';
+          if (timedOut(route, result)) {
+            // The same one extra pass the start-up schedule gives; the next poll runs it.
+            timeoutRetry.delete(route.root);
+            timeoutRetried.add(route.root);
+            logLine(`restore ${route.root}: a seat timed out; one more pass at the next poll`);
+            return 'retry';
+          }
+          // Another run holding the session (a hand-run `team up`) is not a settled answer: the
+          // pass is tried again on a later poll, inside the same bounded budget.
+          if (result.kind === 'lock-held') {
+            logLine(`restore ${route.root}: another session-mutating run holds the session; tried again at a later poll`);
+            return 'load';
+          }
+          if (result.kind === 'unreadable') logLine(`restore ${route.root}: ${result.reason}`);
+          else if (result.kind === 'refused') {
+            const detail = result.detail === undefined ? '' : `: ${result.detail}`;
+            logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
+          }
+          return 'done';
+        },
+        wait: waitAbortable,
+        closing: () => closed || restoreAbort.signal.aborted,
+        now: () => Date.now(),
+        log: logLine,
+        onPending: notePending,
+      });
+      const watchRun = watch.run();
+
+      // Each route's first pass is the restore child's own reading, as before: the daemon reads
+      // the terminal host itself only in the attach watch, after a child has said not running.
+      const ordered: readonly HostedRoute[] = routes;
+
+      /** One pass at a route; true when the route stays on the retry schedule. */
+      const passOnce = async (route: HostedRoute, retrying: boolean): Promise<boolean> => {
         const entry = routeTeams.get(route.root);
-        if (entry === undefined) continue;
+        if (entry === undefined) return false;
+        let lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+        if (lifecycleProblem !== null && await noteLiveStopped(route)) {
+          lifecycleProblem = restoreLifecycleProblem(home, route.root, route.team);
+        }
+        if (lifecycleProblem !== null) {
+          logLine(`restore ${route.root}: ${lifecycleProblem}`);
+          notePending(route, null);
+          return false;
+        }
         try {
-          const result = await runner(route.root, entry.file);
+          const result = await traceBeatWork(`restore child wait (wall):${route.root}`, () => runner(route.root, entry.file, { session: route.session }));
           if (result.kind === 'ran') {
             logLine(`restore ${route.root}: ${result.summary.line}`);
+            if (loadHeld(route, result)) return true;
+            notePending(route, null);
+            if (timedOut(route, result)) return true;
           } else if (result.kind === 'lock-held') {
-            logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
+            logLine(`restore ${route.root}: another session-mutating run holds the session; tried again on the retry schedule`);
+            return true;
           } else if (result.kind === 'not-running') {
-            logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
-            pendingRoutes.push(route);
+            if (!retrying) logLine(`restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`);
+            loadReasons.delete(route.root);
+            watch.add(route);
           } else if (result.kind === 'unreadable') {
             logLine(`restore ${route.root}: ${result.reason}`);
           } else if (result.kind === 'refused') {
+            if (loadHeld(route, result)) return true;
             const detail = result.detail === undefined ? '' : `: ${result.detail}`;
             logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
           }
         } catch (error) {
           logLine(`restore ${route.root}: ${messageOf(error)}`);
         }
-      }
-      if (pendingRoutes.length === 0 || closed || restoreAbort.signal.aborted) return;
+        return false;
+      };
 
+      for (const route of ordered) {
+        if (closed) break;
+        if (await passOnce(route, false)) pendingRoutes.push(route);
+      }
+
+      // Lead restore-under-load brief, 2026-11-11: reuse this existing startup retry cadence
+      // and wait budget for load-held routes too; no new timeout or threshold is introduced.
       const initialDelayMs = Math.max(1, input.restoreRetryInitialDelayMs ?? 5_000);
       const maxDelayMs = Math.max(initialDelayMs, input.restoreRetryMaxDelayMs ?? 60_000);
-      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? 315_000);
+      const budgetMs = Math.max(0, input.restoreRetryBudgetMs ?? RESTORE_RETRY_BUDGET_MS);
       let currentDelayMs = initialDelayMs;
       let elapsedMs = 0;
       let attempt = 1;
@@ -2799,66 +3500,48 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       const formatWait = (ms: number): string =>
         ms >= 1_000 && ms % 1_000 === 0 ? `${ms / 1_000}s` : `${ms}ms`;
 
-      const waitAbortable = (ms: number): Promise<boolean> =>
-        new Promise((resolveWait) => {
-          if (closed || restoreAbort.signal.aborted) {
-            resolveWait(false);
-            return;
-          }
-          const onAbort = (): void => {
-            clearTimeout(waitTimer);
-            resolveWait(false);
-          };
-          const waitTimer = setTimeout(() => {
-            restoreAbort.signal.removeEventListener('abort', onAbort);
-            resolveWait(!closed && !restoreAbort.signal.aborted);
-          }, ms);
-          restoreAbort.signal.addEventListener('abort', onAbort, { once: true });
-        });
-
       while (pendingRoutes.length > 0 && elapsedMs < budgetMs && !closed && !restoreAbort.signal.aborted) {
         const delayMs = Math.min(currentDelayMs, maxDelayMs, budgetMs - elapsedMs);
         if (delayMs <= 0) break;
+        const loadCount = pendingRoutes.filter((route) => loadReasons.has(route.root)).length;
+        const timeoutCount = pendingRoutes.filter((route) => timeoutRetry.has(route.root)).length;
+        const waits = [
+          ...(loadCount === 0 ? [] : [`${loadCount} waiting for load guard`]),
+          ...(timeoutCount === 0 ? [] : [`${timeoutCount} retrying a seat that timed out`]),
+        ];
         logLine(
-          `restore: waiting ${formatWait(delayMs)} for the terminal host to restore ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
+          `restore: waiting ${formatWait(delayMs)} for restore prerequisites for ${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} (${waits.join(', ')}) (attempt ${attempt}, elapsed ${formatWait(elapsedMs)}/${formatWait(budgetMs)})`,
         );
         const waited = await waitAbortable(delayMs);
-        if (!waited || closed || restoreAbort.signal.aborted) return;
+        if (!waited || closed || restoreAbort.signal.aborted) break;
         elapsedMs += delayMs;
         currentDelayMs = Math.min(currentDelayMs * 2, maxDelayMs);
         attempt += 1;
 
         const stillPending: HostedRoute[] = [];
         for (const route of pendingRoutes) {
-          if (closed || restoreAbort.signal.aborted) return;
-          const entry = routeTeams.get(route.root);
-          if (entry === undefined) continue;
-          try {
-            const result = await runner(route.root, entry.file);
-            if (result.kind === 'ran') {
-              logLine(`restore ${route.root}: ${result.summary.line}`);
-            } else if (result.kind === 'lock-held') {
-              logLine(`restore ${route.root}: another session-mutating run holds the session; skipped`);
-            } else if (result.kind === 'not-running') {
-              stillPending.push(route);
-            } else if (result.kind === 'unreadable') {
-              logLine(`restore ${route.root}: ${result.reason}`);
-            } else if (result.kind === 'refused') {
-              const detail = result.detail === undefined ? '' : `: ${result.detail}`;
-              logLine(`restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`);
-            }
-          } catch (error) {
-            logLine(`restore ${route.root}: ${messageOf(error)}`);
-          }
+          if (closed || restoreAbort.signal.aborted) break;
+          if (timeoutRetry.delete(route.root)) timeoutRetried.add(route.root);
+          if (await passOnce(route, true)) stillPending.push(route);
         }
         pendingRoutes = stillPending;
       }
 
-      if (pendingRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
+      const loadHeldRoutes = pendingRoutes.filter((route) => loadReasons.has(route.root));
+      if (loadHeldRoutes.length > 0 && !closed && !restoreAbort.signal.aborted) {
+        const at = new Date().toISOString();
+        for (const route of loadHeldRoutes) {
+          const detail = loadReasons.get(route.root);
+          notePending(route, { reason: 'load-bound', since: at, ...(detail === undefined ? {} : { detail }) });
+        }
         logLine(
-          `restore: pending (${pendingRoutes.length} session${pendingRoutes.length === 1 ? '' : 's'} still restoring in the terminal host after ${formatWait(elapsedMs)}; run "team up --all" once the terminal host finishes restoring)`,
+          `restore: pending (${loadHeldRoutes.length} session${loadHeldRoutes.length === 1 ? '' : 's'}, ${loadHeldRoutes.length} still load-held after ${formatWait(elapsedMs)}; retry wait bound reached; run "team up --all" once the load guard clears)`,
         );
       }
+      watch.seal();
+      await watchRun;
+      // The boot work's observer runs for the daemon's life; it ends when the daemon closes.
+      await bootRun;
     })().catch((error: unknown) => {
       // The loop above already logs each route's failure; this catches the log write itself (or
       // anything outside the loop), so the tracked run never rejects into an unhandled rejection

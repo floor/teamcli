@@ -20,17 +20,17 @@
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, detachedRefusal, judgeCallerIn, logTag, standingOf } from '../caller.ts';
-import { PROFILES, processNameMatches } from '../clis.ts';
 import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
-import type { Agent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { contextLine, displayPath, hasJsonFlag, renderDryRunPlan, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
+import { livePlacement } from '../send/placement.ts';
 import { resolveTarget } from '../send/resolve.ts';
 import { appendRoute, readRouteAddress, ROUTES_FILE, type RouteAddress, type RouteRecord } from '../send/routes.ts';
-import { declaredInboundOf, inboundStaleReason } from '../send/inbound.ts';
+import { declaredInboundOf, heldSocketPath, inboundStaleReason, readHeldSocket, socketHeldReason, socketIneligibleReason } from '../send/inbound.ts';
+import { readState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { admissionOf, realHost, type SendHost } from './send.ts';
 
@@ -52,7 +52,8 @@ record that cannot be written is a refusal — an address this CLI handed out is
 --dry-run answers the same, prints its one plan step and writes nothing. The answer opens
 on the team's context line and closes on the resolved address. --json prints one document
 instead of the lines: {seat, agent, recipient_session, cli, pane, address, socket_state,
-native, rule, action_summary}.
+native, rule, action_summary}. An existing socket send cannot use is marked ineligible
+with the same inbound or held-socket reason as send; native names CLI capability alone.
 
 This process never opens, dials or writes to another session's socket: the address is read
 from the registry, the pane's process list and the socket folders, and named. The session line
@@ -108,7 +109,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if ('error' in resolved) return refused(io, dir, who, resolved.error, host, report);
 
   const standing = standingOf(dir, judged.session, caller);
-  const admission = admissionOf(caller, team, resolved, spec, host.home, fileTeamId, () => host.now(), standing);
+  const admission = admissionOf(caller, team, resolved, spec, host.home, fileTeamId, () => host.now(), standing, undefined, undefined, undefined, host);
   if (!admission.ok) return refused(io, dir, who, admission.why, host, report);
 
   const recipient = resolved.agent;
@@ -137,10 +138,17 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
     root: resolved.team.root,
     session: recipient.reach.session,
     seat: recipient.reach.seat,
-    ...(declared?.launch !== undefined ? { launch: declared.launch } : {}),
+    launch: readState(receivingDir).sessions[recipient.reach.session]?.seats[recipient.reach.seat]?.launch_line ?? declared?.launch ?? '',
   });
-  const inboundStale = inboundStaleReason(inbound, readAddress.socket);
-  const address: RouteAddress = inboundStale === null ? readAddress : { socket: readAddress.socket, state: 'stale' };
+  const staleReason = readAddress.state === 'unread' ? null : inboundStaleReason(inbound, readAddress.socket);
+  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(receivingDir, recipient.reach.session, recipient.reach.seat)), inbound);
+  const ineligible = socketIneligibleReason(recipient.cli, declared?.inbound, inbound, heldStanding, true);
+  const socketReason = staleReason ?? ineligible;
+  const address: RouteAddress = staleReason !== null
+    ? { socket: readAddress.socket, state: 'stale' }
+    : (readAddress.state === 'live' || readAddress.state === 'pane') && ineligible !== null
+      ? { socket: readAddress.socket, state: 'ineligible' }
+      : readAddress;
   const native = recipient.cli === 'claude-code';
   const fromId = typeof admission.sender === 'object' && 'id' in admission.sender ? admission.sender.id : null;
   const record: RouteRecord = {
@@ -170,51 +178,14 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if (args.flags.has('dry-run')) {
     const target = join(storePath(resolved.team.project, resolved.team.root, host.home), ROUTES_FILE);
     const plan: PlanStep[] = [{ step: 'record', seat: at.seat, detail: `append the route to ${target}`, prefix: '+' }];
-    return routeDry(io, context, at, address, native, admission.rule, plan, host.home, report, inboundStale);
+    return routeDry(io, context, at, address, native, admission.rule, plan, host.home, report, socketReason);
   }
   const written = appendRoute(resolved.team.project, resolved.team.root, host.home, record);
   if (!written.ok) return unrecorded(io, dir, who, written.reason, host, report);
   // A lookup, not a delivery: the line says what was read — the address's state and whether the
   // recipient carries the native channel — never a word a seat reads as a message arriving.
-  logLine(toDir, 'route', who, `looked up ${at.seat}: ${socketStateText(address, inboundStale)}, native ${native ? 'yes' : 'no'}`, host.now());
-  return routed(io, context, at, address, native, admission.rule, report, inboundStale);
-}
-
-/** Where the recipient stands now, as herdr reads it: the one pane the session names its seat on,
- *  and only where the CLI herdr reports there is the CLI the record names. The record's own pane
- *  is not a fallback — a pane that closed and was reused belongs to whatever seat stands on it,
- *  and its socket would be that seat's. A seat herdr does not name, names twice, or names on
- *  another CLI gets no address: the reading says the record and the pane no longer agree. */
-function livePlacement(host: SendHost, agent: Agent): { pane: string } | { error: string } {
-  const session = agent.reach.session;
-  const agents = host.agents(session);
-  if (agents === null) {
-    return { error: `${agent.id}: the session "${session}" could not be read, so no address was answered` };
-  }
-  const named = agents.filter((one) => one.name === agent.reach.seat);
-  if (named.length === 0) {
-    return { error: `${agent.id}: herdr names no seat "${agent.reach.seat}" in the session "${session}", so no address was answered` };
-  }
-  if (named.length > 1) {
-    return { error: `${agent.id}: herdr lists more than one agent named "${agent.reach.seat}"; no address was answered` };
-  }
-  const live = named[0] as { pane: string; cli?: string | null };
-  const cli = live.cli ?? null;
-  if (cli === null) {
-    return { error: `${agent.id}: herdr does not report the CLI of "${agent.reach.seat}", so no address was answered` };
-  }
-  const profile = PROFILES.find((one) => one.cli === agent.cli);
-  // herdr's `agent` field names the CLI it detected. Most CLIs it names by process (`claude`
-  // for claude-code), which is what a profile's `processes` list holds; a cursor session it
-  // names `cursor` while the profile's process name is the launch binary `cursor-agent`. The
-  // record and the live pane agree when herdr's name is the recorded CLI itself, so that is a
-  // match on its own; the profile's process names remain the reading for the CLIs herdr names
-  // by process.
-  const same = cli === agent.cli || (profile !== undefined && processNameMatches(cli, profile.processes));
-  if (!same) {
-    return { error: `${agent.id}: herdr names "${agent.reach.seat}" running "${cli}", not the recorded CLI "${agent.cli}"; no address was answered` };
-  }
-  return { pane: live.pane };
+  logLine(toDir, 'route', who, `looked up ${at.seat}: ${socketStateText(address, socketReason)}, native ${native ? 'yes' : 'no'}`, host.now());
+  return routed(io, context, at, address, native, admission.rule, report, socketReason);
 }
 
 /** The team context every answer opens on: the caller's own file. */
@@ -232,14 +203,14 @@ function routed(
   native: boolean,
   rule: string,
   report: Report,
-  inboundStale: string | null,
+  socketReason: string | null,
 ): number {
-  const summary = addressSummary(at, address, inboundStale);
+  const summary = addressSummary(at, address, socketReason);
   if (report.json) {
     writeJson(io, 'team.route', document(context, at, address, native, rule, false, 'routed', summary));
   } else {
     io.stdout(`${contextLine(context.project, context.session)}\n`);
-    answerLines(io, at, address, native, rule, inboundStale);
+    answerLines(io, at, address, native, rule, socketReason);
     io.stdout(`${summary}\n`);
   }
   return 0; // exit: route.routed
@@ -256,7 +227,7 @@ function routeDry(
   plan: readonly PlanStep[],
   home: string,
   report: Report,
-  inboundStale: string | null,
+  socketReason: string | null,
 ): number {
   if (report.json) {
     writeJson(io, 'team.route', {
@@ -265,15 +236,15 @@ function routeDry(
     });
   } else {
     io.stdout(`${contextLine(context.project, context.session)}\n`);
-    answerLines(io, at, address, native, rule, inboundStale);
+    answerLines(io, at, address, native, rule, socketReason);
     io.stdout(renderDryRunPlan(null, plan).map((line) => `${displayPath(line, home)}\n`).join(''));
   }
   return 0; // exit: route.dry-run
 }
 
 /** The resolved address, said once: the closing summary line, and `action_summary` under --json. */
-function addressSummary(at: Routed, address: RouteAddress, inboundStale: string | null): string {
-  return `${at.seat}: routed at ${address.socket ?? 'no socket'} (${socketStateText(address, inboundStale)})`;
+function addressSummary(at: Routed, address: RouteAddress, socketReason: string | null): string {
+  return `${at.seat}: routed at ${address.socket ?? 'no socket'} (${socketStateText(address, socketReason)})`;
 }
 
 /** The one document both endings write: the action surface, then the answer's own fields.
@@ -314,13 +285,13 @@ function answerLines(
   address: RouteAddress,
   native: boolean,
   rule: string,
-  inboundStale: string | null,
+  socketReason: string | null,
 ): void {
   io.stdout(`${at.seat}  ${at.id}  (${at.name})\n`);
   io.stdout(`session ${at.session}\n`);
   io.stdout(`cli ${at.cli}\n`);
   io.stdout(`pane ${at.pane}\n`);
-  io.stdout(`socket ${address.socket ?? 'none'} (${socketStateText(address, inboundStale)})\n`);
+  io.stdout(`socket ${address.socket ?? 'none'} (${socketStateText(address, socketReason)})\n`);
   io.stdout(`native ${native ? 'yes' : 'no'}\n`);
   io.stdout(`admitted by: ${rule}\n`);
 }
@@ -328,9 +299,10 @@ function answerLines(
 /** Where the address stands, as the lines word it. A socket a send would pass over for its
  *  declaration reads stale here, with the sender's own reason: the two commands answer the same
  *  question about the same address. */
-function socketStateText(address: RouteAddress, inboundStale: string | null): string {
+function socketStateText(address: RouteAddress, socketReason: string | null): string {
+  if (address.state === 'ineligible') return `socket not eligible: ${socketReason ?? 'the socket is not eligible for send'}; do not dial it`;
   if (address.state === 'stale') {
-    return inboundStale === null ? 'stale; do not dial it' : `stale; do not dial it (${inboundStale})`;
+    return socketReason === null ? 'stale; do not dial it' : `stale; do not dial it (${socketReason})`;
   }
   if (address.state === 'live') return 'live';
   if (address.state === 'pane') return 'found on the pane';

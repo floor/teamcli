@@ -22,17 +22,8 @@
 // content went unserved. The caller preserves it, returns no body, and never rewrites it: a
 // corrupt receipt can hide a read that happened, and replacing it would re-expose the content.
 import { randomBytes } from 'node:crypto';
-import {
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
-  linkSync,
-  openSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync } from 'node:fs';
+import { fchmodSync, linkSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 
 /** `O_NOFOLLOW` is POSIX: 0 on platforms without it, while the caller's `lstat` guards the open. */
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;

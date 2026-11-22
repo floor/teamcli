@@ -24,6 +24,7 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `daemon.chores`, `daemon.chores-slice-ms`, `daemon.chores-missed-beats`,
 `daemon.chores-backoff-cap-ms`, `daemon.heartbeat`, `actions-commands`,
 `workspace.sidebar.rows`, `workspace.sidebar.manage`, `workspace.sidebar.status_indicators`,
+`workspace.sidebar.row_gap`,
 `daemon.sidebar-ttl-ms`, `daemon.sidebar-refresh-ms`, `seat.dialog.answer`,
 `seat-health.watchdog.after`, `seat-health.watchdog.auto-restart`, `grok-command-deny`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
@@ -190,13 +191,18 @@ take the entity and team levels only. A team file that cannot be read refuses th
 the router never answers an empty map over a team it could not read — and `team check` names the
 rule a word broke, with the `team policy unset` repair that clears it.
 
-Five words govern the terminal host's sidebar; all five take the entity, project and team
+Six words govern the terminal host's sidebar; all six take the entity, project and team
 levels, and a chain that cannot be read leaves the release defaults in force — the sidebar is
 presentation, and an unreadable word never blocks a launch. `workspace.sidebar.manage` is
 whether `team` may touch the host's config for the sidebar at all: `on`, the release default,
 lets the marked sidebar block and the marked status-indicator key be spliced in, back up first
 and rolled back on a refused check; `off` is absolute — no write is made, and a lower level may
-switch managing off but never back on against a level that said `off`. `workspace.sidebar.rows`
+switch managing off but never back on against a level that said `off`. `workspace.sidebar.row_gap`
+is how many blank lines the host keeps between sidebar rows, a whole number from 0 up. Unset,
+the release default, it is not written: a `row_gap` line already in the host's config stays as
+the owner left it. When a level sets it, that number replaces only the `row_gap` assignment in
+the marked sidebar table, or is inserted after `rows` when the table has none. A negative value
+or a value that is not a whole number is refused. The nearest level chooses. `workspace.sidebar.rows`
 is the layout itself: rows joined by `;`, tokens by `,`, each token one of `state_icon`,
 `machine`, `workspace`, `tab`, `state_text`, `agent` (the YAML list of token lists reads the
 same way); unset, it is today's layout, `state_icon,machine,workspace,tab` over `state_text,agent`.
@@ -234,7 +240,7 @@ entity's main orchestrator relays from the owner — quoting the owner and citin
 owner-decisions entry — is acted on without asking again; `off` drops the line. A relay never
 carries an owner-reserved decision: senders are attributed, not verified, within one OS user,
 so a reserved decision needs the owner's own device, whatever any message says.
-`owner.reserved-scope` is the list that rule keys to — `public releases`, `spending`,
+`owner.reserved-scope` is the list that rule keys to — `major releases`, `spending`,
 `credentials`, and `the owner's machine` (OS and system settings, accounts and logins, the
 credential store, hardware) by default; set it at entity, project or team to add words. The
 four default words are the floor and stay in force even when a set value leaves one out.
@@ -242,7 +248,12 @@ four default words are the floor and stay in force even when a set value leaves 
 ## Who may run it
 
 The view (`team policy`) may be run by the owner, a seat of the team, or an approved delegate pane
-that may read the team. `team policy set` and `team policy unset` are owner-only from a terminal
+that may read the team. A placed lead and a placed operator of the team set and unset a key for
+their own team. A key marked needs-owner stays the owner's: `leads.authority`, `owner-signers`,
+`owner-signer-mode`, `grant-emission`, `owner.reserved-scope`, `development-mode`, `daemon.broker`,
+`daemon.chores` and `daemon.heartbeat`. `leads.authority` is `own-team`
+by default and `owner-asks` restores the owner gates; it is set at entity, project or team.
+`team policy set` and `team policy unset` of a needs-owner key are the owner's, from a terminal
 outside herdr, signed under `team-policy-v1\n`, and logged to `.agents/team.log`. `--dry-run`
 prints the plan and does not ask for Touch ID.
 

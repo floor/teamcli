@@ -1,4 +1,4 @@
-// ADR zeus-message-path D1: a send walks the owner's cascade — the channel-class legs the
+// ADR architect-message-path D1: a send walks the owner's cascade — the channel-class legs the
 // receiving seat's delivery_order names, then the typed leg, then the drop file — and stops at
 // the first leg taken. `mcp-inbox` is a retired name, no longer a leg: the MCP inbox is the
 // store's reader (the same records `team drops --read` reads), and a push from an MCP server is
@@ -148,11 +148,11 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
       inboxGraceMs: 0,
     });
     const io = owner(one.root);
-    expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    // The typed leg cannot wake a working pane, and the drop behind it takes the send; the
-    // listener beside the seat is not walked, so the old inbox ending is not reachable.
-    expect(io.out).toContain('cursor: queued, not woken (drop, 0 ms)');
-    expect(io.out).toContain('the typed wake failed');
+    // 1345 never-drop: the typed leg cannot wake a working pane, and that ending is now
+    // terminal — the drop keeps the record, the sender is told on stderr, exit 1. The
+    // listener beside the seat is still not walked, so the old inbox ending is not reachable.
+    expect(await runSend(['cursor', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('team send: cursor: not delivered: wake not taken; kept in cursor\'s inbox');
     expect(io.out).not.toContain('(mcp-inbox');
     // The splice line the old walk printed when a listener stood beside the seat is gone.
     expect(io.err).not.toContain('inbox server is listening');
@@ -168,87 +168,6 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
       expect((history.entries[0]?.failed ?? []).some((line) => line.startsWith('mcp-inbox'))).toBe(false);
       expect(history.entries[0]?.failed?.[0]).toMatch(/^typed: /);
     }
-  });
-
-  test('a declared mcp-inbox word is dropped, and the typed leg behind it delivers the same', async () => {
-    const one = world(['mcp-inbox', 'typed', 'drop'], [CURSOR]);
-    made.push(one);
-    liveInbox(one);
-    const pane = wakeFake(wakeScript());
-    const host = fake(one, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-      inboxGraceMs: 0,
-    });
-    const io = owner(one.root);
-    expect(await runSend(['cursor', 'hello', '--json'], io, host)).toBe(0);
-    const doc = JSON.parse(io.out) as {
-      status: string;
-      delivery: { leg: string; state: string; reason?: string }[];
-    };
-    expect(doc.status).toBe('delivered');
-    const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
-    // The retired word is dropped from the order: no entry for it exists, and the walk is
-    // exactly the one the same file without the word would make.
-    expect(legs.has('mcp-inbox')).toBe(false);
-    expect(doc.delivery.map((entry) => entry.leg)).toEqual(['typed', 'drop']);
-    expect(legs.get('typed')).toMatchObject({ state: 'attempted' });
-    expect(legs.get('drop')).toMatchObject({ state: 'not-reached' });
-    // One line, one Enter, one record: the dropped word adds no copy and no wake.
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.enters).toBe(1);
-    expect(recordsIn(inboxOf(one))).toHaveLength(1);
-    expect(recordBody(join(inboxOf(one), recordsIn(inboxOf(one))[0] as string))).toBe(filed('hello'));
-  });
-
-  test('a declared order cannot put the drop first: the typed leg is walked before it', async () => {
-    const one = world(['drop', 'typed'], [CURSOR]);
-    made.push(one);
-    const pane = wakeFake(wakeScript());
-    const host = fake(one, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-      inboxGraceMs: 0,
-    });
-    const io = owner(one.root);
-    expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ncursor: delivered (typed wake)\n');
-    expect(pane.typed).toHaveLength(1);
-    expect(pane.enters).toBe(1);
-    expect(recordsIn(inboxOf(one))).toHaveLength(1);
-    const history = readHistory('acme', one.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'delivered (typed wake)', via: 'typed' });
-  });
-
-  test('an order with no typed leg and the retired word ends on the drop, with nothing reported for the word', async () => {
-    const one = world(['mcp-inbox', 'drop'], [CURSOR]);
-    made.push(one);
-    liveInbox(one);
-    const pane = wakeFake(wakeScript());
-    const host = fake(one, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-      inboxGraceMs: 0,
-    });
-    const io = owner(one.root);
-    expect(await runSend(['cursor', 'hello', '--json'], io, host)).toBe(0);
-    const doc = JSON.parse(io.out) as {
-      status: string;
-      delivery: { leg: string; state: string; reason?: string }[];
-    };
-    expect(doc.status).toBe('queued, not woken');
-    const legs = new Map(doc.delivery.map((leg) => [leg.leg, leg]));
-    expect(legs.has('mcp-inbox')).toBe(false);
-    expect(doc.delivery.map((entry) => entry.leg)).toEqual(['drop']);
-    expect(legs.get('drop')).toBeDefined();
-    // No typed word, no typed wake: the pane is never typed into.
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-    expect(recordsIn(inboxOf(one))).toHaveLength(1);
-    const history = readHistory('acme', one.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
   });
 
   test('the sender-posted webhook fires once and stops the walk, whatever the listener beside the seat says', async () => {
@@ -318,87 +237,6 @@ describe('the cascade: channel classes, then typed, then the mailbox', () => {
     ]);
     expect(cascadeWalk(['drop', 'typed'], true)).toEqual(['webhook', 'typed', 'drop']);
     expect(cascadeWalk(['socket', 'native'], true)).toEqual(['socket', 'native', 'webhook']);
-  });
-
-  test('a definite webhook failure after a channel leg releases the claim and walks typed then drop', async () => {
-    let status = 503;
-    let hits = 0;
-    const server = Bun.serve({
-      hostname: '127.0.0.1',
-      port: 0,
-      fetch: () => {
-        hits += 1;
-        return new Response('unavailable', { status });
-      },
-    });
-    stops.push(() => server.stop(true));
-    const url = `http://127.0.0.1:${String(server.port)}/routine`;
-
-    // Declared order scrambles drop, the retired mcp-inbox word, typed, socket; cascade walks socket -> webhook -> typed -> drop.
-    const one = world(['drop', 'mcp-inbox', 'typed', 'socket'], [{ ...CURSOR, webhook: hookFiles(url) }]);
-    made.push(one);
-    liveInbox(one);
-
-    // 1. Idle pane: socket skipped -> webhook HTTP 503 (claim released) -> typed delivers.
-    const idlePane = wakeFake(wakeScript());
-    const io1 = owner(one.root);
-    const host1 = fake(one, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => idlePane.host,
-      inboxGraceMs: 0,
-    });
-    expect(await runSend(['cursor', 'first', '--json'], io1, host1)).toBe(0);
-    const doc1 = JSON.parse(io1.out) as {
-      status: string;
-      channel: string;
-      delivery: { leg: string; state: string; reason?: string }[];
-    };
-    expect(doc1.status).toBe('delivered');
-    expect(doc1.channel).toBe('typed');
-    expect(hits).toBe(1);
-    expect(idlePane.typed).toHaveLength(1);
-    expect(idlePane.enters).toBe(1);
-    expect(doc1.delivery.map((entry) => [entry.leg, entry.state])).toEqual([
-      ['socket', 'skipped'],
-      ['webhook', 'attempted'],
-      ['typed', 'attempted'],
-      ['drop', 'not-reached'],
-    ]);
-    const dir = inboxOf(one);
-    const firstId = recordsIn(dir)[0]!;
-    expect(existsSync(join(dir, `${firstId}.posting`))).toBe(false);
-    expect(existsSync(join(dir, `${firstId}.posted`))).toBe(false);
-
-    // 2. Working pane: socket skipped -> webhook HTTP 503 -> typed fails -> mailbox (drop) under all.
-    status = 502;
-    const workingPane = wakeFake(() => WORKING);
-    const io2 = owner(one.root);
-    const host2 = fake(one, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => workingPane.host,
-      inboxGraceMs: 0,
-    });
-    expect(await runSend(['cursor', 'second'], io2, host2)).toBe(0);
-    expect(hits).toBe(2);
-    expect(workingPane.typed).toEqual([]);
-    expect(io2.out).toContain('cursor: queued, not woken (drop, ');
-    expect(io2.out).toContain('webhook not delivered: HTTP 502');
-    const history = readHistory('acme', one.root, host2.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(2);
-      expect(history.entries[0]).toMatchObject({
-        to: 'cursor',
-        via: 'typed',
-        outcome: 'delivered (typed wake)',
-        failed: ['socket: cursor sessions have no cross-session socket', 'webhook: HTTP 503'],
-      });
-      expect(history.entries[1]?.via).toBe('drop');
-      expect(history.entries[1]?.outcome).toBe('queued, not woken');
-      expect(history.entries[1]?.failed?.[0]).toBe('socket: cursor sessions have no cross-session socket');
-      expect(history.entries[1]?.failed?.[1]).toBe('webhook: HTTP 502');
-      expect(history.entries[1]?.failed?.[2]).toMatch(/^typed: /);
-    }
   });
 
   test('a webhook post whose fate is unknown (sent-unknown) stops the cascade before typed and is never repeated', async () => {

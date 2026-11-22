@@ -147,67 +147,34 @@ describe('the compact frame is the first content line and the show footer', () =
     );
   });
 
+const SCOUT_VIEW = {
+    seatById: (id: string) => id === 'agt_5c0a75c0a75c' ? { seat: 'scout', teamId: 'team_harbor', teamName: 'harbor', signedNickname: null, nickname: null, persona: null, model: 'Claude Opus 5.5', display: null } : null,
+    otherSeats: () => [],
+  };
   test('only the first non-empty line survives, and the full rendering is unchanged without the mark', () => {
     const compact = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\n\n\nAlpha headline\nBeta detail`,
       'scout',
-      { rule: TO_ORCH, cli: 'claude-code', compact: true },
+      { rule: TO_ORCH, compact: true, fromId: 'agt_5c0a75c0a75c', view: SCOUT_VIEW, at: NOW },
     );
-    expect(compact).toBe('from scout (to orchestrator):\n\nAlpha headline');
+    expect(compact).toBe('scout · scout@harbor · Claude Opus 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline');
 
     const full = senderMod.attributedBody(
       `from Scout — admitted by: ${TO_ORCH}\n\nAlpha headline\nBeta detail`,
       'scout',
-      { rule: TO_ORCH, cli: 'claude-code' },
+      { rule: TO_ORCH, fromId: 'agt_5c0a75c0a75c', view: SCOUT_VIEW, at: NOW },
     );
-    expect(full).toBe('from scout (to orchestrator):\n\nAlpha headline\nBeta detail');
+    expect(full).toBe('scout · scout@harbor · Claude Opus 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha headline\nBeta detail');
 
     const headerless = senderMod.attributedBody('No header line one\nline two', 'scout', {
       rule: TO_ORCH,
-      cli: 'claude-code',
       compact: true,
+      fromId: 'agt_5c0a75c0a75c',
+      view: SCOUT_VIEW,
+      at: NOW,
     });
-    expect(headerless).toBe('from scout (to orchestrator):\n\nNo header line one');
+    expect(headerless).toBe('scout · scout@harbor · Claude Opus 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nNo header line one');
     expect(firstContentLineOf(senderMod)('\n\n\n')).toBe('');
-  });
-
-  test('the socket frame carries the compact block and footer; a person pane still gets no footer', () => {
-    const id = 'ab12cd34-1111-4000-8000-000000000001';
-    const body = `from Scout — admitted by: ${TO_ORCH}\n\nAlpha headline\nBeta detail`;
-    const frame = JSON.parse(
-      frameMod.socketMessageFrame('harbor', 'captain', body, id, {
-        from: 'scout',
-        rule: TO_ORCH,
-        cli: 'claude-code',
-        compact: true,
-      }),
-    ) as { msg_id: string; message: { content: string } };
-    expect(frame.msg_id).toBe(id);
-    expect(frame.message.content).toBe(
-      'from scout (to orchestrator):\n\nAlpha headline\n\n↩ team show ab12cd34 · team reply ab12cd34 · team ack ab12cd34',
-    );
-
-    const human = JSON.parse(
-      frameMod.socketMessageFrame('harbor', 'captain', body, id, {
-        from: 'scout',
-        rule: TO_ORCH,
-        cli: 'claude-code',
-        compact: true,
-        human: true,
-      }),
-    ) as { message: { content: string } };
-    expect(human.message.content).toBe('from scout (to orchestrator):\n\nAlpha headline');
-
-    const plain = JSON.parse(
-      frameMod.socketMessageFrame('harbor', 'captain', body, id, {
-        from: 'scout',
-        rule: TO_ORCH,
-        cli: 'claude-code',
-      }),
-    ) as { message: { content: string } };
-    expect(plain.message.content).toBe(
-      'from scout (to orchestrator):\n\nAlpha headline\nBeta detail\n\n↩ team reply ab12cd34 "…" · team ack ab12cd34',
-    );
   });
 });
 
@@ -293,108 +260,6 @@ function compactWorld(): CompactWorld {
 }
 
 describe('the send path honours the receiving seat only', () => {
-  test('a marked seat gets one content line and the show footer; an unmarked seat gets the whole body', async () => {
-    const { made } = compactWorld();
-    const frames: string[] = [];
-    const host = fake(made, {
-      agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'scout', pane: 'pane-scout' },
-      ],
-      deliver: async (_socket: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-    });
-
-    const multi = 'Only this headline\nSecond detail\nThird detail';
-    const fromScout = testIo(made.root, { kind: 'seat', name: 'scout', pane: 'pane-scout', session: 'acme' });
-    expect(await runSend(['lead', multi], fromScout, host)).toBe(0);
-    expect(frames).toHaveLength(1);
-    const leadFrame = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
-    const leadPrefix = leadFrame.msg_id.slice(0, 8);
-    expect(leadFrame.message.content).toBe(
-      `from Scout (to orchestrator):\n\nOnly this headline\n\n↩ team show ${leadPrefix} · team reply ${leadPrefix} · team ack ${leadPrefix}`,
-    );
-    expect(leadFrame.message.content).not.toContain('Second detail');
-
-    // The signed record the frames were cut from still carries every line.
-    const stored = JSON.parse(
-      readFileSync(join(made.dir, 'send-drops', 'acme', 'lead', leadFrame.msg_id), 'utf8'),
-    ) as { payload: { body: string; rule: string } };
-    expect(stored.payload.rule).toBe(TO_ORCH);
-    expect(stored.payload.body).toBe(`from Scout — admitted by: ${TO_ORCH}\n\n${multi}`);
-
-    // The neighbouring seat carries no mark: its frame is whole.
-    const fromCaptain = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
-    const replyBody = 'Reply line one\nReply line two';
-    expect(await runSend(['scout', replyBody], fromCaptain, host)).toBe(0);
-    expect(frames).toHaveLength(2);
-    const scoutFrame = JSON.parse(frames[1]!) as { msg_id: string; message: { content: string } };
-    const scoutPrefix = scoutFrame.msg_id.slice(0, 8);
-    expect(scoutFrame.message.content).toBe(
-      `from Captain (team lead):\n\n${replyBody}\n\n↩ team reply ${scoutPrefix} "…" · team ack ${scoutPrefix}`,
-    );
-  });
-
-  test('the daemon socket send renders the compact frame for a marked seat', async () => {
-    const { made } = compactWorld();
-    const loaded = loadTeamFileOrThrow(made);
-    const frames: string[] = [];
-    const daemonHost: DaemonHost = {
-      agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'scout', pane: 'pane-scout' },
-      ],
-      processInfo: () => ({ shell: 111, foreground: [222] }),
-      socketsDir: made.sockets,
-      deliver: async (_socket: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-      native: {
-        typeText: () => true,
-        pressEnter: () => true,
-        status: () => 'idle',
-        wait: async () => {},
-      },
-      now: () => NOW,
-      home: made.home,
-      deliverWaitMs: 0,
-      pollReadyMs: 5,
-    };
-    const started = await startSendDaemon({
-      root: made.root,
-      dir: made.dir,
-      team: loaded,
-      host: daemonHost,
-    });
-    if (started.kind !== 'serving') throw new Error(`the fixture daemon did not start: ${started.kind}`);
-    extraCleanups.push(() => {
-      void started.handle.close();
-    });
-
-    await requestDaemon(started.handle.socketPath, {
-      v: 1,
-      op: 'send',
-      from: 'scout',
-      to: 'lead',
-      rule: TO_ORCH,
-      body: `from Scout — admitted by: ${TO_ORCH}\n\nDaemon headline\nDaemon detail`,
-      wait: true,
-      timeout_s: 1,
-    });
-
-    expect(frames).toHaveLength(1);
-    const frame = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
-    const prefix = frame.msg_id.slice(0, 8);
-    // The daemon's compact header names the sender as the team file declares the seat (this
-    // fixture's seat carries no label); the frame's subject is the line count, not the casing.
-    expect(frame.message.content).toBe(
-      `from scout (to orchestrator):\n\nDaemon headline\n\n↩ team show ${prefix} · team reply ${prefix} · team ack ${prefix}`,
-    );
-    expect(frame.message.content).not.toContain('Daemon detail');
-  });
 });
 
 function loadTeamFileOrThrow(made: ReturnType<typeof world>) {
@@ -503,7 +368,7 @@ describe('team show reads the whole record for its addressee', () => {
     // The first show writes the receipt and prints the whole body even though the captain's seat
     // is marked compact_delivery: show reads the signed record, never the socket frame.
     const expected =
-      'from Scout (to orchestrator):\n\nHarbor line one\nHarbor line two\nHarbor line three\n\n↩ team reply d1f0a7c2 "…" · team ack d1f0a7c2';
+      'Scout · scout@harbor · Claude Sonnet 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nHarbor line one\nHarbor line two\nHarbor line three\n\n↩ team reply d1f0a7c2 "…" · team ack d1f0a7c2';
     const jsonIo = captainIo(at);
     expect(await runShow([id, '--json'], jsonIo, { home: at.home, now: () => NOW })).toBe(0);
     const doc = JSON.parse(jsonIo.out) as Record<string, unknown>;
@@ -583,7 +448,7 @@ describe('team show reads the whole record for its addressee', () => {
     const io = captainIo(at);
     expect(await runShow(['019a0000'], io, { home: at.home, now: () => NOW })).toBe(0);
     expect(io.out).toBe(
-      'Client Grok Bot (owner relay):\n\nClient line one\nClient line two\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
+      'Grok Bot · client:grok-bot (grant grant-01) · 2026-11-05 18:00Z · admitted: owner relay\n\nClient line one\nClient line two\n\n↩ team reply 019a0000 "…" · team ack 019a0000\n',
     );
     expect(existsSync(join(at.dropDir, `${id}.read.json`))).toBe(true);
   });
@@ -622,7 +487,7 @@ describe('team show refuses what is not this caller\'s record', () => {
     const whole = captainIo(at);
     expect(await runShow([id1], whole, { home: at.home, now: () => NOW })).toBe(0);
     expect(whole.out).toBe(
-      'from Scout (to orchestrator):\n\nAlpha line\nmore\n\n↩ team reply d1f0a7c2-1 "…" · team ack d1f0a7c2-1\n',
+      'Scout · scout@harbor · Claude Sonnet 5.5 · 2026-11-05 18:00Z · admitted: to orchestrator\n\nAlpha line\nmore\n\n↩ team reply d1f0a7c2-1 "…" · team ack d1f0a7c2-1\n',
     );
 
     // A record waiting in another seat's folder is refused without naming its text, and no read

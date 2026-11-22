@@ -5,7 +5,7 @@
 // The team is a synthetic world under a temp folder, as the send-step scenes build it: the
 // socket is an empty file the fake receiver's declaration points at. No live seat is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { appendEvent } from '../src/bus/log.ts';
 import { runSend } from '../src/commands/send.ts';
@@ -197,7 +197,8 @@ describe('team trace reads one message story out of the receiving team log', () 
     const snapshot = () => ({
       storeEntries: readdirSync(store).filter((name) => name !== 'verify-checkpoint.json').sort(),
       dirEntries: readdirSync(at.dir).sort(),
-      eventsBytes: readFileSync(eventsFile, 'utf8'),
+      // A first-leg delivery writes no step: the log may not exist yet, and must not after.
+      eventsBytes: existsSync(eventsFile) ? readFileSync(eventsFile, 'utf8') : null,
       messagesBytes: readFileSync(messagesFile, 'utf8'),
     });
 

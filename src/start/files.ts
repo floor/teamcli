@@ -3,7 +3,8 @@
 // check and a path operation. A concurrent parent swap can still redirect temporary creation
 // or publication; a later refusal detects that change but cannot undo filesystem effects.
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, readSync, realpathSync, type Stats } from 'node:fs';
+import { fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { join, resolve } from 'node:path';
 
 const LIMIT = 64 * 1024;

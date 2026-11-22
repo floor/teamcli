@@ -1,3 +1,4 @@
+import { traceChildStep } from '../diagnostics/child-steps.ts';
 // The agent registry (layer 2): one file per agent, `<home>/.config/team/agents/<id>.yaml`.
 // The agent id is assigned once at registration and is immutable: it is never reused, never
 // renamed, never re-derived from a seat name. Every write goes through a temporary file and a
@@ -12,9 +13,11 @@
 // (src/send/admit.ts).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
-import { isSeatId, withLock } from '../state.ts';
+import { isSeatId, updateState, withLock, type SeatState } from '../state.ts';
+import type { LaunchedIdentity } from '../launch/identity.ts';
 import { currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 
@@ -165,9 +168,14 @@ function cloneAgents(agents: readonly Agent[]): Agent[] {
   return agents.map(cloneAgent);
 }
 
-/** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair. */
-export function readAgents(home: string): Agent[] {
-  const memo = currentRunMemo();
+/** Every valid agent record, by id. Invalid files are skipped; a numeric reach id refuses with a quoting repair.
+ * A fresh read uses the same file/id/schema validation, bypassing and leaving the run memo alone. */
+export function readAgents(home: string, options: { fresh?: boolean } = {}): Agent[] {
+  return traceChildStep('registry readAgents', () => readAgentsMeasured(home, options));
+}
+
+function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Agent[] {
+  const memo = options.fresh === true ? null : currentRunMemo();
   if (memo !== null) {
     const cached = memo.agents.get(home);
     if (cached !== undefined) return cloneAgents(cached);
@@ -176,19 +184,154 @@ export function readAgents(home: string): Agent[] {
   try {
     names = readdirSync(agentsDir(home));
   } catch {
+    forgetCachedHome(home);
     memo?.agents.set(home, []);
     return [];
+  }
+  touchCachedHome(home);
+  const dir = agentsDir(home);
+  names = names.filter((name) => name.endsWith('.yaml') && isAgentId(name.slice(0, -'.yaml'.length))).sort();
+  // The whole scan stands while every file it read stands as it was by stat: no file is read.
+  const stamp = agentFolderStamp(dir, names);
+  const kept = keptScans.get(home);
+  if (stamp !== null && kept !== undefined && kept.stamp === stamp) {
+    memo?.agents.set(home, kept.agents);
+    return cloneAgents(kept.agents);
+  }
+  const agents: Agent[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const path = join(dir, name);
+    seen.add(path);
+    const agent = readAgentFileCached(path, name.slice(0, -'.yaml'.length));
+    if (agent) agents.push(agent);
+  }
+  // A file gone from the folder leaves the cache with it.
+  for (const path of parsedAgentFiles.keys()) {
+    if (path.startsWith(`${dir}/`) && !seen.has(path)) parsedAgentFiles.delete(path);
+  }
+  // Kept only when the folder stood still across the read: a write during it is read again.
+  if (stamp !== null && agentFolderStamp(dir, names) === stamp) keptScans.set(home, { stamp, agents: cloneAgents(agents) });
+  else keptScans.delete(home);
+  memo?.agents.set(home, cloneAgents(agents));
+  return agents;
+}
+
+/** How close to its last change a stamped file is still "racy": Linux stamps a file with the
+ *  kernel's coarse clock (one tick, up to 10 ms), so a same-size edit inside one tick keeps every
+ *  field the stamp reads. The margin, ten ticks, is the state file's (src/state.ts `RACY_NS`). */
+const RACY_MS = 100;
+
+/** What a scan of the agents folder depends on, by stat only: the folder's own inode and mtime,
+ *  and each agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime),
+ *  each read through a link exactly as the parser's read follows it.
+ *  Null when the folder cannot be read, or when the folder or a file changed within the racy
+ *  margin: such a stamp cannot show the next same-tick edit, so no scan is kept under it. */
+export function agentFolderStamp(dir: string, names: readonly string[]): string | null {
+  try {
+    const folder = statSync(dir);
+    let stamp = `${String(folder.ino)}:${String(folder.mtimeMs)}:${String(names.length)}`;
+    let changed = Math.max(folder.mtimeMs, folder.ctimeMs);
+    for (const name of names) {
+      try {
+        // The file the parser reads: a link is followed, so an edit of its target moves the stamp.
+        const one = statSync(join(dir, name));
+        stamp += `|${name}:${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
+        changed = Math.max(changed, one.mtimeMs, one.ctimeMs);
+      } catch (error) {
+        stamp += `|${name}:${(error as NodeJS.ErrnoException).code ?? 'error'}`;
+      }
+    }
+    return Date.now() - changed < RACY_MS ? null : stamp;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every agent record, or null when any part of the registry could not be read: the folder (other
+ * than absent), a file, or a file that does not parse. For a caller that must not mistake a
+ * record it could not read for a record that is not there. No cache and no memo are used.
+ */
+export function readAgentsComplete(home: string): Agent[] | null {
+  let names: string[];
+  try {
+    names = readdirSync(agentsDir(home));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
   }
   const agents: Agent[] = [];
   for (const name of names.sort()) {
     if (!name.endsWith('.yaml')) continue;
     const id = name.slice(0, -'.yaml'.length);
-    if (!isAgentId(id)) continue;
-    const agent = readAgentFile(join(agentsDir(home), name), id);
-    if (agent) agents.push(agent);
+    if (!isAgentId(id)) return null;
+    let text: string;
+    try {
+      text = readFileSync(join(agentsDir(home), name), 'utf8');
+    } catch {
+      return null;
+    }
+    let agent: Agent | null;
+    try {
+      agent = parseAgentText(text, join(agentsDir(home), name), id);
+    } catch {
+      return null;
+    }
+    if (agent === null) return null;
+    agents.push(agent);
   }
-  memo?.agents.set(home, cloneAgents(agents));
   return agents;
+}
+
+/** Each agent file's last parse, by path, with the exact text it was parsed from. A long-lived
+ *  process (the daemon's chores workers read the registry dozens of times a pass) still reads
+ *  every file each time, but parses one again only when its text changed; every caller gets its
+ *  own copy. */
+const parsedAgentFiles = new Map<string, { text: string; agent: Agent | null }>();
+
+/** Each cached home's last whole scan, with the stat stamp it was read under (`agentFolderStamp`).
+ *  Its records are never handed out: every reader gets its own copy. */
+const keptScans = new Map<string, { stamp: string; agents: Agent[] }>();
+
+/** The homes whose files the cache holds, most recently read last; at most `CACHED_HOMES`. */
+const cachedHomes: string[] = [];
+const CACHED_HOMES = 4;
+
+/** Drops every cached file of a home. */
+function forgetCachedHome(home: string): void {
+  const prefix = `${agentsDir(home)}/`;
+  for (const path of [...parsedAgentFiles.keys()]) if (path.startsWith(prefix)) parsedAgentFiles.delete(path);
+  keptScans.delete(home);
+  const at = cachedHomes.indexOf(home);
+  if (at !== -1) cachedHomes.splice(at, 1);
+}
+
+/** Marks a home as just read, and lets the least recently read go past the bound. */
+function touchCachedHome(home: string): void {
+  const at = cachedHomes.indexOf(home);
+  if (at !== -1) cachedHomes.splice(at, 1);
+  cachedHomes.push(home);
+  while (cachedHomes.length > CACHED_HOMES) forgetCachedHome(cachedHomes[0]!);
+}
+
+/** A deep copy: the cache's own record is never reachable by a caller. */
+function cachedCopy(agent: Agent): Agent {
+  return structuredClone(agent);
+}
+
+function readAgentFileCached(path: string, id: string): Agent | null {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    parsedAgentFiles.delete(path);
+    return null;
+  }
+  const cached = parsedAgentFiles.get(path);
+  if (cached !== undefined && cached.text === text) return cached.agent === null ? null : cachedCopy(cached.agent);
+  const agent = parseAgentText(text, path, id);
+  parsedAgentFiles.set(path, { text, agent: agent === null ? null : cachedCopy(agent) });
+  return agent;
 }
 
 export function getAgent(home: string, id: string): Agent | null {
@@ -306,6 +449,132 @@ export function recordAgentAddress(home: string, id: string, address: string | n
   return updateAgent(home, id, { reach: { address } });
 }
 
+/** Compare and record a proven socket under the registry lock. A replaced placement or
+ * identity never receives an address measured for the previous record. */
+export function recordProvenAgentAddress(home: string, expected: Agent, address: string): boolean {
+  if (!isAgentId(expected.id)) return false;
+  return withLock(agentsDir(home), () => {
+    const file = agentFile(home, expected.id);
+    const current = readAgentFile(file, expected.id);
+    if (!current || current.lifecycle !== 'running' || current.cli !== expected.cli
+      || current.reach.team !== expected.reach.team || current.reach.session !== expected.reach.session
+      || current.reach.seat !== expected.reach.seat || current.reach.pane !== expected.reach.pane
+      || current.reach.address !== expected.reach.address || current.provenance.seq !== expected.provenance.seq) return false;
+    if (current.reach.address === address) return true;
+    const next = patchedAgent(current, { reach: { address } });
+    next.provenance.seq = takeSeq(agentsDir(home));
+    const problem = invalid(next);
+    if (problem) throw new Error(`cannot update ${expected.id}: ${problem}`);
+    writeAgentFile(file, next);
+    return true;
+  });
+}
+
+/** Rebinds a conversation measured on the proven recorded pane. The caller supplies the
+ * same live placement, process and socket proof as an address refresh. Both snapshots are
+ * fenced under their locks; a successor's state or registry record is never overwritten.
+ * The state is written first, as in the managed-thread binder. An I/O failure between the
+ * two writes leaves disagreeing records, which conversation-bound readers refuse. */
+export function recordProvenSeatConversation(
+  home: string,
+  expected: Agent,
+  dir: string,
+  held: SeatState,
+  conversation: string,
+  address: string,
+  live?: () => boolean,
+): boolean {
+  if (!isAgentId(expected.id) || expected.cli !== 'claude-code' || expected.lifecycle !== 'running'
+    || !conversation.trim() || /[\x00-\x1f\x7f]/.test(conversation)
+    || !held.launched || held.pane !== expected.reach.pane
+    || !held.agent_session || held.agent_session !== expected.reach.agent_session
+    || (held.id !== undefined && expected.seat_handle !== held.id)) return false;
+  const snapshot = JSON.stringify(held);
+  return withLock(agentsDir(home), () => {
+    const file = agentFile(home, expected.id);
+    const current = readAgentFile(file, expected.id);
+    if (!current || current.lifecycle !== 'running' || current.cli !== expected.cli
+      || current.reach.team !== expected.reach.team || current.reach.session !== expected.reach.session
+      || current.reach.seat !== expected.reach.seat || current.reach.pane !== expected.reach.pane
+      || current.reach.agent_session !== expected.reach.agent_session
+      || current.reach.address !== expected.reach.address || current.provenance.seq !== expected.provenance.seq) return false;
+    const next = patchedAgent(current, { reach: { agent_session: conversation, address } });
+    const problem = invalid(next);
+    if (problem) throw new Error(`cannot update ${expected.id}: ${problem}`);
+    const written = updateState(dir, (state) => {
+      const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
+      if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
+      // The caller's live proof, read again inside both locks, right before the first change.
+      if (live !== undefined && !live()) return false;
+      seat.agent_session = conversation;
+      return true;
+    }, { writeWhen: (result) => result });
+    if (!written) return false;
+    next.provenance.seq = takeSeq(agentsDir(home));
+    writeAgentFile(file, next);
+    return true;
+  });
+}
+
+/**
+ * Ties a seat whose pane the terminal host restored after a machine restart (the proof is
+ * `rebootRebindProof`): the state takes the pane's live process identity and shell start, and
+ * the registry its live socket or none. The conversation is unchanged: the proof requires the
+ * pane to hold exactly the recorded one. Both snapshots must stand, as for a conversation write.
+ */
+export function recordRebootRebind(
+  home: string,
+  expected: Agent,
+  dir: string,
+  held: SeatState,
+  live: { launched: LaunchedIdentity; paneShell: number; paneShellStart: number; address: string | null },
+  stillLive?: () => boolean,
+): boolean {
+  // Any CLI the restart proof covers is tied. Only a Claude Code seat has a socket address; any
+  // other CLI is written with none, so a socket reading never becomes another CLI's route.
+  if (!isAgentId(expected.id) || (expected.cli !== 'claude-code' && live.address !== null) || expected.lifecycle !== 'running'
+    || !held.launched || held.pane !== expected.reach.pane
+    || !held.agent_session || held.agent_session !== expected.reach.agent_session
+    || (held.id !== undefined && expected.seat_handle !== held.id)
+    || live.launched.cli.length === 0 || !Number.isInteger(live.paneShell) || live.paneShell <= 0
+    || !Number.isInteger(live.paneShellStart) || live.paneShellStart <= 0) return false;
+  const snapshot = JSON.stringify(held);
+  return withLock(agentsDir(home), () => {
+    const file = agentFile(home, expected.id);
+    const current = readAgentFile(file, expected.id);
+    if (!current || current.lifecycle !== 'running' || current.cli !== expected.cli
+      || current.reach.team !== expected.reach.team || current.reach.session !== expected.reach.session
+      || current.reach.seat !== expected.reach.seat || current.reach.pane !== expected.reach.pane
+      || current.reach.agent_session !== expected.reach.agent_session
+      || current.reach.address !== expected.reach.address || current.provenance.seq !== expected.provenance.seq) return false;
+    const next = patchedAgent(current, { reach: { address: live.address } });
+    const problem = invalid(next);
+    if (problem) throw new Error(`cannot update ${expected.id}: ${problem}`);
+    const written = updateState(dir, (state) => {
+      const seat = state.sessions[current.reach.session]?.seats[current.reach.seat];
+      if (seat === undefined || JSON.stringify(seat) !== snapshot) return false;
+      // The caller's live proof, read again inside both locks, right before the first change.
+      if (stillLive !== undefined && !stillLive()) return false;
+      seat.launched = {
+        shell: live.launched.shell,
+        cli: [...live.launched.cli],
+        // The CLI's proved start times ride with the pids (E7b: the typed wake's full proof).
+        ...(live.launched.cli_start === undefined ? {} : { cli_start: [...live.launched.cli_start] }),
+      };
+      seat.pane_shell = live.paneShell;
+      seat.pane_shell_start = live.paneShellStart;
+      // The terminal host resumed the conversation without the launch line, so the process
+      // carries no channel flag: its pushes reach nothing until a launch through the line.
+      if (expected.cli === 'claude-code') seat.channel_launch = false;
+      return true;
+    }, { writeWhen: (result) => result });
+    if (!written) return false;
+    next.provenance.seq = takeSeq(agentsDir(home));
+    writeAgentFile(file, next);
+    return true;
+  });
+}
+
 /** Records the agent session herdr reported for the seat's live CLI — the id the launch also
  *  keeps in the seat state — or clears it with null. The caller hands in the measured reading;
  *  nothing here reads herdr, and nothing here derives an id from a pane, a pid or a name. */
@@ -352,8 +621,9 @@ export function recordAgentSessionWhen(
 export function findAgent(
   home: string,
   query: { team: string; seat: string; seatHandle?: string | null },
+  options: { fresh?: boolean } = {},
 ): Agent | null {
-  const agents = readAgents(home);
+  const agents = readAgents(home, options);
   let found: Agent | null = null;
   for (const agent of agents) {
     if (agent.lifecycle === 'retired') continue;
@@ -437,6 +707,11 @@ function readAgentFile(path: string, id: string): Agent | null {
   } catch {
     return null;
   }
+  return parseAgentText(text, path, id);
+}
+
+/** One agent file's text as the record it names, or null; a numeric reach id throws. */
+function parseAgentText(text: string, path: string, id: string): Agent | null {
   let value: YamlValue;
   try {
     value = toValue(parseYaml(text));

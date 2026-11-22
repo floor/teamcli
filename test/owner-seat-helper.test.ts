@@ -10,10 +10,11 @@ import { existsSync, mkdtempSync, statSync } from 'node:fs';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerSeatPublicKey } from '../src/client/owner-seat.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const swift = platform() === 'darwin' && spawnSync('swiftc', ['--version']).status === 0;
 const dirs: string[] = [];
-afterAll(() => { for (const d of dirs) spawnSync('/usr/bin/trash', [d]); });
+afterAll(() => discardFixtures(dirs, { quiet: true }));
 
 describe.skipIf(!swift)('owner-seat helper (macOS)', () => {
   const dest = mkdtempSync(join(tmpdir(), 'owner-seat-helper-test-'));

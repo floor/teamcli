@@ -7,7 +7,7 @@
 // inbox's to read, never this command's. Synthetic homes only.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BundleOp } from '../src/client/bundle-ops.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
@@ -23,11 +23,13 @@ import {
 import { runAck } from '../src/commands/ack.ts';
 import { runReply } from '../src/commands/reply.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
-import { signRecord } from '../src/send/record.ts';
+import { signRecord, stampedSettled } from '../src/send/record.ts';
+import { activate } from '../src/queue/floor.ts';
+import { seatMailDirs } from '../src/queue/mail-tree.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { updateState } from '../src/state.ts';
-import { keyOf } from '../src/store/keys.ts';
+import { keyOf, messageKeyOf } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-22T21:00:00Z');
@@ -326,14 +328,35 @@ describe('a seat acknowledges the opening record a bundle-grant client wrote', (
     expect(existsSync(join(recipientDrops(w), `${sent.id}.read.json`))).toBe(false);
   });
 
-  test('a plain-grant record is still the client inbox\'s, not this command\'s', async () => {
+  test('a plain-grant record is acknowledged by the seat it is addressed to, and by no other', async () => {
     const w = world({ kind: 'plain' });
     const sent = await clientSend(w, 'a plain client thread');
     expect(sent.code).toBe(0);
-    const acked = await seatAck(w, 'orchestrator', sent.id);
-    expect(acked.code).toBe(1);
-    expect(acked.out + acked.err).toContain('its read belongs to the client inbox');
+    // Another seat of the team cannot record the addressee's read.
+    const other = await seatAck(w, 'builder', sent.id);
+    expect(other.code).toBe(1);
     expect(existsSync(join(recipientDrops(w), `${sent.id}.read.json`))).toBe(false);
+    // The addressee's own ack writes the signed read receipt, as for any message.
+    const acked = await seatAck(w, 'orchestrator', sent.id);
+    expect(acked.err).toBe('');
+    expect(acked.code).toBe(0);
+    expect(acked.json).toMatchObject({ status: 'read', record: sent.id, to: 'orchestrator', written: true });
+    expect(existsSync(join(recipientDrops(w), `${sent.id}.read.json`))).toBe(true);
+  });
+
+  test('on an active root a plain-grant client message is stamped, and its addressee\'s ack settles it', async () => {
+    const w = world({ kind: 'plain' });
+    expect(activate(w.root, { home: w.home, build: 'b', actors: () => [{ kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 }] }).kind).toBe('activated');
+    const sent = await clientSend(w, 'a stamped client message');
+    expect(sent.code).toBe(0);
+    const stamped = seatMailDirs(w.root, 'acme', 'orchestrator').stamped;
+    expect(existsSync(join(stamped, sent.id))).toBe(true);
+    const context = { to: 'orchestrator', root: realpathSync(w.root), session: 'acme', lead: 'orchestrator' };
+    expect(stampedSettled(stamped, sent.id, context, messageKeyOf(w.home))).toBe(false);
+    const acked = await seatAck(w, 'orchestrator', sent.id);
+    expect(acked.code).toBe(0);
+    // Settled: no longer re-delivered.
+    expect(stampedSettled(stamped, sent.id, context, messageKeyOf(w.home))).toBe(true);
   });
 
   test('another seat of the team cannot acknowledge the client thread', async () => {

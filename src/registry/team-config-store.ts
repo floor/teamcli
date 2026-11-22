@@ -11,7 +11,8 @@
 // never sees half a record.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { writeAtomic } from '../state.ts';
 

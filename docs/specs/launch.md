@@ -212,7 +212,7 @@ The shipped profiles at the tag:
 | CLI | Binary | Rules delivery | Delivery | Tested |
 |---|---|---|---|---|
 | `claude-code` | `claude` | `option` (`--append-system-prompt`) | `push` | 2.1.288 to 2.1.302 |
-| `codex` | `codex` | `message` | `between-turns` | 0.157.0 to 0.161.0 |
+| `codex` | `codex` | `message` | `between-turns` | 0.157.0 to 0.167.0 |
 | `cursor` | `cursor-agent` | `message` | `pull-on-turn` | 2026.10.01 to 2026.10.14 |
 | `antigravity` | `agy` | `message` | `none` | 1.2.16 to 1.4.1 |
 | `grok` | `grok` | `option` (`--rules`) | `pull-on-turn` | 1.0.50 to 1.0.52 |
@@ -320,7 +320,7 @@ user, with no symbolic link on the way, and the lobby itself has mode exactly `0
 ancestor's mode is not tested; only the lobby's is. The seat's
 CLI trust record is written in the lobby before the seat's workspace exists, so the launch meets
 no folder-trust dialog there. A lobby the gate refuses ends the launch for every seat with
-`up.lobby`.
+`up.lobby`. A Claude channel seat starts in its own folder under the lobby; Cursor and Grok start in the seat's configured cwd (a recorded worktree when that cwd is `.`); any other seat whose cwd is not `.` starts in that folder, resolved against the project root, once it is outside every protected checkout; a lead whose cwd is `.` starts in the project root; every other seat whose cwd is `.` starts in the lobby.
 
 *Source:* `src/file/sections/lobby.ts` (the `lobby:` entry), `src/lobby/recorded.ts` (the recorded
 map), `src/lobby/gate.ts` (the gate), `src/launch/pretrust.ts` (the trust record written first).
@@ -464,7 +464,7 @@ The full set, `up.agents` to `up.unknown` included, is the `up` rows of `contrac
 | Entry | Meaning | Since | Source at the tag | Note |
 |---|---|---|---|---|
 | `claude-code` | binary `claude`; 2.1.288 to 2.1.302 | 0.5.0 | `src/profiles/claude-code.yaml` | rules as an option |
-| `codex` | binary `codex`; 0.157.0 to 0.161.0 | 0.5.0 | `src/profiles/codex.yaml` | rules as a first message |
+| `codex` | binary `codex`; 0.157.0 to 0.167.0 | 0.5.0 | `src/profiles/codex.yaml` | rules as a first message |
 | `cursor` | binary `cursor-agent`; 2026.10.01 to 2026.10.14 | 0.5.0 | `src/profiles/cursor.yaml` | rules as a first message |
 | `antigravity` | binary `agy`; 1.2.16 to 1.4.1 | 0.5.0 | `src/profiles/antigravity.yaml` | rules as a first message |
 | `grok` | binary `grok`; 1.0.50 to 1.0.52 | 0.5.0 | `src/profiles/grok.yaml` | rules as an option |

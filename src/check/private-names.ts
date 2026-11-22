@@ -27,10 +27,12 @@
 // intersection of every occurrence's scope, and the duplicate count is reported. Intersection is
 // what keeps a diff-only class c entry from becoming a tracked-tree rule through source order.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** Where a private entry reads: a tracked path, a tracked file's text, or the pre-push diff. */
 export type PrivateScope = 'path' | 'content' | 'diff';
@@ -261,6 +263,7 @@ function scratchRepository(): Scratch {
   } catch {
     return { path: '', problem: 'cannot create the private scan scratch folder' };
   }
+  hostedCommit('node:child_process.spawnSync');
   const init = spawnSync('git', ['init', '--quiet', path], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -271,6 +274,7 @@ function scratchRepository(): Scratch {
 }
 
 function addScratch(path: string, files: readonly string[]): boolean {
+  hostedCommit('node:child_process.spawnSync');
   const added = spawnSync('git', ['-C', path, 'add', '--', ...files], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -283,6 +287,7 @@ function addScratch(path: string, files: readonly string[]): boolean {
  *  `-a` reads every file as text: a NUL byte makes git call a file binary, and skipping it would
  *  hide the names it carries. */
 function grep(repo: string, pattern: string, pathspec: string): { status: number; stdout: string } {
+  hostedCommit('node:child_process.spawnSync');
   const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-a', '-E', '-f', '-', '--', pathspec], {
     input: `${pattern}\n`,
     encoding: 'utf8',
@@ -308,6 +313,7 @@ function validate(rules: readonly PrivateRule[], scratch: string): { problem: st
 }
 
 function trackedFiles(root: string): { files: string[] } | { problem: string } {
+  hostedCommit('node:child_process.spawnSync');
   const listed = spawnSync('git', ['-C', root, 'ls-files', '-z'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -432,6 +438,9 @@ export interface PrivateCorpus {
   lines: string[];
   /** `path:line` for an added diff line, `commit:<sha>:<line>` for a commit-message line. */
   where: string[];
+  /** 1-based corpus indices of added file lines with a one-to-one removed byte-identical twin.
+   * Commit-message lines are never eligible. Only a private hit at an index is treated as a move. */
+  moves: number[];
 }
 
 /** One C-quoted diff path, decoded to the bytes git encoded, or null on an unknown escape. */
@@ -475,11 +484,11 @@ function unquoteDiffPath(text: string): string | null {
 }
 
 /**
- * The new-side path of one `+++ ` header. Git appends one tab to an unquoted path that contains
+ * The path of one old-side `--- ` or new-side `+++ ` header. Git appends one tab to an unquoted path that contains
  * a space, and C-quotes a path with a control or non-UTF-8 byte; both forms are read back to the
  * tracked path here.
  */
-function newPathFromHeader(payload: string): { path: string | null } | { problem: string } {
+function diffPathFromHeader(payload: string, side: 'a' | 'b'): { path: string | null } | { problem: string } {
   if (payload === '/dev/null') return { path: null };
   let text: string;
   if (payload.startsWith('"')) {
@@ -490,7 +499,7 @@ function newPathFromHeader(payload: string): { path: string | null } | { problem
   } else {
     text = payload.endsWith('\t') ? payload.slice(0, -1) : payload;
   }
-  if (!text.startsWith('b/')) return { problem: 'cannot parse a diff path' };
+  if (!text.startsWith(`${side}/`)) return { problem: 'cannot parse a diff path' };
   const path = text.slice(2);
   if (path === '') return { problem: 'cannot parse a diff path' };
   return { path };
@@ -516,9 +525,12 @@ function messageAfterHeaders(object: string): string | null {
 }
 
 /**
- * Builds the pre-push corpus: every added line of the diff against `base`, then every line of
- * every commit message on `base..HEAD`. Removed lines are not read; a line that stays unchanged
- * is not added. No matched text is retained beyond the corpus itself, which lives in a scratch
+ * Builds the pre-push corpus: every added line of the committed diff `base..HEAD`, then every line of
+ * every commit message on `base..HEAD`. Removed lines supply only one-to-one exact-byte move
+ * candidates; they are never scanned as new text. Only origin/main or a v* tag whose commit
+ * is an ancestor of refs/remotes/origin/main may supply the public base. A line that stays
+ * unchanged is not added.
+ * No matched text is retained beyond the corpus itself, which lives in a scratch
  * folder owned by the caller.
  *
  * The diff is read as hunks, not as loose lines: a hunk header declares how many old and new
@@ -528,12 +540,43 @@ function messageAfterHeaders(object: string): string | null {
  * `--text` gives a binary-looking file the same hunks as a text one: a NUL byte must not keep the
  * lines it carries out of the corpus.
  */
-export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus } | { problem: string } {
+export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus; base: string } | { problem: string } {
+  // Resolve only the named public ref, never an ambiguous shorthand branch or an arbitrary
+  // commit expression. Pin the commit so the file and message scans use the same base.
+  let ref: string;
+  if (base === 'origin/main' || base === 'refs/remotes/origin/main') ref = 'refs/remotes/origin/main';
+  else if (base.startsWith('refs/tags/v') && base.length > 'refs/tags/v'.length) ref = base;
+  else if (base.startsWith('v') && base.length > 1) ref = `refs/tags/${base}`;
+  else return { problem: 'private diff base must be origin/main or an existing public release tag (v*)' };
+  hostedCommit('node:child_process.spawnSync');
+  const present = spawnSync('git', ['-C', root, 'show-ref', '--verify', '--quiet', ref], {
+    stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+  });
+  if (present.error !== undefined || present.status !== 0) {
+    return { problem: 'cannot resolve private diff public base: origin/main or a public release tag (v*) is required' };
+  }
+  hostedCommit('node:child_process.spawnSync');
+  const resolved = spawnSync('git', ['-C', root, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+  });
+  if (resolved.error !== undefined || resolved.status !== 0) return { problem: 'cannot resolve private diff public base to a commit' };
+  const baseCommit = resolved.stdout.trim();
+  if (ref.startsWith('refs/tags/')) {
+    // A local tag name alone proves no public history. Require the tagged commit to be
+    // reachable from the fetched public main ref before trusting any removed line from it.
+    hostedCommit('node:child_process.spawnSync');
+    const publicHistory = spawnSync('git', ['-C', root, 'merge-base', '--is-ancestor', baseCommit, 'refs/remotes/origin/main'], {
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: syncChildTimeout(10_000),
+    });
+    if (publicHistory.error !== undefined || publicHistory.status !== 0) {
+      return { problem: 'private diff tag base must be an ancestor of refs/remotes/origin/main; a local-only tag cannot supply removed move twins' };
+    }
+  }
+  hostedCommit('node:child_process.spawnSync');
   const diff = spawnSync(
     'git',
-    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--text', base, '--'],
+    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--text', `${baseCommit}..HEAD`, '--'],
     {
-      encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 256 * 1024 * 1024,
       timeout: syncChildTimeout(30_000),
@@ -542,25 +585,42 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   if (diff.error !== undefined || diff.status !== 0) return { problem: `cannot read the diff against ${base}` };
   const lines: string[] = [];
   const where: string[] = [];
+  // Keep the raw diff bytes separate from the UTF-8 text given to the pattern engine. Two
+  // different invalid byte sequences must never become equal through replacement decoding.
+  type DiffLine = { bytes: string; terminated: boolean; index?: number };
+  const removed: DiffLine[] = [];
+  const added: DiffLine[] = [];
+  let previous: DiffLine | undefined;
+  let oldPath: string | null | undefined;
   // undefined until this file's +++ header, null when its new side is /dev/null.
   let path: string | null | undefined;
   let oldLeft = 0;
   let newLeft = 0;
   let newLine = 0;
   let inHunk = false;
-  for (const raw of diff.stdout.split('\n')) {
+  for (const raw of diff.stdout.toString('latin1').split('\n')) {
+    if (raw === '\\ No newline at end of file') {
+      if (previous !== undefined) previous.terminated = false;
+      continue;
+    }
     if (inHunk) {
-      if (raw === '\\ No newline at end of file') continue;
       if (oldLeft > 0 && raw.startsWith('-')) {
+        if (oldPath === null || oldPath === undefined) return { problem: 'cannot parse a removed diff line' };
+        previous = { bytes: raw.slice(1), terminated: true };
+        removed.push(previous);
         oldLeft -= 1;
       } else if (newLeft > 0 && raw.startsWith('+')) {
+        previous = undefined;
         if (path !== null && path !== undefined) {
-          lines.push(raw.slice(1));
+          lines.push(Buffer.from(raw.slice(1), 'latin1').toString('utf8'));
           where.push(`${labelPath(path)}:${String(newLine)}`);
+          previous = { bytes: raw.slice(1), terminated: true, index: lines.length };
+          added.push(previous);
         }
         newLeft -= 1;
         newLine += 1;
       } else if (oldLeft > 0 && newLeft > 0 && raw.startsWith(' ')) {
+        previous = undefined;
         oldLeft -= 1;
         newLeft -= 1;
         newLine += 1;
@@ -572,17 +632,26 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
     }
     if (raw.startsWith('diff --git ')) {
       path = undefined;
+      oldPath = undefined;
+      previous = undefined;
+      continue;
+    }
+    if (raw.startsWith('--- ')) {
+      const header = diffPathFromHeader(Buffer.from(raw.slice(4), 'latin1').toString('utf8'), 'a');
+      if ('problem' in header) return header;
+      oldPath = header.path;
       continue;
     }
     if (raw.startsWith('+++ ')) {
-      const header = newPathFromHeader(raw.slice(4));
+      const header = diffPathFromHeader(Buffer.from(raw.slice(4), 'latin1').toString('utf8'), 'b');
       if ('problem' in header) return header;
       path = header.path;
       continue;
     }
     const hunk = raw.match(/^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@/);
     if (hunk !== null) {
-      if (path === undefined) return { problem: 'cannot parse a diff hunk' };
+      if (path === undefined || oldPath === undefined) return { problem: 'cannot parse a diff hunk' };
+      previous = undefined;
       oldLeft = hunk[2] === undefined ? 1 : Number(hunk[2]);
       newLeft = hunk[4] === undefined ? 1 : Number(hunk[4]);
       newLine = Number(hunk[3]);
@@ -592,7 +661,21 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   }
   if (inHunk) return { problem: 'cannot parse a diff hunk' };
 
-  const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${base}..HEAD`], {
+  // git diff's old side comes only from tracked blobs in this repository at base. No working
+  // directory search, private file, untracked twin, ignored twin or external converter is read.
+  const key = (line: DiffLine): string => line.bytes + (line.terminated ? '\n' : '');
+  const available = new Map<string, number>();
+  for (const line of removed) available.set(key(line), (available.get(key(line)) ?? 0) + 1);
+  const moves: number[] = [];
+  for (const line of added) {
+    const count = available.get(key(line)) ?? 0;
+    if (count === 0) continue;
+    available.set(key(line), count - 1);
+    moves.push(line.index!);
+  }
+
+  hostedCommit('node:child_process.spawnSync');
+  const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${baseCommit}..HEAD`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 16 * 1024 * 1024,
@@ -600,6 +683,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   });
   if (commits.error !== undefined || commits.status !== 0) return { problem: `cannot read the commits since ${base}` };
   for (const sha of commits.stdout.split('\n').filter(Boolean)) {
+    hostedCommit('node:child_process.spawnSync');
     const body = spawnSync('git', ['-C', root, 'cat-file', 'commit', sha], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -616,7 +700,7 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
       where.push(`commit:${sha}:${String(index + 1)}`);
     }
   }
-  return { corpus: { lines, where } };
+  return { corpus: { lines, where, moves }, base: baseCommit };
 }
 
 /**

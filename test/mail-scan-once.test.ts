@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const realFs = await import('node:fs');
 // Captured by value before the wrapper stands: the restore below must name the module's own
@@ -241,7 +242,8 @@ describe('one watch pass reads the mail once', () => {
     const message = seed(w, 'deepseek-acme', UNREAD, new Date(clock), { session: 'acme-web', home: w.root });
     watchingNow(dropOf(w, 'deepseek-acme', 'acme-web'));
 
-    const code = await runWatch(['--file', join(w.dir, 'team.yaml')], testIo(w.root, { kind: 'owner' }), {
+    // Daemon-only watch: the hosted loop is the pass that still scans each drop once.
+    const code = await runWatch(['--file', join(w.dir, 'team.yaml')], testIo(w.root, { kind: 'owner' }), withHostedLoop({
       live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
       standing: () => ({ kind: 'none' }),
@@ -258,7 +260,7 @@ describe('one watch pass reads the mail once', () => {
       alive: () => false,
       pid: 4242,
       home: w.root,
-    });
+    }));
 
     expect(code).toBe(0);
     expect(opensOf(message)).toBe(1);
@@ -273,7 +275,8 @@ describe('one watch pass reads the mail once', () => {
     const at = new Date(clock);
     seed(w, 'deepseek-acme', UNREAD, at, { session: 'acme-web', home: w.root });
     const teams = join(w.root, '.config', 'team', 'teams.yaml');
-    const sources = (): WatchSources => ({
+    // Daemon-only watch: the hosted loop is the pass that still reads the registry once.
+    const sources = (): WatchSources => withHostedLoop({
       live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
       standing: () => ({ kind: 'none' }),
@@ -310,7 +313,7 @@ describe('one watch pass reads the mail once', () => {
 });
 
 describe('the folder is scanned once per record, not twice', () => {
-  test('a 50,000-file drop folder is opened once per waiting record', () => {
+  test('a 2,000-file drop folder is opened once per waiting record', () => {
     const w = world();
     const dropDir = dropOf(w, 'helper');
     mkdirSync(dropDir, { recursive: true });
@@ -318,7 +321,9 @@ describe('the folder is scanned once per record, not twice', () => {
     // read. Each name is a message id; each file is a record this key cannot verify, which is
     // still waiting mail — so every one of them is opened exactly once.
     messageKeyOf(w.home);
-    const count = 50_000;
+    // The proof is a count, not a scale: 2,000 records open once each as 50,000 did (the size the
+    // field report had), in a fraction of the time.
+    const count = 2_000;
     for (let index = 0; index < count; index += 1) {
       writeFileSync(join(dropDir, `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`), '{}\n');
     }
@@ -330,8 +335,7 @@ describe('the folder is scanned once per record, not twice', () => {
     expect(opened).toHaveLength(count);
     expect(new Set(opened).size).toBe(count);
 
-    // Removing 50,000 files outlasts a test hook's few seconds, and the hook would fail the test
-    // after it passed: the base goes here, inside the test's own budget.
+    // The base goes here, inside the test's own budget.
     const held = bases.indexOf(w.base);
     if (held !== -1) bases.splice(held, 1);
     rmSync(w.base, { recursive: true, force: true });

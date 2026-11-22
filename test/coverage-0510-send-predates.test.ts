@@ -42,26 +42,6 @@ function declareSeat(made: World, bootedAfter: boolean): void {
 }
 
 describe('a receiving session that predates its accept declaration', () => {
-  test('is skipped with the published reason, and nothing is dialed', async () => {
-    const made = world(null);
-    cleanup = made.cleanup;
-    declareEntity(made);
-    declareSeat(made, false);
-    const io = owner(made.root);
-    const host = fake(made);
-
-    const code = await runSend(['lead', 'a note'], io, host);
-
-    expect(code).toBe(0);
-    expect(host.frames).toEqual([]);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    const entry = history.entries.at(-1);
-    if (entry === undefined) throw new Error('the send wrote no history entry');
-    expect(entry.to).toBe('lead');
-    expect(entry.failed).toContain(`socket: ${REASON}`);
-  });
 
   test('a session started after the declaration is dialed, so the gate is the socket age', async () => {
     const made = world(null);

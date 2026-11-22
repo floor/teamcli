@@ -113,9 +113,10 @@ describe('team ack marks one message read without printing it', () => {
     expect(signed).not.toBeNull();
     expect(verifyReceipt(signed!, messageKeyOf(home))).toBe(true);
     // The signed writer provenance names this build and this process beside the receipt's own
-    // fields; everything else is exactly what the receipt always carried.
+    // fields; the receipt names the ack as its reader, and it is the one file the ack writes.
     const { writer, ...fields } = signed!.payload;
-    expect(fields).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    expect(fields).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO, read_by: 'ack' });
+    expect(existsSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.ack.json`))).toBe(false);
     expect(writer).toEqual({ version: version(), pid: process.pid });
     // The message is no longer waiting, and the next read serves no body.
     expect(listUnread(recordDir(root, 'acme', 'owner'), { to: 'owner', root, session: 'acme' }, home)).toEqual([]);
@@ -198,7 +199,7 @@ describe('team ack marks one message read without printing it', () => {
     const result = await run([SENT], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' });
 
     expect(result.code).toBe(1);
-    expect(result.err).toBe(`team ack: record ${SENT} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged\n`);
+    expect(result.err).toBe(`team ack: record ${SENT} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged: the seat marks it read with \`team drops --read --seat worker\`\n`);
     expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), SENT, 'read'))).toBe(false);
   });
 
@@ -297,7 +298,7 @@ test('a client grant acknowledges an exact UUID and never a short prefix or a sc
 });
 
 
-for (const suffix of ['reported', 'wake', 'woken', 'json', 'new']) {
+for (const suffix of ['reported', 'wake', 'woken', 'json', 'new', 'wake-try', 'lead-episode', 'stuck-note', 'a-later-sidecar']) {
   test(`a short id ignores its ${suffix} sidecar`, async () => {
     sentTo('owner', SENT);
     const marker = join(recordDir(root, 'acme', 'owner'), `${SENT}.${suffix}`);
@@ -316,4 +317,56 @@ test('a short id still refuses a corrupt record sharing its prefix', async () =>
   const result = await run([SENT.slice(0, 8)]);
   expect(result.code).toBe(1);
   expect(result.err).toContain('cannot be read');
+});
+
+// The warm send host's first-effect check (rfc-bus-send-server §2.5; review round 1 F1): an
+// admitted ack whose client no longer holds at its first effect is handed back before any receipt,
+// folder or lock exists. Every file and folder under the scene keeps its bytes, mode, size and
+// mtime; in-process, the same ack then lands.
+describe('the hosted first-effect check', () => {
+  function tree(dir: string): Map<string, string> {
+    const { readdirSync, lstatSync } = require('node:fs') as typeof import('node:fs');
+    const out = new Map<string, string>();
+    const walk = (at: string): void => {
+      for (const name of readdirSync(at)) {
+        if (name === '.git') continue;
+        const path = join(at, name);
+        const stat = lstatSync(path);
+        const bytes = stat.isFile() ? readFileSync(path, 'base64') : '';
+        out.set(path, `${stat.isDirectory() ? 'd' : 'f'}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${bytes}`);
+        if (stat.isDirectory()) walk(path);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  test('an ack whose client changed before its first effect writes nothing at all', async () => {
+    const { armHostedGuard, disarmHostedGuard, HostedFallback, runAsHostedRequest } = await import('../src/host/request-scope.ts');
+    sentTo('worker', SENT);
+    place('worker', 'w2:p1');
+    const seat: Caller = { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' };
+    const before = tree(base);
+    armHostedGuard(() => 'the client is gone');
+    let error: unknown = null;
+    const hosted = testIo(root, seat);
+    let code: number | null = null;
+    try {
+      code = await runAsHostedRequest({ peerPid: 1, startPid: 1, currentParent: () => 1 }, () => runAck([SENT], hosted, host()));
+    } catch (thrown) {
+      error = thrown;
+    }
+    const guard = disarmHostedGuard();
+    // The ack catches the write's throw and reports it, but the fallback is latched: the host hands
+    // the line back (src/host/run.ts reads `fellBack`), and nothing the caught attempt began exists.
+    expect(error === null || error instanceof HostedFallback).toBe(true);
+    expect(code === null || code === 1).toBe(true);
+    expect(guard.fellBack).toContain('the client changed before the first effect');
+    expect(guard.first).toBeNull();
+    expect(tree(base)).toEqual(before);
+    expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), SENT, 'read'))).toBe(false);
+    // In-process, the same ack lands.
+    expect((await run([SENT], seat)).code).toBe(0);
+    expect(existsSync(receiptFile(recordDir(root, 'acme', 'worker'), SENT, 'read'))).toBe(true);
+  });
 });

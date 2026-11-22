@@ -29,9 +29,10 @@
 // that file changed was launched without the setting in force, and the socket it exposes is
 // older than the declaration. `inboundIsLive` compares the two so a not-yet-restarted seat is
 // skipped rather than sent a frame its session would hold.
-import { chmodSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
-import { cliHookSettingsPath, setsSettings } from '../launch/cli-hook.ts';
+import { cliHookSettingsPath, cliHookLegacySettingsPath, setsSettings } from '../launch/cli-hook.ts';
 import {
   inboundPolicyOf, launchWords, readDeclarationText, wrapperInboundOf, type CrossSessionInbound,
 } from '../launch/declaration.ts';
@@ -97,8 +98,20 @@ export function declaredInboundOf(input: {
   launch?: string;
 }): InboundDeclaration {
   const launch = input.launch ?? '';
-  const settings = cliHookSettingsPath(input.dir, input.session, input.seat);
-  if (settings !== null && !setsSettings(launch)) {
+  const current = cliHookSettingsPath(input.dir, input.session, input.seat);
+  // A seat launched before the settings files moved out of the project still runs with the old
+  // file on its line; that file decides for it until its next launch.
+  const legacy = cliHookLegacySettingsPath(input.dir, input.session, input.seat);
+  // A line that names no settings file ran with the generated one wherever it then lived: a seat
+  // launched before the move has only the file in the project state folder, and that file is its
+  // declaration (every such seat lost its socket route until this, 2026-11-12).
+  const legacyNamed = legacy !== null && setsSettings(launch) && onlyGeneratedSettings(launch, legacy);
+  const legacyOnly = legacy !== null && !setsSettings(launch)
+    && (current === null || mtimeOf(current) === null) && mtimeOf(legacy) !== null;
+  const settings = legacyNamed || legacyOnly ? legacy : current;
+  // A line recorded with the generated file already on it (a seat on a shipped launcher records
+  // its whole compiled line) still carries that file as its settings: the file decides.
+  if (settings !== null && (!setsSettings(launch) || onlyGeneratedSettings(launch, settings))) {
     const at = mtimeOf(settings);
     // The file is on the line: its own word decides, including "no word at all".
     if (at !== null) return { policy: policyAt(settings), declaredAt: at, source: settings, generated: true };
@@ -152,17 +165,18 @@ export function inboundSkipReason(policy: CrossSessionInbound | null): string {
  * and a session this build did not launch some other way still needs it. On top of that:
  *   - an explicit team-file `inbound: accept` authorizes any launch;
  *   - an explicit team-file `hold` or `refuse` always keeps the socket out, the documented opt-out;
- *   - with no team-file word at all, only a launch over this build's generated settings file is
- *     authorized by default: TeamCLI launched that seat, and the launch word is its attestation.
+ *   - with no team-file word at all the socket is never walked, whatever the launch declares
+ *     (comms roadmap, 2026-11-17): the receiving CLI frames a socket frame as a message from "another Claude
+ *     session … very likely working on their behalf", which is false for most senders, so the
+ *     socket is an opt-in a team declares and never an implied default. A Claude seat receives
+ *     through its development channel.
  */
 export function socketEligible(
   teamWord: CrossSessionInbound | undefined,
   declaration: InboundDeclaration,
 ): boolean {
   if (declaration.policy !== 'accept') return false;
-  if (teamWord === 'hold' || teamWord === 'refuse') return false;
-  if (teamWord === 'accept') return true;
-  return teamWord === undefined && declaration.generated === true;
+  return teamWord === 'accept';
 }
 
 /** The line a walk records instead of dialing, by both words: the team file's explicit opt-out
@@ -286,4 +300,10 @@ export function socketHeldReason(held: HeldSocket | null, declaration: InboundDe
     && (declaration.source !== held.source || declaration.declaredAt !== held.declaredAt);
   if (reconfirmed) return null;
   return 'its last socket frame was held at its box, and its declaration has not been re-confirmed since; restart its CLI host so it accepts';
+}
+
+/** True when every `--settings` value on the line is the generated per-seat file itself. */
+function onlyGeneratedSettings(launch: string, generated: string): boolean {
+  const values = [...launch.matchAll(/--settings(?:=|\s+)('[^']*'|"[^"]*"|\S+)/g)].map((m) => m[1]!.replace(/^['"]|['"]$/g, ''));
+  return values.length > 0 && values.every((value) => value === generated);
 }

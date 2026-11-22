@@ -227,8 +227,8 @@ describe('the standing create-grant scenes', () => {
     const upIo = testIo(repoRoot, IRIS);
     const up = await runUp([], upIo, sources);
     expect({ code: up, out: upIo.out, err: upIo.err }).toMatchObject({ code: 0 });
-    // The five seats' workspaces and the watch's own, which the same run creates.
-    expect(workspaces.length).toBe(6);
+    // 1352 creates the five seat workspaces and no watch workspace.
+    expect(workspaces.length).toBe(5);
   });
 
   test('a path outside the grant is refused, by `..` and by symlink', async () => {

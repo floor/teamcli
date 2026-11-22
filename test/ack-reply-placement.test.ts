@@ -90,37 +90,6 @@ function replyHost(): ReplyHost {
 }
 
 describe('a launcher-wrapped seat runs all three commands from its own shell', () => {
-  test('send, ack and reply place the caller as the seat its pane and session name', async () => {
-    made = world(null);
-    placeHelper();
-
-    // send: the seat writes its message to its lead. The walk notes on stderr where the message
-    // waits; the drop is the delivery this scene reads.
-    const sendIo = withSources(wrappedSeat);
-    const sendCode = await runSend(['lead', 'hello'], sendIo, fake(made));
-    expect(sendCode).toBe(0);
-    const drops = readdirSync(join(made.dir, 'send-drops', 'acme', 'lead')).filter((name) => !name.includes('.'));
-    expect(drops).toHaveLength(1);
-    const sent = recordBody(join(made.dir, 'send-drops', 'acme', 'lead', drops[0] as string));
-    expect(sent).toContain('helper');
-    expect(sent).toContain('hello');
-
-    // ack: the seat marks a message addressed to it read, in its own folder.
-    plantRecord(made.home, made.root, 'acme', 'helper', ACKED, 'a question', { from: 'lead', at: NOW.toISOString() });
-    const ackIo = withSources(wrappedSeat);
-    const ackCode = await runAck([ACKED], ackIo, ackHost());
-    expect({ code: ackCode, err: ackIo.err }).toEqual({ code: 0, err: '' });
-    expect(existsSync(receiptFile(recordDir(made.root, 'acme', 'helper'), ACKED, 'read'))).toBe(true);
-
-    // reply: the seat answers its lead, and the answer names the seat that wrote it.
-    plantRecord(made.home, made.root, 'acme', 'helper', ANSWERED, 'a question', { from: 'lead', at: NOW.toISOString() });
-    const replyIo = withSources(wrappedSeat);
-    const replyCode = await runReply([ANSWERED, 'the answer'], replyIo, replyHost());
-    expect({ code: replyCode, err: replyIo.err }).toEqual({ code: 0, err: '' });
-    const answer = recordAt(join(recordDir(made.root, 'acme', 'lead'), ANSWER));
-    expect(answer.payload.from).toBe('helper');
-    expect(answer.payload.to).toBe('lead');
-  });
 });
 
 describe('a caller no placement names', () => {

@@ -1,3 +1,5 @@
+import { copyFor } from '../queue/handover.ts';
+import { isStampedPayload } from '../send/record.ts';
 // `team show <id>`: prints the full rendered body of one message record in the caller's own
 // mailbox and marks it read with the same signed read receipt `team messages` and `team ack`
 // publish (`src/send/read-receipt.ts`).
@@ -12,6 +14,9 @@
 //   `↩ team reply <id> "…" · team ack <id>`
 // Re-running `team show <id>` on an already-read or already-replied record in the caller's own
 // mailbox still prints the full message idempotently.
+import { isExposeOwner } from '../queue/exposure.ts';
+import { ownerOfClaim } from '../send/read-claim.ts';
+import { claimRead } from '../send/read-claim.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -42,6 +47,7 @@ import {
   recordHits,
   samePath,
 } from './reply.ts';
+import { mailDirOf, seatMailParts } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team show <id> [--json]
 
@@ -92,8 +98,10 @@ function shownOut(io: Io, json: boolean, doc: Record<string, unknown>, text: str
 }
 
 /** The relative path of one record's receipt, as the caller reads it in a repair line. */
-function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied'): string {
-  return join('.agents', 'send-drops', session, seat, `${id}.${status}.json`);
+function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied', recordPath?: string): string {
+  // The tree the record lives in (src/queue/mail-tree.ts): a stamped record's receipt is beside it.
+  const tree = recordPath === undefined ? 'legacy' : (mailDirOf(dirname(recordPath))?.tree ?? 'legacy');
+  return join(...seatMailParts(session, seat, tree), `${id}.${status}.json`);
 }
 
 export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<number> {
@@ -197,19 +205,40 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
 
   const dropDir = recordDir(root, session, found.seat);
   const at = host.now().toISOString();
-  const outcome = publishRecordRead({
-    dropDir,
-    id: resolvedId,
-    to: found.seat,
-    root,
-    session,
-    home: host.home,
-    key,
-    at,
-    lead: loaded.team.orchestrator,
-  });
+  // The one read claim every body-serving reader takes (src/send/read-claim.ts).
+  const claim = claimRead(dropDir, resolvedId);
+  // rfc-event-comms §3 (E6): a body a leg's hand-over holds (exposed, or exposed-unconfirmed) is
+  // reread deliberately here: shown, with no read receipt written — the honest recovery path.
+  const reshown = !claim.ok && claim.why === 'recovering' && isExposeOwner(ownerOfClaim(dropDir, resolvedId));
+  if (!claim.ok && !reshown) {
+    return refused(
+      io,
+      json,
+      `${resolvedId}: not shown: ${claim.why === 'recovering'
+        ? 'it is being recovered from an interrupted read'
+        : claim.why === 'busy' ? 'another reader is handing it over'
+          : claim.why === 'unwritable' ? 'the read receipt could not be written (its read claim could not be taken)'
+            : 'its read claim cannot be taken now'}; run team show again in a moment`,
+    );
+  }
+  let outcome: ReturnType<typeof publishRecordRead> | { kind: 'reshown' } = { kind: 'reshown' };
+  if (claim.ok) try {
+    outcome = publishRecordRead({
+      dropDir,
+      id: resolvedId,
+      to: found.seat,
+      root,
+      session,
+      home: host.home,
+      key,
+      at,
+      lead: loaded.team.orchestrator,
+    });
+  } finally {
+    claim.release();
+  }
   if (outcome.kind === 'held') {
-    const where = receiptPath(session, found.seat, resolvedId, outcome.status);
+    const where = receiptPath(session, found.seat, resolvedId, outcome.status, found.path);
     const what =
       outcome.entry === 'file'
         ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`
@@ -245,12 +274,13 @@ export async function runShow(argv: string[], io: Io, host: ShowHost): Promise<n
 
   const existingIds = existingRecordIdsIn(dropDir);
   const prefix = shortIdPrefix(resolvedId, existingIds);
-  const renderedBody = attributedBody(shown.body, shown.from, {
+  // E7b: a deliberate reread of a stamped record is one more numbered copy.
+  const renderedBody = copyFor(attributedBody(shown.body, shown.from, {
     record: shown,
     home: host.home,
     root,
     rule: shown.rule,
-  }).replace(/\n+$/, '');
+  }).replace(/\n+$/, ''), dropDir, resolvedId, isStampedPayload(shown), 'read');
   const footer = readerLine(resolvedId, existingIds);
   const content = `${renderedBody}\n\n${footer}`;
 

@@ -1,5 +1,5 @@
 // A folder with no git repository: flagless load reads `.agents/team.yaml` there and nowhere
-// above it, `up` starts a watch only when that watch would read the file it was given, and the
+// above it, `up` launches seats without a pane watch, and the
 // caller gate and the approval still decide once the file is found.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn } from 'node:child_process';
@@ -139,10 +139,10 @@ function world(): {
     sessionUp: () => session === 'running',
     createWorkspace(_session, cwd, label) {
       n++;
-      const pane = `w${n}:p1`;
+      const pane = `synthetic-ws-${n}:p1`;
       panes.set(pane, { text: IDLE, agent: false });
       creates.push({ label, cwd });
-      return { pane, workspace: `w${n}` };
+      return { pane, workspace: `synthetic-ws-${n}` };
     },
     paneRun(_session, pane, command) {
       runs.push({ pane, command });
@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
 }
 
 describe('a folder with no git repository', () => {
-  test('up --file .agents/team.yaml starts a watch that reads that file', async () => {
+  test('up --file .agents/team.yaml launches from that folder without a pane watch', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     const file = join(root, '.agents', 'team.yaml');
@@ -355,32 +355,16 @@ describe('a folder with no git repository', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    const watchdog = made.creates.find((created) => created.label === watchLabel('acme'));
-    expect(watchdog?.cwd).toBe(root);
-    expect(io.err).toContain('watch: started\n');
-    const command = made.runs.find((run) => /\bwatch\b/.test(run.command))?.command ?? '';
-    expect(command).toContain(' watch');
-    expect(command).not.toContain('--file');
-
-    const beat = await runAsPane(command, root, home);
-    expect(beat.heartbeat).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(beat.pid).toBeGreaterThan(0);
+    // 631ddc9d3: the daemon owns the watch; preserve the flagged-folder and ready-seat checks.
+    expect(made.creates.map(({ cwd }) => cwd)).toEqual([root, root]);
+    expect(io.out).toContain('claude-coordinator-acme: ready\n');
+    const commands = made.runs.map(({ command }) => command);
+    expect(commands).toHaveLength(2);
+    expect(commands.every((command) => command.startsWith('AGENT_UNATTENDED=1 claude '))).toBe(true);
+    const ready = readState(join(root, '.agents')).sessions[SESSION]?.seats['claude-coordinator-acme'];
+    expect(ready?.last_active).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(made.creates.length).toBeGreaterThan(0);
   }, 20_000);
-
-  // Earlier rule, reversed by the status caller rule:
-  // a plain folder's seat reads status with no flag whatever pane it is on, and that run writes nothing.
-  test.skip("a seat's status with no flag reads the file and writes nothing", async () => {
-    const { home } = fresh();
-    const root = join(base, 'acme');
-    mkdirSync(join(root, '.agents'), { recursive: true });
-    writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
-    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
-    const code = await runStatus([], io, statusSources(home));
-    expect(code).not.toBe(2);
-    expect(io.err).not.toContain('not inside a git repository');
-    expect(io.out).toContain('team acme');
-    expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
-  });
 
   test('a seat on its recorded pane reads a plain folder with no flag and writes nothing', async () => {
     const { home } = fresh();
@@ -389,10 +373,10 @@ describe('a folder with no git repository', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
     updateState(join(root, '.agents'), (state) => {
       const session = (state.sessions[SESSION] ??= emptySession());
-      session.seats['claude-coordinator-acme'] = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' };
+      session.seats['claude-coordinator-acme'] = { stage: 'ready', pane: 'synthetic-ws-1:p1', workspace: 'synthetic-ws-1' };
     });
     const before = readFileSync(join(root, '.agents', 'team.state.json'), 'utf8');
-    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
+    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION });
     const code = await runStatus([], io, statusSources(home));
     expect(code).not.toBe(2);
     expect(io.err).not.toContain('not inside a git repository');
@@ -406,7 +390,7 @@ describe('a folder with no git repository', () => {
     const root = join(base, 'acme');
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
-    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION });
+    const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION });
     const code = await runStatus([], io, statusSources(home));
     expect(code).toBe(2);
     expect(io.err).toBe('team status: this team is not yours to read\n');
@@ -420,13 +404,13 @@ describe('a folder with no git repository', () => {
     mkdirSync(join(root, '.agents'), { recursive: true });
     writeFileSync(join(root, '.agents', 'team.yaml'), teamText(root));
 
-    const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1', session: 'elsewhere' });
+    const seat = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'synthetic-ws-9:p1', session: 'elsewhere' });
     const refused = await runAdd(['claude-coordinator-acme'], seat, addSources(home));
     expect(refused).toBe(1);
     expect(seat.err).toContain('only the owner or a standing grant (delegate)');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
 
-    const doctorIo = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'w9:p1' });
+    const doctorIo = testIo(root, { kind: 'seat', name: 'other-seat', pane: 'synthetic-ws-9:p1' });
     await runDoctor([], doctorIo, doctor(home));
     expect(doctorIo.err).not.toContain('not inside a git repository');
     expect(readdirSync(join(root, '.agents')).sort()).toEqual(['team.yaml']);
@@ -455,7 +439,7 @@ describe('a folder with no git repository', () => {
 });
 
 describe('a file the watch would not read', () => {
-  test('up --file custom/team.yaml records a watch that reads the flagged file', async () => {
+  test('up --file custom/team.yaml launches there and manual watch only reports', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -471,32 +455,32 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    const watchdog = made.creates.find((created) => created.label === watchLabel('acme'));
-    expect(watchdog?.cwd).toBe(customDir);
-    const run = made.runs.find((item) => /\bwatch\b/.test(item.command));
-    expect(run?.command).toContain(' watch');
-    expect(run?.command).not.toContain('--file');
-    expect(run?.command).toContain(`--session ${SESSION}`);
+    // 631ddc9d3: no pane watch or watchdog record; hand-run watch is a read-only report.
+    expect(made.creates.map(({ cwd }) => cwd)).toEqual([customDir, customDir]);
+    const commands = made.runs.map(({ command }) => command);
+    expect(commands).toHaveLength(2);
+    expect(commands.join('\n')).not.toContain('--file');
+    expect(io.out).toContain('claude-operator-acme: ready\n');
+    const statePath = join(customDir, 'team.state.json');
+    const before = readFileSync(statePath, 'utf8');
 
-    const other = testIo(customDir, { kind: 'pane', pane: 'w9:p1' });
-    const refused = await runWatch(['--session', SESSION], other, watchSources(home));
-    expect(refused).toBe(1);
-    expect(other.err).toContain('only the watch this session records');
-    expect(readState(customDir).sessions[SESSION]?.watch?.pane).toBe(run?.pane);
+    const other = testIo(customDir, { kind: 'pane', pane: 'synthetic-ws-9:p1' });
+    const reported = await runWatch(['--session', SESSION], other, watchSources(home));
+    expect(reported).toBe(0);
+    expect(other.out).toContain(`the daemon does not host session ${SESSION}`);
+    expect(readState(customDir).sessions[SESSION]?.watch?.pane).toBeUndefined();
 
-    const watching = testIo(customDir, { kind: 'pane', pane: run?.pane ?? '' });
+    const watching = testIo(customDir, { kind: 'pane', pane: 'synthetic-ws-1:p1' });
     const watched = await runWatch(['--session', SESSION], watching, watchSources(home));
     expect(watched, watching.out + watching.err).toBe(0);
-    expect(watching.out).toContain(`watching the session "${SESSION}"`);
-    const pane = run?.pane;
-    if (!pane) throw new Error('the watchdog pane was not recorded');
-    expect(readState(customDir).last_valid?.file).toBe(customBody);
-    expect(readState(customDir).sessions[SESSION]?.watchdog).toEqual({ file: custom, pane });
+    expect(watching.out).toContain(`the daemon does not host session ${SESSION}`);
+    expect(readFileSync(custom, 'utf8')).toBe(customBody);
+    expect(readFileSync(statePath, 'utf8')).toBe(before);
     expect(readState(join(root, '.agents')).last_valid?.file).not.toBe(customBody);
     expect(readState(join(root, '.agents')).sessions[SESSION]?.watch).toBeUndefined();
   });
 
-  test('a dry run prints the watchdog and does not say the watch was left unstarted', async () => {
+  test('a dry run previews seats without a watchdog or an unstarted-watch warning', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -512,7 +496,9 @@ describe('a file the watch would not read', () => {
     const preview = await runUp(['--dry-run', '--file', custom], dry, upSources(home, world()));
     expect(preview).toBe(0);
     expect(dry.out).toContain('dry run: nothing was run\n');
-    expect(dry.out).toContain("--label 'Watch · acme'");
+    // 631ddc9d3: only seat workspaces belong in the preview.
+    expect(dry.out).toContain('claude-coordinator-acme');
+    expect(dry.out).not.toContain("--label 'Watch · acme'");
     expect(dry.out).not.toContain('--file');
     expect(dry.out).not.toContain('watch: not started');
     expect(dry.err).not.toContain('watch: not started');
@@ -530,7 +516,8 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', custom], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates.some((created) => created.label === watchLabel('acme'))).toBe(true);
+    // 631ddc9d3: the daemon watch adds no workspace to the two launched seats.
+    expect(made.creates.map(({ label }) => label)).toEqual(['coordinator', 'operator']);
     const command = made.runs.find((run) => /\bwatch\b/.test(run.command))?.command ?? '';
     expect(command).not.toContain('--file');
     expect(command.includes('\x1b')).toBe(false);
@@ -544,7 +531,7 @@ describe('a file the watch would not read', () => {
     expect(dry.out).not.toContain('watch: not started');
   });
 
-  test('the default path starts the watch', async () => {
+  test('the default path launches its seats without a pane watch', async () => {
     const { home } = fresh();
     const root = join(base, 'acme');
     mkdirSync(root);
@@ -559,8 +546,9 @@ describe('a file the watch would not read', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', file], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(made.creates.some((created) => created.label === watchLabel('acme'))).toBe(true);
-    expect(io.err).toContain('watch: started\n');
+    // 631ddc9d3: the daemon watch adds no workspace to the two launched seats.
+    expect(made.creates.map(({ label }) => label)).toEqual(['coordinator', 'operator']);
+    expect(io.out).toContain('claude-operator-acme: ready\n');
     expect(io.out).not.toContain('watch: not started');
     expect(io.err).not.toContain('watch: not started');
   });
@@ -582,7 +570,7 @@ function quietHosts(home: string): StatusSources {
 }
 
 const NOT_YOURS = 'team status: this team is not yours to read\n';
-const LINK_SEAT = { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION };
+const LINK_SEAT = { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION };
 
 function expectUnfollowed(cwd: string, home: string): void {
   const loaded = loadTeamFile(cwd, { home });
@@ -619,7 +607,7 @@ async function bothRefuse(cwd: string, home: string): Promise<void> {
   expect(loaded.errors[0]?.message).toBe(LINK_NOT_FOLLOWED);
   for (const caller of [
     { kind: 'owner' as const },
-    { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'w1:p1', session: SESSION },
+    { kind: 'seat' as const, name: 'claude-coordinator-acme', pane: 'synthetic-ws-1:p1', session: SESSION },
   ]) {
     const io = testIo(cwd, caller);
     const code = await runStatus([], io, quietHosts(home));
@@ -630,27 +618,6 @@ async function bothRefuse(cwd: string, home: string): Promise<void> {
 }
 
 describe('a link is not a plain folder\'s team file', () => {
-  // Earlier rule, reversed by the status caller rule:
-  // a seat is shown the same link refusal as the owner when .agents is a link, and the link is not followed.
-  test.skip('a link at .agents is not followed', async () => {
-    const { home } = fresh();
-    const plain = join(base, 'plain');
-    const vault = join(base, 'vault');
-    mkdirSync(plain);
-    mkdirSync(vault);
-    const target = join(vault, 'team.yaml');
-    writeFileSync(target, teamText(plain));
-    symlinkSync(vault, join(plain, '.agents'));
-    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(vault).sort() };
-
-    await bothRefuse(plain, home);
-
-    expect(readFileSync(target, 'utf8')).toBe(before.text);
-    expect(readdirSync(vault).sort()).toEqual(before.names);
-    expect(readdirSync(plain).sort()).toEqual(['.agents']);
-    expect(lstatSync(join(plain, '.agents')).isSymbolicLink()).toBe(true);
-  });
-
   test('a link at .agents is not followed for the owner', async () => {
     const { home } = fresh();
     const plain = join(base, 'plain');
@@ -689,27 +656,6 @@ describe('a link is not a plain folder\'s team file', () => {
     expect(lstatSync(join(plain, '.agents')).isSymbolicLink()).toBe(true);
   });
 
-  // Earlier rule, reversed by the status caller rule:
-  // a seat is shown the same link refusal as the owner when team.yaml is a link, and the link is not followed.
-  test.skip('a link at team.yaml is not followed', async () => {
-    const { home } = fresh();
-    const plain = join(base, 'plain');
-    const vault = join(base, 'vault');
-    mkdirSync(join(plain, '.agents'), { recursive: true });
-    mkdirSync(vault);
-    const target = join(vault, 'secret.yaml');
-    writeFileSync(target, teamText(plain));
-    symlinkSync(target, join(plain, '.agents', 'team.yaml'));
-    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(vault).sort() };
-
-    await bothRefuse(plain, home);
-
-    expect(readFileSync(target, 'utf8')).toBe(before.text);
-    expect(readdirSync(vault).sort()).toEqual(before.names);
-    expect(readdirSync(join(plain, '.agents')).sort()).toEqual(['team.yaml']);
-    expect(existsSync(join(plain, '.agents', 'team.state.json'))).toBe(false);
-  });
-
   test('a link at team.yaml is not followed for the owner', async () => {
     const { home } = fresh();
     const plain = join(base, 'plain');
@@ -746,39 +692,6 @@ describe('a link is not a plain folder\'s team file', () => {
     expect(readdirSync(vault).sort()).toEqual(before.names);
     expect(readdirSync(join(plain, '.agents')).sort()).toEqual(['team.yaml']);
     expect(existsSync(join(plain, '.agents', 'team.state.json'))).toBe(false);
-  });
-
-  // Earlier rule, reversed by the status caller rule:
-  // a seat is shown the same link refusal as the owner when the link's target is inside the same folder, and the link is not followed.
-  test.skip('a link whose target is inside the same folder is not followed', async () => {
-    const { home } = fresh();
-    const plain = join(base, 'plain');
-    const agents = join(plain, '.agents');
-    mkdirSync(agents, { recursive: true });
-    const target = join(agents, 'real.yaml');
-    writeFileSync(target, teamText(plain));
-    symlinkSync('real.yaml', join(agents, 'team.yaml'));
-    const before = { text: readFileSync(target, 'utf8'), names: readdirSync(agents).sort() };
-
-    await bothRefuse(plain, home);
-
-    expect(readFileSync(target, 'utf8')).toBe(before.text);
-    expect(readdirSync(agents).sort()).toEqual(before.names);
-    expect(readlinkSync(join(agents, 'team.yaml'))).toBe('real.yaml');
-
-    const held = join(base, 'held');
-    const inside = join(held, 'nested');
-    mkdirSync(inside, { recursive: true });
-    const nestedFile = join(inside, 'team.yaml');
-    writeFileSync(nestedFile, teamText(held));
-    symlinkSync('nested', join(held, '.agents'));
-    const nestedBefore = { text: readFileSync(nestedFile, 'utf8'), names: readdirSync(inside).sort() };
-
-    await bothRefuse(held, home);
-
-    expect(readFileSync(nestedFile, 'utf8')).toBe(nestedBefore.text);
-    expect(readdirSync(inside).sort()).toEqual(nestedBefore.names);
-    expect(readdirSync(held).sort()).toEqual(['.agents', 'nested']);
   });
 
   test('a link whose target is inside the same folder is not followed for the owner', async () => {
@@ -841,32 +754,6 @@ describe('a link is not a plain folder\'s team file', () => {
     expect(readFileSync(nestedFile, 'utf8')).toBe(nestedBefore.text);
     expect(readdirSync(inside).sort()).toEqual(nestedBefore.names);
     expect(readdirSync(held).sort()).toEqual(['.agents', 'nested']);
-  });
-
-  // Earlier rule, reversed by the status caller rule:
-  // a seat is shown the same link refusal as the owner when the link dangles, and the link is not followed.
-  test.skip('a dangling link is not followed', async () => {
-    const { home } = fresh();
-    const plain = join(base, 'plain');
-    mkdirSync(plain);
-    const missing = join(base, 'missing');
-    symlinkSync(missing, join(plain, '.agents'));
-
-    await bothRefuse(plain, home);
-
-    expect(existsSync(missing)).toBe(false);
-    expect(readlinkSync(join(plain, '.agents'))).toBe(missing);
-    expect(readdirSync(plain).sort()).toEqual(['.agents']);
-
-    const agents = join(base, 'file-link', '.agents');
-    mkdirSync(agents, { recursive: true });
-    symlinkSync(join(base, 'gone.yaml'), join(agents, 'team.yaml'));
-
-    await bothRefuse(join(base, 'file-link'), home);
-
-    expect(existsSync(join(base, 'gone.yaml'))).toBe(false);
-    expect(readdirSync(agents).sort()).toEqual(['team.yaml']);
-    expect(lstatSync(join(agents, 'team.yaml')).isSymbolicLink()).toBe(true);
   });
 
   test('a dangling link is not followed for the owner', async () => {

@@ -1,8 +1,9 @@
-// The five sidebar words as the machine's chain resolves them (the sidebar-metadata design of
-// 2026-11-04): the rows layout, the manage switch, the status indicators, the metadata ttl and
-// the refresh interval. One chain read fills all five. A chain that cannot be read, verified or
-// ordered leaves the release defaults in force — the sidebar is presentation, and an unreadable
-// word never blocks a launch or a chores pass.
+// The sidebar words as the machine's chain resolves them (the sidebar-metadata design of
+// 2026-11-04): the rows layout, the manage switch, the status indicators, the row gap, the
+// metadata ttl and the refresh interval. One chain read fills them. A chain that cannot be
+// read, verified or ordered leaves the release defaults in force — the sidebar is presentation,
+// and an unreadable word never blocks a launch or a chores pass. The row gap's release default
+// is unset: a chain that only carries the catalogue default does not write `row_gap`.
 import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import { DEFAULT_SIDEBAR_ROWS, SIDEBAR_TTL_CAP_MS, STATUS_INDICATOR_VALUES } from '../herdr.ts';
@@ -37,10 +38,11 @@ export type SidebarTiming = {
   refreshMs: number;
 };
 
-/** All five sidebar words in force, with the release defaults filled in. */
-export type SidebarPolicy = SidebarLayout & SidebarTiming & { manage: boolean };
+/** The sidebar words in force, with the release defaults filled in. `rowGap` is absent when
+ *  no level declared `workspace.sidebar.row_gap`. */
+export type SidebarPolicy = SidebarLayout & SidebarTiming & { manage: boolean; rowGap?: number };
 
-/** Resolves the five sidebar words up to the team level. Anything that cannot be read leaves
+/** Resolves the sidebar words up to the team level. Anything that cannot be read leaves
  *  the release default: the default rows layout, symbols, managing on, the one-day ttl and the
  *  six-hour refresh. */
 export function sidebarPolicy(context: SidebarPolicyContext): SidebarPolicy {
@@ -75,6 +77,9 @@ export function sidebarPolicy(context: SidebarPolicyContext): SidebarPolicy {
 
   // Only an explicit off switches managing off; anything unreadable keeps the default on.
   if (chain.policies['workspace.sidebar.manage']?.value === 'off') policy.manage = false;
+
+  const gap = chain.policies['workspace.sidebar.row_gap'];
+  if (gap !== undefined && gap.level !== 'default' && typeof gap.value === 'number') policy.rowGap = gap.value;
 
   const ttlWord = chain.policies['daemon.sidebar-ttl-ms']?.value;
   if (typeof ttlWord === 'number') policy.ttlMs = Math.min(ttlWord, SIDEBAR_TTL_CAP_MS);

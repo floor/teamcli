@@ -119,10 +119,15 @@ test('restart with no installed unit stops nothing', () => underRegistry(async (
   expect(await runDaemon(['restart', '--json'], io.value, w.sources)).toBe(1);
   expect(io.document().error.id).toBe('daemon.not-installed'); expect(w.calls).toEqual([]); expect(w.running()).toBe(false);
 }));
-test('an unanswered restart rolls back and confirms the previous unit answers again', () => underRegistry(async () => {
+test('a restart whose daemon is gone rolls back and confirms the previous unit answers again', () => underRegistry(async () => {
   const w = world(); w.seed(); const before = readFileSync(w.unit, 'utf8'); const checks: number[] = [];
   const io = w.io({ kind: 'owner' });
-  const health = async () => { checks.push(w.loads()); return w.reading(w.loads() >= 2); };
+  // The restarted daemon is gone (no process, no socket): only that is rolled back. A daemon alive
+  // and still silent is reported as starting instead (test/daemon-restart.test.ts).
+  const health = async () => {
+    checks.push(w.loads());
+    return w.loads() >= 2 ? w.reading(true) : { ...w.reading(false), state: 'not-running' as const, running: false, pid: null };
+  };
   expect(await runDaemon(['restart', '--json'], io.value, { ...w.sources, health })).toBe(1);
   expect(io.document().error.id).toBe('daemon.restart-rolled-back');
   expect(w.calls.map(c => c.args[0])).toEqual(['bootout', 'bootstrap', 'bootout', 'bootstrap']);

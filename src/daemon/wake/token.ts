@@ -9,7 +9,7 @@
 //
 // It lives in its own module so the child's entry can read a token without loading the spawner.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { claimOneUseToken, pidAlive, sweepSpentClaims, type WriteTokenOptions } from '../one-use-token.ts';
 import { machineConfigDir, wakeInheritPath } from '../paths.ts';
 

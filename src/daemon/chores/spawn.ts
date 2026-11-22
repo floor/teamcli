@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../../diagnostics/beat-work.ts';
 // Starting one chores child, and reading the token it was started with.
 //
 // A child is a second process running the child entry beside this module, so it has its own
@@ -26,6 +27,7 @@ import {
   type ChoresHostMessage,
 } from './protocol.ts';
 import { writeChoresInherit } from './token.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 export type ChoresChildEvent =
   | { kind: 'message'; message: ChoresChildMessage }
@@ -170,6 +172,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
   const spawnProcess = input.spawn ?? spawn;
   let child: ReturnType<typeof spawn>;
   try {
+    hostedCommit('node:child_process.spawn');
     child = spawnProcess(process.execPath, [entry, '--inherited', nonce], {
       cwd: input.config.routes[0]?.root ?? dirname(entry),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -336,7 +339,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
 
   child.stdout?.setEncoding('utf8');
   let stdoutBuffer = '';
-  child.stdout?.on('data', (chunk: string) => {
+  child.stdout?.on('data', (chunk: string) => traceBeatWork('chores frames (sync)', () => {
     stdoutBuffer += chunk;
     let nl = stdoutBuffer.indexOf('\n');
     while (nl !== -1) {
@@ -363,7 +366,7 @@ export function spawnChoresChild(input: SpawnChoresInput): ChoresChild {
       stdoutBuffer = '';
       emit({ kind: 'note', text: 'a child frame exceeded the frame limit and was dropped' });
     }
-  });
+  }));
 
   let stderrBuffer = '';
   child.stderr?.setEncoding('utf8');

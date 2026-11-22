@@ -69,7 +69,7 @@ export type HostedWatch = HostedWatchHandle & {
 /** What a hosted route may do outbound right now. */
 export type HostedEffects = 'blocked' | 'open';
 
-type Waiter = { due: number; resolve(ok: boolean): void };
+type Waiter = { due: number; between: boolean; resolve(ok: boolean): void };
 
 export function createHostedWatch(input: HostedWatchInput): HostedWatch {
   const now = input.now ?? (() => new Date());
@@ -120,9 +120,12 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     }
   };
 
+  // A nudge that landed while the run was mid-pass: its next wait ends at once.
+  let nudged = false;
   const loop: HostedLoop = {
     signal: controller.signal,
-    wait(ms) {
+    wait(ms, options) {
+      const between = options?.between === true;
       // A wait registered after the stop resolves false at once: a loop that slept through its
       // own cancellation never starts another pass.
       if (stopped) return Promise.resolve(false);
@@ -132,8 +135,13 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
         faultArmed = false;
         return Promise.resolve(false);
       }
+      // A nudge is answered only at the between-pass wait; a pass's own sleeps keep it pending.
+      if (between && nudged) {
+        nudged = false;
+        return Promise.resolve(true);
+      }
       return new Promise<boolean>((resolve) => {
-        waiters.add({ due: now().getTime() + Math.max(0, ms), resolve });
+        waiters.add({ due: now().getTime() + Math.max(0, ms), between, resolve });
       });
     },
     cycled(at) {
@@ -145,6 +153,21 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       why = null;
       if (phase === 'starting') phase = 'running';
       input.onCycle?.(at);
+    },
+    nudge() {
+      // Only a running loop is started early: a stop, a standby or a failed pulse owns its exit.
+      if (stopped || phase === 'standby' || terminalFailure) return;
+      // Only the between-pass wait ends early. A settle delay or a sleep inside a pass (a typed
+      // wake's, a paste read back) runs its full time; the nudge waits for the pass's end.
+      const between = [...waiters].filter((waiter) => waiter.between);
+      if (between.length === 0) {
+        nudged = true;
+        return;
+      }
+      for (const waiter of between) {
+        waiters.delete(waiter);
+        waiter.resolve(true);
+      }
     },
     standby(reason) {
       if (stopped) return;

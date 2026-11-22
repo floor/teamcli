@@ -133,7 +133,7 @@ export async function runDevelopmentMode(
       const read = readDevelopmentMode(home);
       const caller = walkCaller(rawIo);
       const owner = isOwner(caller);
-      const token = ownerAuthorized(rawIo.env, fingerprint);
+      const token = ownerAuthorized(rawIo.env, fingerprint, home);
       // The owner-seat door, exactly as `team config set … --request` opens it: the request binds
       // this machine switch to the caller's repository, team, HEAD and words, and the owner's
       // answer to it is the approval. No charter admits this switch (see `ownerSeatStep`).

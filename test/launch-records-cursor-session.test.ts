@@ -59,9 +59,10 @@ function sceneOf(world: World) {
     agentList: () => [listed()],
     workspacePanes: () => [PANE],
     processInfo: () => ({ shell: SHELL, foreground: [CLI] }),
+    processStartOf: (pid) => pid === SHELL ? 1_700_000_000_000 : 1_700_000_000_500,
     classify: (): ScreenKind => 'idle',
     paneText: () => IDLE_SCREEN,
-    foreground: () => ['cursor-agent'],
+    foreground: () => world.agent === 'claude' ? ['claude'] : ['cursor-agent'],
     shellBack: () => false,
     agentStatus: () => null,
     sleep: async (ms) => {
@@ -86,7 +87,7 @@ function sceneOf(world: World) {
 }
 
 /** A Cursor seat's launch: the line runs in a new pane, then the idle wait and the naming. */
-function launchSteps(): Step[] {
+function launchSteps(cli = 'cursor', command = LINE): Step[] {
   return [
     {
       kind: 'run',
@@ -95,10 +96,10 @@ function launchSteps(): Step[] {
         do: 'launch',
         seat: SEAT,
         label: SEAT,
-        command: LINE,
+        command,
         pane: PANE,
         workspace: SPACE,
-        cli: 'cursor',
+        cli,
         cwd: '.',
       },
     },
@@ -109,9 +110,9 @@ function launchSteps(): Step[] {
         do: 'idle',
         seat: SEAT,
         label: SEAT,
-        cli: 'cursor',
+        cli,
         seconds: 90,
-        command: LINE,
+        command,
         pane: PANE,
         workspace: SPACE,
         repairLine: 'team remove worker',
@@ -120,7 +121,7 @@ function launchSteps(): Step[] {
     {
       kind: 'run',
       argv: [],
-      do: { do: 'rename', seat: SEAT, label: SEAT, cli: 'cursor', seconds: 90, rules: 'option', pane: PANE },
+      do: { do: 'rename', seat: SEAT, label: SEAT, cli, seconds: 90, rules: 'option', pane: PANE },
     },
   ];
 }
@@ -146,4 +147,16 @@ test("a reading herdr attributes to another CLI is never this seat's session", a
   const scene = sceneOf({ agent: 'codex', session: 'fixture-session-other' });
   await executePlan(launchSteps(), SESSION, scene.host);
   expect(sessionsRecorded(scene.records)).toEqual([]);
+});
+
+test('a same-pane Claude relaunch records shell anchors without creating a workspace', async () => {
+  const scene = sceneOf({ agent: 'claude', session: LIVE_SESSION });
+  scene.host.createWorkspace = () => { throw new Error('the existing pane must be reused'); };
+  await executePlan(launchSteps('claude-code', 'fixture-custom-launcher'), SESSION, scene.host);
+  const record = scene.records.find(entry => entry.patch.launched !== undefined)?.patch;
+  expect(record?.pane_shell).toBe(SHELL);
+  expect(record?.pane_shell_start).toBe(1_700_000_000_000);
+  expect(record?.launched?.cli_start).toEqual([1_700_000_000_500]);
+  expect(record?.agent_session).toBe(LIVE_SESSION);
+  expect(scene.finals).toContain(`${SEAT}: ready`);
 });

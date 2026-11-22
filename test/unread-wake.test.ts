@@ -12,15 +12,19 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { deliverTypedWake } from '../src/send/typed-wake.ts';
 import { listUnacked } from '../src/commands/messages.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { permittedEventLegs } from '../src/commands/send.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { CLIENT_RULE } from '../src/client/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
+import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { listUnread, MESSAGE_ID, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -41,8 +45,11 @@ import { MailPass } from '../src/watch/mail-pass.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { defaultWatch } from '../src/file/sections/watch.ts';
 import { declaredUnreadAfter, UNREAD_AFTER_PULL_SECONDS, UNREAD_AFTER_WAKEABLE_SECONDS, unreadWindowSeconds } from '../src/watch/rhythm.ts';
-import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
+import { wakeAttemptOf } from '../src/watch/wake-attempt.ts';
+import { reportStuckSeats, reportUnreadDrops, reportedPath, wakeBackoffMs, wakeLinesPath, WAKE_SLOW_MAX_AGE_MS, wakePath, wakeTryPath, wakeUnreadDrops } from '../src/watch/unread.ts';
 import type { TypedWakeResult } from '../src/send/typed-wake.ts';
+import { unrecognisedScreenPath } from '../src/send/unrecognised-screen.ts';
+import { seatMailDirIn } from '../src/queue/mail-tree.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
@@ -114,7 +121,8 @@ function typedTeamText(root: string, lobby: string, cli: 'muse' | 'cursor' | 'co
       : cli === 'antigravity'
         ? { vendor: 'google', model: 'Gemini 4 Argon', launch: 'agy' }
         : { vendor: 'test', model: 'Test', launch: 'codex' };
-  return teamText(root, lobby).replace(
+  // A worker scene is not the operator: its wake stays on the typed-wake seam.
+  return teamText(root, lobby).replace('operator: helper\n', 'operator: lead\n').replace(
     `  - role: implementer
     name: helper
     cli: claude-code
@@ -393,19 +401,18 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
-    // The binding refuses before any key: nothing is typed, and nothing is reserved. An attempt
-    // that wrote nothing must not spend the message's one wake.
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(said).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // A lead wake types its line. With no receipt the reservation stays spent, so a later pass does not type again.
+    expect(one.typed.some((line) => line.startsWith('Message from owner') && line.includes('team drops --read'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(said.some((line) => line.includes('counts when the read receipt appears'))).toBe(true);
+    expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    const typedOnce = one.typed.length;
 
-    // A second pass is free to try again: still no line, still no reservation.
     await wakeUnreadDrops(scene, { unreadAfter: N });
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(said).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(one.typed).toHaveLength(typedOnce);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a message read after the listing is not woken', async () => {
@@ -507,13 +514,13 @@ describe('wakeUnreadDrops', () => {
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
     expect(said).toEqual([]);
 
-    // With the hold lifted the pass tries again, and the refused delivery still writes nothing:
-    // no line, and no reservation held against the message.
+    // With the hold lifted the lead wake types once, and the missing receipt keeps that reservation spent.
     scene.nativeHeld = new Set();
     await wakeUnreadDrops(scene, { unreadAfter: N });
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(one.typed.some((line) => line.startsWith('Message from owner') && line.includes('team drops --read'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(false);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a wake names the signed sender of a registered seat, and a forged body line cannot change it', async () => {
@@ -526,11 +533,11 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    // The wake line is the retired typed leg's: nothing is typed, so the forged body line moves
-    // nothing, and the refused attempt leaves no reservation behind.
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // The lead wake names the signed sender. A forged body line does not become that name.
+    expect(one.typed.some((line) => line.startsWith('Message from helper') && line.includes('team drops --read'))).toBe(true);
+    expect(one.typed.some((line) => line.startsWith('Message from evil'))).toBe(false);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a foreign seat wake names the seat with its own team', async () => {
@@ -553,7 +560,8 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    expect(one.typed).toEqual([]);
+    // The lead wake names the foreign seat with its own team.
+    expect(one.typed.some((line) => line.startsWith('Message from scout') && line.includes('scout@beta'))).toBe(true);
   });
 
   test('a wake whose signed sender this home cannot pin is not typed nameless', async () => {
@@ -640,14 +648,14 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
-    // The stale receipt is still on disk and the message is still listed unread: the receipt
-    // was no read, and the refused wake leaves no keystroke and no reservation.
+    // A stale receipt is not this claim's read: the message stays unread, and the lead wake still types.
     expect(existsSync(receiptPath(dropDir, record.id))).toBe(true);
     const still = listUnread(dropDir, { to: 'lead', root: realpathSync(made.root), session: 'acme' }, made.home);
     expect(still.map((message) => message.id)).toContain(record.id);
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, record.id))).toBe(false);
+    expect(one.typed.some((line) => line.includes('team drops --read'))).toBe(true);
+    expect(said.some((line) => line.includes('was read on the wake'))).toBe(false);
+    expect(said.some((line) => line.includes('counts when the read receipt appears'))).toBe(true);
+    expect(existsSync(wakePath(dropDir, record.id))).toBe(true);
   });
 
   test('a wake whose trigger never runs writes no receipt: the message stays unread and no reservation is spent', async () => {
@@ -668,14 +676,14 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
-    // The trigger that would have written the receipt is the retired typed leg: no receipt
-    // exists, the listing still holds the message, and the refused attempt spent no reservation.
-    expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(false);
+    // The lead wake's Enter is this seat's read. The receipt is what makes that wake count.
+    expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(true);
     const still = listUnread(dropDir, { to: 'lead', root: realpathSync(made.root), session: 'acme' }, made.home);
-    expect(still.map((message) => message.id)).toContain(UNREAD_A);
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(still.map((message) => message.id)).not.toContain(UNREAD_A);
+    expect(one.typed.some((line) => line.startsWith('Message from owner') && line.includes('team drops --read'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(said.some((line) => line.includes('was read on the wake (receipt)'))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a message a held send\'s retry still owns is not woken here', async () => {
@@ -706,20 +714,18 @@ describe('wakeUnreadDrops', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, said, { sources: scripts(one, true) }), { unreadAfter: N });
     await retired;
 
-    // Draft movement lived in the retired typed leg: the box is exactly as it was, and the
-    // refused attempt leaves the message with its wake unspent.
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(one.keys).toEqual([]);
+    // A lead draft is cleared, the wake line is typed, and the draft is pasted back into the empty box.
+    expect(one.typed[0]).toContain('Message from owner');
+    expect(one.typed.some((line) => line.includes(draft))).toBe(true);
     expect(one.screen).toBe(claudeBox(draft));
-    expect(said).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a message younger than the window is left alone', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nfresh', new Date(NOW.getTime() - 5 * MIN));
+    // A lead is due on the lead unread window, which is shorter than the seat window this call passes.
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nfresh', new Date(NOW.getTime() - 60_000));
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -742,17 +748,15 @@ describe('wakeUnreadDrops', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
     await retired;
 
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(said).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // The line was typed, so the lead wake is spent even when the screen never reads working.
+    expect(one.typed.some((line) => line.startsWith('Message from owner'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    const typedOnce = one.typed.length;
 
-    // The later pass finds no marker to confirm, and writes none of its own: still no line.
     await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(said).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    expect(one.typed).toHaveLength(typedOnce);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a human seat is never typed into and never reported', async () => {
@@ -784,9 +788,10 @@ describe("the watch's typed wake retry", () => {
     return { made, team: teamOf(typedTeamText(made.root, lobbyDir(made.home), cli, extra)) };
   }
 
-  function ledgerOf(dropDir: string, id: string): { id: string; tries: number; typed: boolean; next_at: string } | null {
+  // The ledger keeps the failed wake's own reason beside the count, so a later reader can say why.
+  function ledgerOf(dropDir: string, id: string): { id: string; tries: number; typed: boolean; next_at: string; reason?: string } | null {
     if (!existsSync(wakeTryPath(dropDir, id))) return null;
-    return JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { id: string; tries: number; typed: boolean; next_at: string };
+    return JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { id: string; tries: number; typed: boolean; next_at: string; reason?: string };
   }
 
   test('a typed attempt that fails gives its reservation back, and the ledger waits out the backoff', async () => {
@@ -807,7 +812,7 @@ describe("the watch's typed wake retry", () => {
     expect(calls[0]?.session).toBe('acme');
     expect(calls[0]?.line).toContain('team drops --read');
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: true, next_at: '2026-10-17T04:00:05.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: true, next_at: '2026-10-17T04:00:05.000Z', reason: TYPED_FAILED.reason });
 
     // Inside the wait the pass does not reach the seam at all.
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 4_000) }), { unreadAfter: N });
@@ -817,7 +822,7 @@ describe("the watch's typed wake retry", () => {
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 5_000) }), { unreadAfter: N });
     expect(calls).toHaveLength(2);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 2, typed: true, next_at: '2026-10-17T04:00:15.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 2, typed: true, next_at: '2026-10-17T04:00:15.000Z', reason: TYPED_FAILED.reason });
   });
 
   test('a pass with no seam bound attempts nothing and spends nothing', async () => {
@@ -933,13 +938,29 @@ describe("the watch's typed wake retry", () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
     expect(calls).toHaveLength(1);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: false, next_at: '2026-10-17T04:00:05.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: false, next_at: '2026-10-17T04:00:05.000Z', reason: TYPED_REFUSED.reason });
 
     // Twice the window: the report reads the ledger and says the pass never got a line in.
     reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 10 * MIN) }), { unreadAfter: N });
     const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
     expect(toOwner.body).toContain('no wake line was typed');
     expect(toOwner.body).not.toContain('a typed wake was tried');
+  });
+
+  test('a real failed retry is read by the next pass as a wake: refused with no keys, submitted with keys, none before', async () => {
+    for (const [result, expected] of [[TYPED_REFUSED, 'refused'], [TYPED_FAILED, 'submitted']] as const) {
+      const { made, team } = typedWorld('muse');
+      const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 11 * MIN));
+      expect(wakeAttemptOf(dropDir, UNREAD_A)).toBe('none');
+      const one = pane(MUSE_IDLE);
+      const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+      const sources = typedSources(one, typedSeam([result], calls));
+      await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
+      expect(calls).toHaveLength(1);
+      // The retry gave its `.wake` marker back; the ledger it left is what the next reading sees.
+      expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+      expect(wakeAttemptOf(dropDir, UNREAD_A)).toBe(expected);
+    }
   });
 
   test('the report counts the typed attempts that never landed, singular where it is one', () => {
@@ -959,7 +980,7 @@ describe("the watch's typed wake retry", () => {
     expect(mailboxBody(made.root, 'owner', `unread-${UNREAD_B}`).body).toContain('a typed wake was tried 1 time and none was confirmed');
   });
 
-  test('the profile bound ends a wake that never lands, and a newer message still wakes', async () => {
+  test('the profile bound ends the fast retries of a wake that never lands, and a newer message still wakes', async () => {
     const { made, team } = typedWorld('muse');
     const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nstuck', new Date(NOW.getTime() - 11 * MIN));
     // Past the window only after the three attempts below: it must not be due alongside them.
@@ -973,10 +994,11 @@ describe("the watch's typed wake retry", () => {
       await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + at) }), { unreadAfter: N });
     }
     expect(calls).toHaveLength(3);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 3, typed: true, next_at: '2026-10-17T04:00:35.000Z' });
+    // The third failure spends the fast bound: the next attempt is a slow one, five minutes on.
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 3, typed: true, next_at: '2026-10-17T04:05:15.000Z', reason: TYPED_FAILED.reason });
 
-    // The bound is reached: the fourth pass never asks the seam for the stuck message. The newer
-    // one is past its window by then, and the same line wakes it.
+    // The fast bound is reached: the fourth pass never asks the seam for the stuck message. The
+    // newer one is past its window by then, and the same line wakes it.
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 35_000) }), { unreadAfter: N });
     expect(calls).toHaveLength(4);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
@@ -984,6 +1006,100 @@ describe("the watch's typed wake retry", () => {
     expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok && history.entries.some((entry) => entry.id === UNREAD_B && entry.outcome === 'delivered (typed wake)')).toBe(true);
+  });
+
+  test('past the fast bound a message still unread is retried slowly, after its report, until it lands', async () => {
+    // 2026-11-14: a seat busy through the three fast attempts and then idle was never woken again;
+    // its messages sat unread for days. The slow retries wait 5, 10, 20, then 30 minutes.
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nstill waiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const at = (ms: number) => sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + ms) });
+
+    for (const ms of [0, 5_000, 15_000]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    // Inside the first slow wait (five minutes from the third attempt) nothing is typed.
+    await wakeUnreadDrops(at(4 * MIN), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    // The report speaks once at twice the window; it does not end the slow retries.
+    reportUnreadDrops(at(10 * MIN), { unreadAfter: N });
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    await wakeUnreadDrops(at(10 * MIN), { unreadAfter: N });
+    expect(calls).toHaveLength(4);
+    // The next slow wait is ten minutes; the attempt after it lands.
+    expect(ledgerOf(dropDir, UNREAD_A)?.next_at).toBe(new Date(NOW.getTime() + 20 * MIN).toISOString());
+    await wakeUnreadDrops(at(20 * MIN), { unreadAfter: N });
+    expect(calls).toHaveLength(5);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('the slow retries stop once the seat reads the message', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nread me', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED, TYPED_FAILED, TYPED_DELIVERED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const at = (ms: number) => sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + ms) });
+    for (const ms of [0, 5_000, 15_000]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    // The seat reads it on its own turn: no slow retry is ever typed for it.
+    readInbox(made, UNREAD_A, 'helper', 'acme');
+    for (const ms of [10 * MIN, 40 * MIN, 3 * 60 * MIN]) await wakeUnreadDrops(at(ms), { unreadAfter: N });
+    expect(calls).toHaveLength(3);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+  });
+
+  test('a pane takes at most six typed lines an hour from the retry, however many messages wait', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED, TYPED_FAILED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    // Six lines already typed into this pane within the hour: the due message waits.
+    const recent = Array.from({ length: 6 }, (_, k) => NOW.getTime() - (k + 1) * 5 * MIN);
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: recent })}\n`);
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // Once the oldest of them is more than an hour old, one more line may go.
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 31 * MIN) }), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')).at).toHaveLength(6);
+  });
+
+  test('a line the hourly cap holds back is said: by the pass, and by the report at twice the window', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nheld back', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const recent = Array.from({ length: 6 }, (_, k) => NOW.getTime() - (k + 1) * 5 * MIN);
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: recent })}\n`);
+    const said: string[] = [];
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live }), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(said.some((line) => line.startsWith('helper: the hourly cap of 6 typed wake lines is reached; no wake line was typed this pass, 1 unread message waits'))).toBe(true);
+    // The report names the cap, not a bare "no wake line was typed".
+    reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 10 * MIN) }), { unreadAfter: N });
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain(`no wake line was typed; the hourly cap of 6 typed wake lines held a wake line back at ${NOW.toISOString()}`);
+  });
+
+  test('a message older than the slow retries\' age bound is not retried again', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nancient', new Date(NOW.getTime() - WAKE_SLOW_MAX_AGE_MS - MIN));
+    dropMessage(dropDir, `${UNREAD_A}.wake-try`, `${JSON.stringify({ id: UNREAD_A, tries: 9, typed: true, next_at: NOW.toISOString() })}\n`);
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane') }), { unreadAfter: N });
+    expect(calls).toEqual([]);
   });
 
   test('a seat file that turns watch_wake off keeps the drop-file leg, and the seam is never asked', async () => {
@@ -1045,6 +1161,45 @@ describe("the watch's typed wake retry", () => {
 
     expect(calls).toHaveLength(1);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+  });
+
+  test('a persistent unrecognised screen gets zero keys and one capture notice to the lead per episode, with no screen content', async () => {
+    const { made, team } = typedWorld('cursor');
+    seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const strange = `  my private draft about the launch plan\n  ${made.home}/Code/secret-place\n  a layout no rule knows`;
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const one = pane(strange, 'done');
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_DELIVERED], calls));
+    const notices = (): string[] => {
+      const dir = join(made.root, '.agents');
+      const out: string[] = [];
+      const walk = (at: string): void => {
+        for (const entry of readdirSync(at, { withFileTypes: true })) {
+          if (entry.isDirectory()) walk(join(at, entry.name));
+          else if (entry.name.startsWith('unrecognised-screen-helper-')) out.push(join(at, entry.name));
+        }
+      };
+      walk(dir);
+      return out;
+    };
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'done') }), { unreadAfter: N });
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'done'), now: new Date(NOW.getTime() + 60_000) }), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(notices()).toHaveLength(1);
+    const body = readFileSync(notices()[0]!, 'utf8');
+    expect(body).toContain('helper (pane helper-pane): screen not recognised, capture needed');
+    expect(body).not.toContain('private draft');
+    expect(body).not.toContain('secret-place');
+    expect(body).not.toContain('no rule knows');
+    // The seat's screen is placed again and a new message's wake is delivered: the episode ends,
+    // so a later unknown frame is reported anew.
+    expect(existsSync(unrecognisedScreenPath(seatMailDirIn(made.dir, 'acme', 'helper')))).toBe(true);
+    one.screen = CURSOR_IDLE;
+    seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nlater', new Date(NOW.getTime() - 11 * MIN));
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live: liveWith('helper', 'helper-pane', 'idle'), now: new Date(NOW.getTime() + 120_000) }), { unreadAfter: N });
+    expect(calls).toHaveLength(1);
+    expect(existsSync(unrecognisedScreenPath(seatMailDirIn(made.dir, 'acme', 'helper')))).toBe(false);
   });
 
   test('a reliable profile keeps the terminal host’s status gate: working waits, idle reaches the seam', async () => {
@@ -1306,13 +1461,11 @@ describe('reportUnreadDrops', () => {
     const woke = new Date(NOW.getTime() - 10 * MIN);
     await wakeUnreadDrops(sceneOf(made, team, one, said, { now: woke }), { unreadAfter: N });
 
-    // The "wake line was sent" words and the sender's mailbox notice live on the retired typed
-    // delivery: this pass types nothing, claims nothing, and leaves no reservation the report
-    // could read as an attempt.
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(said).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // This pass is the wake. The sender's mailbox notice is the later report, which this scene does not run.
+    expect(one.typed.some((line) => line.startsWith('Message from helper') && line.includes('team drops --read'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(said.some((line) => line.includes('counts when the read receipt appears'))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
     expect(existsSync(join(made.root, '.agents', 'messages', 'helper', `unread-${UNREAD_A}.json`))).toBe(false);
   });
 
@@ -1746,12 +1899,11 @@ describe('crash-safe reservations', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
     await retired;
 
-    // The typed seam is never reached, and the refusal gives back the reservation it took: no
-    // trace on disk, and the message keeps its one wake for a later pass.
-    expect(held).toBe(false);
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // The reservation is written before the line, and a delivered lead wake keeps it.
+    expect(held).toBe(true);
+    expect(one.typed.some((line) => line.startsWith('Message from owner'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a reservation left by a crash is never typed over, and the report says its outcome is unconfirmed', async () => {
@@ -1787,11 +1939,10 @@ describe('crash-safe reservations', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    // The attempted message behind the spent one was refused, so its reservation went back too:
-    // the spent marker is untouched, and the message after it is still free to wake.
-    expect(one.typed).toEqual([]);
+    // The spent marker is left as it was. The message after it is the one the lead wake types.
+    expect(one.typed.some((line) => line.startsWith('Message from owner'))).toBe(true);
     expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(spent);
-    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(false);
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a held delivery gives its reservation back, and a later pass wakes', async () => {
@@ -1821,11 +1972,10 @@ describe('crash-safe reservations', () => {
     const retired = await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
     await retired;
 
-    // not-submitted existed only on the typed leg: nothing is typed here, and a delivery that
-    // wrote nothing gives its reservation back.
-    expect(one.typed).toEqual([]);
-    expect(one.enters).toBe(0);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // The line was typed, so the lead wake stays spent when Enter does not submit it.
+    expect(one.typed.some((line) => line.startsWith('Message from owner'))).toBe(true);
+    expect(one.enters).toBeGreaterThan(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('an unreachable delivery that typed nothing gives its reservation back', async () => {
@@ -1845,8 +1995,9 @@ describe('crash-safe reservations', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
 
-    expect(one.typed).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
+    // The pass read idle before the wake, so the line is typed and the reservation stays.
+    expect(one.typed.some((line) => line.startsWith('Message from owner'))).toBe(true);
+    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
   test('a report reservation already on disk publishes nothing', () => {
@@ -1918,7 +2069,8 @@ describe('team watch wakes an unread seat', () => {
     const one = pane(claudeBox(''));
     const typed: string[] = [];
     const io = testIo(directory, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, watchSources(directory, one, typed, clock))).toBe(0);
+    // Daemon-only watch: the hosted loop is the pass. A refused binding still types nothing.
+    expect(await runWatch(['--file', file], io, withHostedLoop(watchSources(directory, one, typed, clock)))).toBe(0);
     expect(typed).toEqual([]);
     expect(one.enters).toBe(0);
     // The pass attempts the wake and the binding refuses before any key: the message keeps its
@@ -1939,7 +2091,8 @@ describe('team watch wakes an unread seat', () => {
     const one = pane(claudeBox(''));
     const typed: string[] = [];
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file, '--no-nudge'], io, watchSources(directory, one, typed, clock));
+    // Daemon-only watch: the hosted loop is the pass, and it still reports an unread message.
+    const code = await runWatch(['--file', file, '--no-nudge'], io, withHostedLoop(watchSources(directory, one, typed, clock)));
 
     expect(code).toBe(0);
     expect(typed).toEqual([]);
@@ -1969,9 +2122,10 @@ describe('an acknowledged message is not woken or reported', () => {
     const one = pane(claudeBox(''));
     const said: string[] = [];
     await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+    // The acknowledged id is not woken. The other message is the one the lead wake types.
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(false);
-    expect(one.typed).toHaveLength(0);
+    expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
+    expect(one.typed).toHaveLength(1);
 
     reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
     expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
@@ -2008,7 +2162,7 @@ function hookReceiver(answer: (hit: HookHit) => Response = () => new Response('o
 }
 
 /** The team file with a webhook row on the helper seat: the leg the cascade places between a
- *  channel-class leg and the typed line (ADR zeus-message-path, D2). `body: inbox` needs no log
+ *  channel-class leg and the typed line (ADR architect-message-path, D2). `body: inbox` needs no log
  *  signer, so the scene carries no part of the bus. */
 function hookTeamText(root: string, lobby: string, cli: 'claude-code' | 'muse', urlFile: string, secretFile: string): string {
   const row = `    webhook:
@@ -2017,7 +2171,8 @@ function hookTeamText(root: string, lobby: string, cli: 'claude-code' | 'muse', 
       body: inbox
 `;
   if (cli === 'muse') return typedTeamText(root, lobby, 'muse', row);
-  return teamText(root, lobby).replace(
+  // The helper under test is a worker, so a webhook counts when it is posted.
+  return teamText(root, lobby).replace('operator: helper\n', 'operator: lead\n').replace(
     `  - role: implementer
     name: helper
     cli: claude-code
@@ -3041,5 +3196,250 @@ describe('an unrecognised screen tells the lead once within 2N', () => {
         { id: UNREAD_B, outcome: 'delivered-but-blocked' },
       ]);
     }
+  });
+});
+
+describe('the event ladder for a Claude seat with no typed wake', () => {
+  const HELPER_ID = 'cccccccc-0000-4000-8000-000000000103';
+  const SECOND_ID = 'dddddddd-0000-4000-8000-000000000104';
+  const ledgerOf = (dropDir: string, id: string) => JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { tries: number; next_at: string; route?: string; reason?: string };
+  const CHANNEL_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
+  /** The fixture team with keys added to its last seat, `helper`. */
+  const helperTeam = (made: World, extra: string) => teamOf(`${teamText(made.root, lobbyDir(made.home))}${extra}`);
+  /** The send walk's own answer for the seat: the real producer, never a stand-in. */
+  const legsOf = (made: World, team: ReturnType<typeof teamOf>) => (seat: string) =>
+    permittedEventLegs({ dir: made.dir, root: made.root, home: made.home, session: 'acme', seat, team, now: () => NOW });
+  /** The seat's generated launch settings accept cross-session frames, as a launched seat's do. */
+  const acceptFrames = (made: World) => {
+    const path = cliHookSettingsPath(made.dir, 'acme', 'helper');
+    if (path === null) throw new Error('the fixture seat declares no settings path');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ crossSessionInbound: 'accept' }));
+  };
+  const liveChannel = (made: World, dropDir: string) => writeFileSync(join(dropDir, '.inbox-listener'), `${JSON.stringify({ v: 1, seat: 'helper', session: 'acme', root: made.root, cli: 'claude-code', pid: process.pid, channel: true, ts: NOW.toISOString() })}\n`);
+
+  test('an unread message is offered again on the socket, on the 5, 10, 20, 30 minute ladder, and nothing is typed', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    expect(legsOf(made, team)('helper')).toMatchObject({ socket: true });
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const at = (offset: number) => ({
+      ...sceneOf(made, team, one, [], { now: new Date(NOW.getTime() + offset), live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => { dials.push(drop.id); return { ok: true as const }; },
+    });
+
+    await wakeUnreadDrops(at(0), { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+    expect(one.typed).toEqual([]);
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, route: 'socket', next_at: new Date(NOW.getTime() + 5 * MIN).toISOString() });
+    const history = readHistory('acme', made.root, made.home);
+    expect(history.ok && history.entries.at(-1)).toMatchObject({ id: HELPER_ID, via: 'socket', outcome: 'awaiting receipt' });
+
+    // Inside the step nothing is offered; past it the second offer waits ten minutes.
+    await wakeUnreadDrops(at(4 * MIN), { unreadAfter: N });
+    expect(dials).toHaveLength(1);
+    await wakeUnreadDrops(at(6 * MIN), { unreadAfter: N });
+    expect(dials).toHaveLength(2);
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 2, next_at: new Date(NOW.getTime() + 16 * MIN).toISOString() });
+
+    // A read message leaves the listing: no further offer.
+    readInbox(made, HELPER_ID, 'helper', 'acme');
+    await wakeUnreadDrops(at(40 * MIN), { unreadAfter: N });
+    expect(dials).toHaveLength(2);
+  });
+
+  test('a live channel that has not pushed the message is offered the push first, and the socket is not dialed', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = teamOf(`${teamText(made.root, lobbyDir(made.home)).replace(/launch: claude\n$/, `launch: ${CHANNEL_LAUNCH}\n`)}    inbound: accept\n`);
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    liveChannel(made, dropDir);
+    expect(legsOf(made, team)('helper')).toMatchObject({ channel: true });
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => { dials.push(drop.id); return { ok: true as const }; },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([]);
+    expect(JSON.parse(readFileSync(pendingDropPath(dropDir, HELPER_ID), 'utf8'))).toMatchObject({ id: HELPER_ID, leg: 'channel' });
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, route: 'channel' });
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a non-lead seat whose own order is drop-only, with no live channel, is never offered on the socket', async () => {
+    const made = world();
+    acceptFrames(made);
+    // The seat's word in the chain keeps the socket out, though its launch accepts frames, and
+    // no channel server is live: the send walk would leave it queued, and so does this.
+    const team = helperTeam(made, '    inbound: accept\n    delivery_order: [drop]\n');
+    // Without the seat's word the socket is the route a send would take; with it, nothing.
+    expect(legsOf(made, helperTeam(made, '    inbound: accept\n'))('helper')).toMatchObject({ socket: true });
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    expect(legsOf(made, team)('helper')).toMatchObject({ channel: false, socket: false });
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => { dials.push(drop.id); return { ok: true as const }; },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([]);
+    expect(existsSync(pendingDropPath(dropDir, HELPER_ID))).toBe(false);
+    expect(existsSync(wakeTryPath(dropDir, HELPER_ID))).toBe(false);
+    // What the pass still does for the seat is the drop-file leg it always had, whose writer
+    // refuses in every real binding; the ladder added nothing for it.
+  });
+
+  test('a message read while an earlier offer was dialing is not offered: the receipt is read again before each offer', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    seedMessage(made, 'acme', 'helper', HELPER_ID, 'first\n\nwaiting', new Date(NOW.getTime() - 12 * MIN));
+    seedMessage(made, 'acme', 'helper', SECOND_ID, 'second\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      // The first offer wakes the seat, and its own read takes the second message too, before
+      // the pass reaches it: the seat's real read writes the signed receipt.
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => {
+        dials.push(drop.id);
+        if (drop.id === HELPER_ID) readInbox(made, SECOND_ID, 'helper', 'acme');
+        return { ok: true as const };
+      },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+  });
+
+  test('with no route the attempt is still counted, with its reason, and the ladder spaces the next look', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      socketRedeliver: async () => ({ ok: false as const, reason: 'no socket was found for its pane' }),
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(ledgerOf(dropDir, HELPER_ID)).toMatchObject({ tries: 1, reason: 'no socket was found for its pane' });
+    expect(ledgerOf(dropDir, HELPER_ID).route).toBeUndefined();
+  });
+  test('a lead\'s signed clearance written during an earlier offer stops the re-offer of that message', async () => {
+    const made = world();
+    acceptFrames(made);
+    const team = helperTeam(made, '    inbound: accept\n');
+    const dropDir = seedMessage(made, 'acme', 'helper', HELPER_ID, 'first\n\nwaiting', new Date(NOW.getTime() - 12 * MIN));
+    seedMessage(made, 'acme', 'helper', SECOND_ID, 'second\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(claudeBox(''));
+    const dials: string[] = [];
+    const scene = {
+      ...sceneOf(made, team, one, [], { live: liveWith('helper', 'w2:p1') }),
+      eventLegs: legsOf(made, team),
+      // While the first offer is dialing, the team's lead clears the second message: the receipt
+      // `team ack --seat helper --older-than` writes, signed, its `read_by` naming the lead.
+      socketRedeliver: async (_dropDir: string, drop: { id: string }) => {
+        dials.push(drop.id);
+        if (drop.id === HELPER_ID) {
+          const cleared = signReceiptPayload({
+            kind: 'receipt',
+            status: 'read',
+            id: SECOND_ID,
+            to: 'helper',
+            root: realpathSync(made.root),
+            session: 'acme',
+            at: NOW.toISOString(),
+            read_by: 'lead-ack:lead',
+          }, made.home);
+          writeFileSync(receiptPath(dropDir, SECOND_ID), `${JSON.stringify(cleared, null, 2)}\n`);
+        }
+        return { ok: true as const };
+      },
+    };
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(dials).toEqual([HELPER_ID]);
+    expect(existsSync(wakeTryPath(dropDir, SECOND_ID))).toBe(false);
+  });
+});
+
+describe('RFC event-comms E2: a ready seat\'s current launch brief is offered on the first pass, through this same guarded wake', () => {
+  function seedBrief(made: ReturnType<typeof world>, at: Date, stage: 'ready' | 'claimed'): { dropDir: string; id: string; body: string } {
+    const incarnation = 'inc_aaaaaaaaaaaa';
+    const record = generalBriefRecord({ to: 'lead', root: realpathSync(made.root), session: 'acme', at: at.toISOString(), incarnation });
+    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    dropMessage(dropDir, record.id, `${JSON.stringify(signRecord(record, made.home), null, 2)}\n`);
+    utimesSync(join(dropDir, record.id), new Date(), at);
+    updateState(made.dir, (state) => {
+      const one = (state.sessions['acme'] ??= emptySession());
+      (one.briefs ??= {})['lead'] = {
+        id: record.id, at: record.at, incarnation, epoch: 'run_bbbbbbbbbbbb',
+        sha256: record.brief_sha256 as string, attempt: 0, stage, superseded: [],
+      };
+    });
+    return { dropDir, id: record.id, body: String(record.body) };
+  }
+
+  test('a brief younger than the window is woken at once when the claim says ready; the line is the pointer, never the body', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'ready');
+    const one = pane(claudeBox(''));
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    expect(one.typed.some((line) => line.includes('team drops --read'))).toBe(true);
+    expect(one.typed.join('\n')).not.toContain(brief.body.slice(0, 40));
+    expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(true);
+  });
+
+  test('a brief whose claim is not ready yet waits for the window, as before', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'claimed');
+    const one = pane(claudeBox(''));
+    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(false);
+  });
+
+  test('the seat lock held by another writer: no wake, nothing typed, no reservation', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'ready');
+    const lock = acquireSeatLock(made.dir, 'acme', 'lead');
+    try {
+      const one = pane(claudeBox(''));
+      await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+      expect(one.typed).toEqual([]);
+      expect(one.enters).toBe(0);
+      expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(false);
+    } finally {
+      if ('release' in lock) lock.release();
+    }
+  });
+
+  test('a stale saved pane (the live snapshot shows no pane for the seat): no wake, nothing typed', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const brief = seedBrief(made, NOW, 'ready');
+    updateState(made.dir, (state) => {
+      const one = (state.sessions['acme'] ??= emptySession());
+      one.seats['lead'] = { ...(one.seats['lead'] ?? {}), stage: 'ready', pane: 'w9:p9' } as never;
+    });
+    const one = pane(claudeBox(''));
+    const live: Live = { running: true, agents: [], workspaces: [], screens: {} };
+    await wakeUnreadDrops(sceneOf(made, team, one, [], { live }), { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(existsSync(wakePath(brief.dropDir, brief.id))).toBe(false);
   });
 });

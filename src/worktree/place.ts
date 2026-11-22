@@ -1,4 +1,5 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { migrationText } from '../file/migrate.ts';
@@ -6,8 +7,8 @@ import { insideTrust, isLegacyTrust, isMigratedTrust, protectedBy } from '../fil
 import { isLeadSeat } from '../file/sections/lead.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
-import { channelLobbyFolder, claudeChannelSeat } from '../mcp/launch-config.ts';
-import { worktreeOf, type SessionState } from '../state.ts';
+import { channelStart, claudeChannelSeat } from '../mcp/launch-config.ts';
+import { recordedStartFolder, worktreeOf, type SessionState } from '../state.ts';
 
 // A task name is one path segment. It is also the last segment of the folder and part of the branch.
 const TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -74,7 +75,7 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
   return null;
 }
 
-export type StartFolder = { name: string; cli: string; cwd: string };
+export type StartFolder = { name: string; cli: string; cwd: string; stopped?: boolean; cwdDefaulted?: true };
 
 /** Occupied start folders come from the placement record, not a later file edit. Worktrees
  *  keyed by task are included too, even when a single-seat add or restart plans no peers. */
@@ -82,8 +83,8 @@ export function placedStartFolders(
   seats: readonly StartFolder[], state?: Pick<SessionState, 'seats' | 'worktrees'>,
 ): StartFolder[] {
   return seats.map(seat => ({ ...seat,
-    cwd: state?.seats[seat.name]?.start_cwd ||
-      (seat.cwd === '.' ? worktreeOf(state, seat.name)?.path : undefined) || seat.cwd,
+    cwd: recordedStartFolder(state?.seats[seat.name]) ||
+      (seat.cwd === '.' || seat.cwdDefaulted === true ? worktreeOf(state, seat.name)?.path : undefined) || seat.cwd,
   }));
 }
 
@@ -99,6 +100,14 @@ export type OwnStartFolderInput = {
 export function ownStartFolderProblem(input: OwnStartFolderInput): string | null {
   const repair = 'set the seat cwd to its own worktree or clone, then launch it again';
   let start: string;
+  // A seat's own folder inside the team's folder is made when it is missing: it is where the
+  // team's seat_folder setting puts a Grok or Cursor seat that names no cwd. Never the team's
+  // folder itself, never its state folder, never a path outside it.
+  const wanted = resolve(input.root, input.cwd);
+  const below = relative(input.root, wanted);
+  if (below !== '' && !below.startsWith('..') && !isAbsolute(below) && below.split(sep)[0] !== '.agents' && !existsSync(wanted)) {
+    try { mkdirSync(wanted, { recursive: true }); } catch { /* the check below reports it */ }
+  }
   try {
     start = realpathSync(resolve(input.root, input.cwd));
     if (!statSync(start).isDirectory()) throw new Error('not a directory');
@@ -131,6 +140,9 @@ export function ownStartFolderProblem(input: OwnStartFolderInput): string | null
   }
   for (const peer of input.peers) {
     if (peer.name === input.seat) continue;
+    // A seat the team file marks stopped runs nothing and holds no start folder. When it is
+    // started again, this same check runs for it against every seat that is then standing.
+    if (peer.stopped === true) continue;
     const other = realLanding(input.root, peer.cwd).real;
     // A shared-root peer does not claim every worktree below the root. Keep overlap checks
     // for profile-writing peers and for every peer with a separate start folder.
@@ -145,12 +157,66 @@ export function ownStartFolderProblem(input: OwnStartFolderInput): string | null
 /** Where a seat starts: the folder it waits in, or why it can't start. */
 export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?: true };
 
-// Where a seat starts. In a migrated file, the orchestrator and the operator start in the
-// project root, and every other seat (shared and worktree-mode alike) starts in the resolved
-// lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
-// old derived lobby.
+/** The sentence a cwd outside the project and outside trust used to fail the whole file with.
+ *  The file now loads; up, add and check refuse this seat with it, unless a session worktree
+ *  record names this seat, carries a branch, and its path is the cwd. */
+export function seatCwdRefusal(
+  seat: Pick<Seat, 'name' | 'cwd' | 'cwdOutside'>,
+  worktrees: SessionState['worktrees'] | undefined,
+  root: string,
+): string | null {
+  if (seat.cwdOutside !== true) return null;
+  if (recordedForSeat(worktrees, seat.name, seat.cwd, root)) return null;
+  return `seat "${seat.name}": cwd "${seat.cwd}" is outside the project and matches no trust path`;
+}
+
+/** A `team worktree new` record admits the cwd only when path, branch and seat are all present
+ *  and the seat is the one asking. The task key is not the seat. */
+function recordedForSeat(
+  worktrees: SessionState['worktrees'] | undefined,
+  seat: string,
+  cwd: string,
+  root: string,
+): boolean {
+  if (worktrees === undefined) return false;
+  for (const record of Object.values(worktrees)) {
+    if (record.seat !== seat || typeof record.branch !== 'string' || record.branch === '') continue;
+    if (!sameRecordedPlace(root, cwd, record.path)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Whether `cwd` and the recorded worktree path are the same folder once both are resolved
+ *  from the project root. A path that only looks like a worktree is not this. */
+function sameRecordedPlace(root: string, cwd: string, recorded: string): boolean {
+  const left = resolve(root, cwd);
+  const right = resolve(root, recorded);
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return left === right;
+  }
+}
+
+// Where a seat starts. The existing placement is decided first: a protected checkout, a lead in
+// the project, a lobby seat, and every other refusal. A Claude channel seat whose start was
+// accepted then uses its channel folder, except a lead keeps its project cwd. Cursor and Grok
+// keep their own branch. In a legacy file, a shared seat starts in its cwd, and a worktree seat
+// starts in the old derived lobby.
 export function seatStart(
   team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string = homedir(), verifiedLobby?: string, worktree?: string, recorded?: Pick<SessionState, 'seats' | 'worktrees'>,
+): SeatStart {
+  const placed = placedSeatStart(team, seat, root, home, verifiedLobby, worktree, recorded);
+  if ('problem' in placed || !claudeChannelSeat(seat)) return placed;
+  if (!isMigratedTrust(team.trust)) return placed;
+  const start = channelStart(seat, root, verifiedLobby ?? lobbyOf(home, root, team), isLeadSeat(team, seat.name));
+  if (start === null) return placed;
+  return start.lobby ? { cwd: start.cwd, lobby: true } : { cwd: start.cwd };
+}
+
+function placedSeatStart(
+  team: Pick<TeamFile, 'project' | 'session' | 'workspace' | 'trust' | 'seats' | 'entity' | 'lobby' | 'orchestrator' | 'operator'>, seat: Seat, root: string, home: string, verifiedLobby?: string, worktree?: string, recorded?: Pick<SessionState, 'seats' | 'worktrees'>,
 ): SeatStart {
   if (!team.trust || team.trust.length === 0) {
     const lobby = lobbyOf(home, root, team);
@@ -161,22 +227,20 @@ export function seatStart(
     };
   }
 
-  if (claudeChannelSeat(seat)) {
-    if (!isMigratedTrust(team.trust)) return { problem: 'a Claude channel requires the team lobby in absolute trust configuration' };
-    return { cwd: channelLobbyFolder(verifiedLobby ?? lobbyOf(home, root, team), seat), lobby: true };
-  }
-
   // Grok's preset and Cursor's MCP configuration write the start folder. Both require a
   // folder of the seat's own, including lead seats; neither waits in the shared lobby.
   if (seat.cli === 'grok' || seat.cli === 'cursor') {
     const lobby = verifiedLobby ?? lobbyOf(home, root, team);
     // A fresh workspace can use the seat's recorded worktree. An explicit file cwd still
     // stands and is checked, so naming a lobby is refused rather than silently repaired.
-    const cwd = seat.cwd === '.' && worktree !== undefined ? worktree : seat.cwd;
+    const cwd = (seat.cwd === '.' || seat.cwdDefaulted === true) && worktree !== undefined ? worktree : seat.cwd;
     const problem = ownStartFolderProblem({ cli: seat.cli, seat: seat.name, cwd, root, home, lobby, peers: placedStartFolders(team.seats, recorded) });
     if (problem !== null) return { problem: `seat ${seat.name}: ${problem}` };
     const start = realLanding(root, cwd);
-    const hit = protectedLanding(root, relative(root, start.logical), team.workspace.protected);
+    // A worktree this seat recorded is its own checkout, even when it sits inside a protected one.
+    const hit = recordedForSeat(recorded?.worktrees, seat.name, cwd, root)
+      ? null
+      : protectedLanding(root, relative(root, start.logical), team.workspace.protected);
     if (hit) return { problem: `seat ${seat.name} would start inside the protected checkout ${hit}; set its cwd to its own worktree or clone, then launch it again` };
     return { cwd };
   }
@@ -184,7 +248,9 @@ export function seatStart(
   if (isLegacyTrust(team.trust)) {
     if (seat.mode === 'shared') return { cwd: seat.cwd };
     if (seat.cwd !== '.') {
-      const hit = protectedLanding(root, seat.cwd, team.workspace.protected);
+      const hit = recordedForSeat(recorded?.worktrees, seat.name, seat.cwd, root)
+        ? null
+        : protectedLanding(root, seat.cwd, team.workspace.protected);
       if (hit) {
         return {
           problem:
@@ -222,7 +288,9 @@ export function seatStart(
 
   if (isMigratedTrust(team.trust)) {
     if (seat.cwd !== '.') {
-      const hit = protectedLanding(root, seat.cwd, team.workspace.protected);
+      const hit = recordedForSeat(recorded?.worktrees, seat.name, seat.cwd, root)
+        ? null
+        : protectedLanding(root, seat.cwd, team.workspace.protected);
       if (hit) {
         return {
           problem:
@@ -244,6 +312,9 @@ export function seatStart(
         };
       }
     }
+    // An explicit folder is where this seat starts. `.` falls through: a lead starts in the
+    // project, and every other seat waits in the lobby.
+    if (seat.cwd !== '.') return { cwd: realLanding(root, seat.cwd).logical };
     // `.` is this project, which is where a lead starts. The check is whether that root
     // physically lands inside some other protected checkout.
     if (isLeadSeat(team, seat.name)) {

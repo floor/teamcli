@@ -17,16 +17,33 @@ machine with no broker handler never falls back to a per-clone broker.
 ## Synopsis
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--home <folder>] [--json]
+    team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 A subcommand is required. `--root` is repeatable and names the checkouts this one daemon hosts;
 without it, the checkout whose folder the command runs in is hosted. `install` validates every
 named checkout when it writes the unit: a root whose team file cannot be read is refused, never
 silently dropped, because a unit that hosts nothing must not be written in its place.
+
+A service start discovers every registered team except archived rows. Existing roots are hosted
+even when their lifecycle is `defined` or `stopped`; missing checkout folders are left out
+before endpoint admission. Discovery changes no registry lifecycle. A team with no recorded
+root uses the root in its stored definition, a checkout recorded for the same team, session and
+lobby, or its recorded lobby when that folder contains the team's configuration. Sharing a
+lobby with another team never makes their configurations interchangeable. The ordinary
+configuration checks still apply. A matching lobby-only row and checkout row are hosted once,
+including when the second row is discovered later; archived teams are left out.
+If a stored root is unavailable, the lobby is tried too. A team whose lobby-only folder cannot
+be resolved is named as `skipped team <name> (<session>): <reason>` by `status`,
+with the same details in `skippedTeams` in JSON. An unreadable registry is reported explicitly.
+
+Endpoint hosting does not make a stopped or defined team eligible for automatic seat restore.
+The startup scheduler and restore child check the registry lifecycle before any launch; the
+child checks again under the session run lock, and restore retries recheck it too. A different
+declared session does not bypass a stopped team's lifecycle.
 
 ## The subcommands
 
@@ -84,11 +101,25 @@ that record's binding is the seat's current presence binding; a missing, malform
 earlier-incarnation record stays unproven. The hosted send server asks the same per-seat answer
 before typing in the last mile, so a seat that is not proven current is held, not typed into.
 
+`run --send-server` also starts the warm send host: a child process, started from the daemon's
+own program copy, that keeps the send graph loaded and runs `team send`, `team reply` and
+`team ack` lines for local clients over `~/.config/team/send-host.sock` (mode 0600), one at a
+time. The client is the ordinary CLI: it asks the host first and runs the line itself when no host
+answers or the host hands the line back; a line the host took and whose answer was lost ends with
+exit 1 and is never run again. The daemon starts the host again after it exits, waiting longer
+after each quick exit, from one second to thirty, and its stop ends the host with SIGTERM. Like
+the other opt-ins, `install --send-server` writes the flag into the unit, a plain `install` keeps
+it, and `--no-send-server` (install only) drops it. The host is described in
+[send host](../concepts/send-host.md).
+
 `run --watch` also hosts one watch per checkout on the daemon's existing heartbeat. Without the
 flag no checkout's watch is hosted, and the daemon reads no pane for one. The opt-in is the `run`
 flag alone; `install --watch` writes that same flag into the unit's run command, so a
 service-managed daemon hosts a watch only after an owner installs it that way. Presence and watch
-are independent flags: a daemon may host either, both or neither. A hosted watch renews and
+are independent flags: a daemon may host either, both or neither. An install keeps the opt-ins
+the installed unit already runs with and adds the ones it names, so a plain `install` of a new
+build never stops presence or the watches; `--no-presence` and `--no-watch` (install only) drop
+one, and the install says what it kept and what it dropped. A hosted watch renews and
 verifies its own authority on every fixed heartbeat beat and does not blur that beat into the
 watch's sweep rhythm; `status` and `check` name a watch that is standing down, stopped, failed or
 whose outbound gate is closed, and say nothing while it is simply cycling. The hosted loop is in
@@ -117,6 +148,15 @@ again — this install with the roots and opt-ins it recorded — and, when the 
 is still on disk, where it is kept; the `--json` refusal carries the same command as its
 `repair`. `--dry-run` prints what it would do, including those steps, and writes nothing:
 `… would install …; nothing was written`.
+
+Where the service manager stops a user's services when that user's last login session ends, an
+install that succeeds also prints `team daemon: the system's service manager stops this daemon
+when this user's last login session ends; it keeps running after logout only once the owner lets
+this user's services run without a login session (a setting of the system, which this install
+does not change)`, and `--json` carries `stops_at_logout: true`; the daemon log names the setting.
+The install never changes it, because changing it takes the system's administrator: on a
+headless machine reached over a remote shell, the owner turns it on once, so the daemon outlives
+a disconnect. A machine whose setting cannot be read gets no such line.
 
 `restart` stops the daemon the service manager holds under the installed unit and loads that same
 unit again. It writes nothing: the definition, its checkouts and its opt-ins are the last install's,
@@ -272,8 +312,15 @@ restart off and leaves the telling ([`team policy`](policy.md) carries the three
 | `--started-by` | `service-manager`, `manual` or `team-up` | the launcher recorded in the state; belongs to `run`, and defaults to `manual` |
 | `--presence` | — | host each checkout's presence pipeline; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
 | `--watch` | — | host one watch per checkout on the daemon's heartbeat; belongs to `run` and `install`, is written into the unit by `install`, is independent of `--presence`, and is off by default |
+| `--send-server` | — | start and supervise the warm send host; belongs to `run` and `install`, is written into the unit by `install`, and is off by default |
+| `--no-presence` | — | drop `--presence` from the installed unit; belongs to `install`, and is refused beside `--presence` |
+| `--no-watch` | — | drop `--watch` from the installed unit; belongs to `install`, and is refused beside `--watch` |
+| `--no-send-server` | — | drop `--send-server` from the installed unit; belongs to `install`, and is refused beside `--send-server` |
 | `--route` | a 32-character route id | the one hosted route to fault; belongs to `fault-watch`, where it is required |
 | `--dry-run` | — | print the install, restart or fault plan and write, stop or start nothing; belongs to `install`, `restart` and `fault-watch` |
+| `--request` | — | record the verb and its options for the owner seat to answer, and change nothing; belongs to `install` and `uninstall` |
+| `--reason` | a short text | the reason the owner's card shows; goes with `--request` |
+| `--approval` | a request id | run the verb on the owner's signed answer to that request; belongs to `install` and `uninstall`, and never goes with `--request` |
 | `--json` | — | one JSON document instead of the line; belongs to `status`, `install`, `restart`, `uninstall` and `fault-watch` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -322,6 +369,26 @@ dispatcher's door verifies the grant's chain, its key and the `daemon` op once, 
 verifies them again, so a grant whose chain, key or ops no longer verify `daemon` is refused
 (`daemon.grant-refused`) instead of falling back to the caller. The grant and the key admit the
 run and are never written into the unit.
+
+The owner's signed answer admits `install` and `uninstall`, for any caller. `--request`
+records the verb's plan, resolved once: the home the unit is for (the `--home` folder, or this
+home, as its real path) and, for an install, its hosting opt-ins and the teams registered for
+this account as they are now. The installed unit names no checkout: the daemon it starts hosts
+the teams registered for this account, read again at each start and heartbeat, so an owner-seat
+install takes no `--root`, and the owner's card says "hosting the teams registered for this
+account" with the list as it is when the request is made. `--approval <request-id>` resolves the
+plan again and runs only when it is the plan the answer binds (a home or a registry that changed
+since admits nothing), then executes exactly that plan. A folder that does not resolve refuses
+the request. A value of `--home`, `--root`, `--route` or `--reason` that starts with `-` is
+refused. A daemon request is answered once or denied: `always` is refused, and no standing rule
+admits one. The answer is checked when the command starts, with nothing spent, and spent once
+just before the service manager is asked, so a run refused before that (no service manager, a
+program that cannot be read) keeps it; a dry run never spends it. A change the service manager
+refuses after that has spent the answer: a new answer is needed to retry. On a machine whose
+owner seat is pinned from another machine this is the only way, and the request is carried with
+`team approvals export`. `restart` and `fault-watch` take no request yet: on such a machine they
+stay with the owner, a general grant naming `daemon` (`restart`) or a dev-mode lead. A refused
+answer is `daemon.approval-refused`.
 
 A caller who is not the owner, holds no such grant and is not a lead the dev-mode lift admits is
 refused with `only the owner, a general grant naming daemon, or a lead in development mode
@@ -372,7 +439,8 @@ lane. A moved guard folder prints the exact `guard_dir` line to re-approve and t
 migration is reported moved, not complete until `team check` shows the new path. A dry
 run prints the same lines as would-move and moves nothing.
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
-`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`), or `unit_path` and `removed`
+`installed`, `unit_path`, `program`, `roots` and `runtime_migration` (`install`, with
+`stops_at_logout: true` when the service manager stops the daemon at logout), or `unit_path` and `removed`
 (`uninstall`). A dry run's `install` document also carries `steps`: the neutral sentences the
 plain dry run prints, so a script sees the same stop, retry and rollback plan. `restart --json`
 prints `team.daemon-restart` with `command`, `dry_run`, `restarted` and `unit_path`; its dry run

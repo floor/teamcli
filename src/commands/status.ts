@@ -1,3 +1,5 @@
+import { readHistory } from '../send/history.ts';
+import { modelDriftNotes } from '../send/model-drift.ts';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { relative, resolve } from 'node:path';
@@ -23,9 +25,11 @@ import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_w
 import { daemonHealth } from '../daemon/health.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonDifferences, daemonNotes, daemonReading } from '../daemon/health_display.ts';
-import { hostedWatchNotes } from '../daemon/watch_display.ts';
+import { hostedWatchNotes, hostedWatchRunning, watchRepairOf } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
+import { MailPass } from '../watch/mail-pass.ts';
+import { heldSendNotes } from '../send/held-reports.ts';
 import { busStatusNotes } from '../bus/notes.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
@@ -122,6 +126,29 @@ export type StatusSources = {
   /** The owner-seat credential store that confirms the security profile's signer; the system helper by default. */
   ownerSeatStore?: OwnerSeatKeyStore;
 };
+
+/** Seats with a drop still unread. Status names `blocked: unsent input` only for one of these
+ *  whose box has held text past `unsent_after`. No home, or a folder that cannot be read, is
+ *  no list: the row keeps its ordinary word. */
+function queuedDropsOf(
+  dir: string,
+  root: string,
+  session: string,
+  home: string | undefined,
+  team: TeamFile,
+): ReadonlySet<string> | undefined {
+  if (home === undefined) return undefined;
+  try {
+    const mail = new MailPass({ dir, root, session, home, lead: team.orchestrator });
+    const names = new Set<string>();
+    for (const seat of team.seats) {
+      if (mail.unread(seat.name).length > 0) names.add(seat.name);
+    }
+    return names;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * The standing source against a home that is not the owner's real one — the
@@ -508,7 +535,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     return 1;
   }
 
-  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
+  // A team whose `{root}` this machine can no longer fill is still shown: status reads, never launches.
+  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner, undefined, 'keep');
   if (!owner) {
     const read = current.ok && (clientRead || mayReadTeam(current, io, sources));
     // A create-grant admits the seat whose own registry record it names to the read, for a team
@@ -630,6 +658,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // and relative launch paths under the root.
     { dir, root, home },
     watchDaemon,
+    queuedDropsOf(dir, root, session, home, team),
+    health !== null && hostedWatchRunning(health, root, session),
+    watchRepairOf(health),
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;
@@ -637,8 +668,15 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The registry rows carry each seat's own reading: `--all` renders them as the expanded
   // table, and every `--json` document carries the reading on each row whether `--all` is
   // there or not. Without either, nothing here is read.
+  // The project's history, read once for every row's last proven wake and failure since: the
+  // compact cell, the expanded table and the JSON rows all carry it.
+  const history = sources.home === undefined ? undefined : (() => {
+    const read = readHistory(team.project, root, sources.home);
+    return read.ok ? read.entries : undefined;
+  })();
   const registryRows = all || json
     ? seatRegistryRows(team, state, live, comparison, now, true, hold !== null, {
+        ...(history === undefined ? {} : { history }),
         project: team.project, root, home: sources.home, stateDir: dir, session,
         presenceChannelHealthy: presenceHealthy,
         ...(presenceSeats === undefined ? {} : { presenceSeats }),
@@ -705,6 +743,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     swaps: Object.keys(whole.swaps ?? {}),
   });
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
+  comparison.notes.unshift(...heldSendNotes({ project: team.project, root, home, session, lead: team.orchestrator || team.operator }));
   comparison.notes.push(...busStatusNotes({
     root,
     alive: sources.alive ?? pidAlive,
@@ -742,6 +781,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // A send's webhook post left in flight with no bus serving the root to finish it: a reading,
   // never a delivered post.
   comparison.notes.push(...unfinishedWebhookNotes({ root, alive: sources.alive ?? pidAlive }));
+  if (sources.home !== undefined) comparison.notes.push(...modelDriftNotes({
+    dir, home: sources.home, root, session, team, live,
+  }));
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
@@ -793,6 +835,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         ...(sources.home !== undefined ? { home: sources.home } : {}),
         lead: team.orchestrator,
         now,
+        ...(history === undefined ? {} : { history }),
       })];
     }));
   const compactWake = compactReadings === undefined
@@ -812,14 +855,18 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     const pace = watchPaceOf({ team, root, home: sources.home, standing, now });
     const declared = declaredUnreadAfter(watchInForceWithPace(standing, team, pace), pace);
     for (const [name, reading] of compactReadings) {
-      if (reading.wake.wakeable) continue;
+      // A typed wake can find the composer busy, so its seat's stall is still reported.
+      if (reading.wake.wakeable && reading.wake.class !== 'typed-wake') continue;
       const row = team.seats.find((one) => one.name === name);
       if (row?.human === true) continue;
       const windowSeconds = unreadWindowSeconds(declared, reading.wake.class);
       const age = reading.wake.oldest_unread_seconds;
       if (age === null || age < windowSeconds) continue;
-      const waits = reading.words.replace(/^queued; /, '');
-      const retry = reading.watchWake ? " the watch's typed retry has not delivered for it;" : '';
+      const typed = reading.wake.class === 'typed-wake';
+      const waits = typed
+        ? 'no typed wake has delivered it yet; a busy or drafted composer keeps it in the bus inbox'
+        : reading.words.replace(/^queued; /, '');
+      const retry = reading.watchWake && !typed ? " the watch's typed retry has not delivered for it;" : '';
       const count = reading.wake.unread === null ? '' : `${String(reading.wake.unread)} unread; `;
       const holding = holdsText.has(name) ? 'its input box reads as holding text; nothing is typed there; ' : '';
       comparison.notes.push(`${name}: queued, not woken — ${count}${holding}its oldest unread drop has waited ${wakeAge(age)}, past the ${String(windowSeconds)}s unread window;${retry} ${waits}`);

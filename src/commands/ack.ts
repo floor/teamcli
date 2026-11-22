@@ -15,11 +15,12 @@
 // bundle grant let a client write is refused too, unless that grant's signed op list carries
 // `ack`: then the seat the team places, in the one team and session the grant signs, acknowledges
 // it here, under the same verified bound a reply to the same thread is admitted by.
+import { relayIfConfined } from '../send/confined-outbox.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { resolveBundleSendTarget } from '../client/bundles.ts';
-import { activeClientUpGrant, clientAdmission, readClientThreadGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
+import { bundleAckGate, type BundleAckGate } from '../client/bundle-ack.ts';
+import { readClientThreadGrant } from '../client/records.ts';
 import {
   callerVerdict,
   describeCaller,
@@ -40,6 +41,7 @@ import { appendHistory } from '../send/history.ts';
 import { parseDuration, scanAckSeat, seatClearTargetStatus } from '../send/message-archive.ts';
 import { LEAD_ACK_PREFIX, recordNameOk } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
+import { EXPLICIT_ACK_READ_BY, writeExplicitAck } from '../send/inbox-retention.ts';
 import { messageKeyState } from '../store/keys.ts';
 import {
   findRecord,
@@ -50,6 +52,7 @@ import {
   samePath,
 } from './reply.ts';
 import { recordDir } from './messages.ts';
+import { mailDirOf, seatMailParts } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team ack <id> [--json]
 Usage: team ack --seat <seat> --older-than <dur> [--dry-run] [--json]
@@ -139,8 +142,10 @@ function scopedRefused(io: Io, json: boolean, message: string): number {
 }
 
 /** The relative path of one record's receipt, as the caller reads it in a repair line. */
-function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied'): string {
-  return join('.agents', 'send-drops', session, seat, `${id}.${status}.json`);
+function receiptPath(session: string, seat: string, id: string, status: 'read' | 'replied', recordPath?: string): string {
+  // The tree the record lives in (src/queue/mail-tree.ts): a stamped record's receipt is beside it.
+  const tree = recordPath === undefined ? 'legacy' : (mailDirOf(dirname(recordPath))?.tree ?? 'legacy');
+  return join(...seatMailParts(session, seat, tree), `${id}.${status}.json`);
 }
 
 export async function runAck(argv: string[], io: Io, host: AckHost): Promise<number> {
@@ -148,6 +153,10 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   const json = hasJsonFlag(argv);
   if (io.general !== undefined && scopedAck(argv)) return refused(io, json, 'a client acknowledgement needs an exact UUID; scoped acknowledgement is for seats and the owner');
   if (scopedAck(argv)) return await runScopedAck(argv, io, host, json);
+  // A seat its sandbox confines cannot write the receipt beside the record: its watch writes it
+  // for it, as that seat (rfc-event-comms E5, src/send/confined-outbox.ts).
+  const relayed = await relayIfConfined('ack', argv, io);
+  if (relayed !== null) return relayed;
   const args = readArgs(argv, [], ['json']);
   if (args.error) return usage(io, json, args.error);
   const id = args.rest[0];
@@ -218,54 +227,34 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   const acknowledged = found.record.payload;
   const resolvedId = acknowledged.id;
 
-  // A record a client wrote carries the grant that opened its thread. A plain grant's read
-  // belongs to the client inbox, as it always has. A bundle grant whose signed op list carries
-  // `ack` admits this command for its own client's opening record, in the one team and session
-  // the grant signs, addressed to the seat the team places: the same binding a reply to that
-  // thread is admitted by, checked against the grant's signed client, its team and the registry.
-  let clientOrigin: { grant: ClientUpGrantRecord; signature: string } | null = null;
-  if (acknowledged.from_client !== undefined) {
-    const origin = readClientThreadGrant(host.home, acknowledged.from_client.grant_id);
-    if (!origin.ok) {
-      return refused(io, json, `the record's originating grant ${acknowledged.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`);
+  // A record a client wrote carries the grant that opened its thread. A plain grant's record is
+  // acknowledged by the seat it is addressed to, as any message is: the receipt records that
+  // seat's own read and grants the client nothing (on an E7b-active root a stamped message settles
+  // only by its recipient's ack, so a refusal here left every client message re-delivered for
+  // good). The client's own inbox, the replies it reads, is not touched, and no other caller
+  // acknowledges the record. A bundle grant whose signed op list carries `ack` admits this command
+  // for its own client's opening record, in the one team and session the grant signs, addressed
+  // to the seat the team places: the same binding a reply to that thread is admitted by, checked
+  // against the grant's signed client, its team and the registry.
+  let bundle: Extract<BundleAckGate, { ok: true }> | null = null;
+  const origin = acknowledged.from_client === undefined ? null : readClientThreadGrant(host.home, acknowledged.from_client.grant_id);
+  if (origin !== null && acknowledged.from_client !== undefined && !origin.ok) {
+    return refused(io, json, `the record's originating grant ${acknowledged.from_client.grant_id} does not verify in the canonical store: ${origin.why}; nothing was written`);
+  }
+  if (origin !== null && origin.ok && origin.kind === 'grant') {
+    if (me !== acknowledged.to) {
+      return refused(io, json, `record ${resolvedId} was written by a client to ${acknowledged.to}; only ${acknowledged.to} acknowledges it; nothing was written`);
     }
-    if (origin.kind === 'grant') {
-      return refused(io, json, `record ${resolvedId} was written by a client; its read belongs to the client inbox, not to this command`);
-    }
-    const grant = origin.grant;
-    if (grant.clientId !== acknowledged.from_client.client_id) {
-      return refused(io, json, `this record names client "${acknowledged.from_client.client_id}" and its grant names "${grant.clientId}"; nothing was written`);
-    }
-    const admitted = clientAdmission(host.home, grant.clientId, grant.entity);
-    if (!admitted.ok) return refused(io, json, `${admitted.why}; nothing was written`);
-    if (!grant.ops.includes('ack')) {
-      return refused(io, json, `the record's bundle grant ${grant.grantId} carries ${grant.ops.join(', ') || 'no op'}, not ack; only a bundle that carries ack admits this acknowledgement; nothing was written`);
-    }
-    if (acknowledged.thread !== acknowledged.id) {
-      return refused(io, json, `record ${resolvedId} answers another record; a client thread is the client's own opening record, and only it is acknowledged; nothing was written`);
-    }
-    if (acknowledged.to_id === null) {
-      return refused(io, json, `record ${resolvedId} carries no to_id; the seat the bundle grant reaches cannot be matched to it; nothing was written`);
-    }
-    const resolved = resolveBundleSendTarget(host.home, grant, acknowledged.to);
-    if (!resolved.ok) return refused(io, json, `the bundle grant's recipient cannot be resolved: ${resolved.why}; nothing was written`);
-    const target = resolved.target;
-    if (!samePath(target.teamRoot, root) || target.session !== session) {
-      return refused(io, json, `the bundle grant's recipient lives in another checkout or session than this record; nothing was written`);
-    }
-    if (acknowledged.to !== target.recipientSeat || acknowledged.to_id !== target.recipientId) {
-      return refused(io, json, `record ${resolvedId} is addressed to "${acknowledged.to}" (${acknowledged.to_id}), not to the recipient the bundle grant reaches, "${target.recipientSeat}" (${target.recipientId}); nothing was written`);
-    }
-    if (me !== target.recipientSeat) {
-      return refused(io, json, `seat ${me} is not the recipient of the client thread; only ${target.recipientSeat} acknowledges it; nothing was written`);
-    }
-    clientOrigin = { grant, signature: origin.signature };
+  } else if (origin !== null && origin.ok && acknowledged.from_client !== undefined) {
+    const gate = bundleAckGate(host.home, { grant: origin.grant, signature: origin.signature }, acknowledged, root, session, me, host.now);
+    if (!gate.ok) return refused(io, json, gate.why);
+    bundle = gate;
   }
   // A general seat brief's read is bound to the seat's current claim, and its reader verifies the
   // receipt against that binding: a plain receipt here would hold the receipt name the seat's own
   // turn-start reader needs, so the brief would never be served. Read it there, not here.
   if (isGeneralBriefRecord(acknowledged)) {
-    return refused(io, json, `record ${resolvedId} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged`);
+    return refused(io, json, `record ${resolvedId} is the general seat brief; it is read by the seat's own turn-start reader, not acknowledged: the seat marks it read with \`team drops --read --seat ${found.seat}\``);
   }
   if (acknowledged.session !== session) {
     return refused(io, json, `record ${resolvedId} is bound to session "${acknowledged.session}", not to "${session}"`);
@@ -275,6 +264,8 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   }
 
   const at = host.now().toISOString();
+  // One ack writes one file: the signed read receipt, carrying `read_by: ack`, which every reader
+  // takes as the acknowledgement (settlement, retention, the sender's outcome).
   const publish = () => publishRecordRead({
     dropDir: recordDir(root, session, found.seat),
     id: resolvedId,
@@ -284,41 +275,19 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     home: host.home,
     key,
     at,
+    readBy: EXPLICIT_ACK_READ_BY,
     lead: team.orchestrator,
   });
   let outcome: ReturnType<typeof publishRecordRead>;
-  if (clientOrigin === null) {
+  if (bundle === null) {
     outcome = publish();
   } else {
-    const bundleOrigin = clientOrigin;
-    // The grant was active when the binding was read; a revocation appended while this call
-    // waited must be seen in the section that writes, and must refuse, exactly as a reply's is.
-    // A read receipt grants nothing, so the lock covers only the re-check and the write.
-    let settled: { ok: true; outcome: ReturnType<typeof publishRecordRead> } | { ok: false; why: string };
-    try {
-      settled = withClientGrantLock(host.home, (): { ok: true; outcome: ReturnType<typeof publishRecordRead> } | { ok: false; why: string } => {
-        const active = activeClientUpGrant(host.home, bundleOrigin, host.now());
-        if (!active.ok) return { ok: false, why: `the originating grant ${bundleOrigin.grant.grantId} is not active: ${active.why}; nothing was written` };
-        const fresh = resolveBundleSendTarget(host.home, active.grant, acknowledged.to);
-        if (!fresh.ok) return { ok: false, why: `the bundle grant's recipient can no longer be resolved: ${fresh.why}; nothing was written` };
-        if (
-          !samePath(fresh.target.teamRoot, root) ||
-          fresh.target.session !== session ||
-          fresh.target.recipientSeat !== me ||
-          acknowledged.to_id !== fresh.target.recipientId
-        ) {
-          return { ok: false, why: 'the bundle grant\'s recipient changed while this call waited; nothing was written' };
-        }
-        return { ok: true, outcome: publish() };
-      });
-    } catch (error) {
-      return refused(io, json, error instanceof Error ? `${error.message}; nothing was written` : 'the client grant lock could not be taken; nothing was written');
-    }
+    const settled = bundle.under(publish);
     if (!settled.ok) return refused(io, json, settled.why);
-    outcome = settled.outcome;
+    outcome = settled.value;
   }
   if (outcome.kind === 'held') {
-    const where = receiptPath(session, found.seat, resolvedId, outcome.status);
+    const where = receiptPath(session, found.seat, resolvedId, outcome.status, found.path);
     const what = outcome.entry === 'file'
       ? `the ${outcome.status} receipt name is held by a file that does not verify for this message`
       : `the ${outcome.status} receipt path is held by something that is not a file`;
@@ -337,6 +306,23 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
       return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be written; run team ack again once the receipt folder can be written`);
     }
     return refused(io, json, `${resolvedId}: not marked read: the read receipt could not be made durable; leave it in place, it already records this read`);
+  }
+
+  // A message another reader already read (a channel read, an inbox read) is acknowledged by the
+  // note beside its receipt: that receipt is never rewritten, and retention moves acknowledged
+  // mail at once.
+  const noted = outcome.kind !== 'served' || writeExplicitAck({
+    folder: dirname(found.path),
+    id: resolvedId,
+    to: found.seat,
+    root,
+    session,
+    home: host.home,
+    key,
+    at,
+  });
+  if (!noted) {
+    return refused(io, json, `${resolvedId}: not marked read: the acknowledgement could not be written beside the record`);
   }
 
   const summary = `${resolvedId}: read`;

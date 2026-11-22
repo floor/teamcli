@@ -262,7 +262,11 @@ describe('team plan', () => {
   });
 
   test('a socket seat the box held is shown the same note as a pull-on-turn seat', async () => {
-    ready(WITH, '- id: timed\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n');
+    // The socket is an opt-in the team file declares: the lead's row carries `inbound: accept`.
+    ready(
+      WITH.replace('    name: lead\n', '    name: lead\n    inbound: accept\n'),
+      '- id: timed\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n',
+    );
     // The lead's launch leaves an accepted socket with a standing address, named the way the
     // command reads the folder (the loaded team file's own, reported resolved). No mark yet: the
     // seat is push-class, and the row is shown as written.

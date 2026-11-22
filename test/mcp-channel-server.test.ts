@@ -7,28 +7,35 @@
 // A launch without the flag is the ordinary inbox server: no capability, no instructions, no
 // push, no ack. Fixtures only: synthetic folders, a synthetic home, and a launch line this test
 // writes; no live session is touched.
-import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { describe, expect, spyOn, test } from 'bun:test';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
-import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, channelPushPath } from '../src/mcp/channel.ts';
+import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, channelCommitLockPath, channelPushPath } from '../src/mcp/channel.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
-import { loadTeamFile } from '../src/file/load.ts';
+import { gitRootReadCount, loadTeamFile } from '../src/file/load.ts';
 import { runReply } from '../src/commands/reply.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { markPending, readPending } from '../src/send/pending.ts';
 import { signRecord, verifyReceipt, type RecordPayload, type SignedReceipt } from '../src/send/record.ts';
+import * as keys from '../src/store/keys.ts';
 import { messageKeyState } from '../src/store/keys.ts';
+import { currentRunMemo } from '../src/run-memo.ts';
+import { channelNotified, markChannelNotified } from '../src/mcp/channel.ts';
 import { retryHeldDrops, type RetryScene } from '../src/watch/retry.ts';
-import { testIo } from './helpers.ts';
+import { paneShell, testIo } from './helpers.ts';
+import { seatListingDirs } from '../src/queue/mail-tree.ts';
 
 const SESSION = 'acme';
 const FLAG = '--dangerously-load-development-channels server:team-inbox';
 const PUSHED_ID = 'aaaaaaaa-0000-4000-8000-000000000101';
 const ACKED_ID = 'bbbbbbbb-0000-4000-8000-000000000102';
 const UNKNOWN_ID = 'cccccccc-0000-4000-8000-000000000103';
+const IDLE_ID = 'dddddddd-0000-4000-8000-000000000104';
 
 function teamText(launch: string): string {
   return `format: 1
@@ -271,41 +278,6 @@ describe('the channel declaration', () => {
 });
 
 describe('the push', () => {
-  test('a record that arrives while the server runs is pushed once, with its header and id-only meta', async () => {
-    const at = place();
-    try {
-      const io = testIo(at.root, seatCaller());
-      const feed = queue();
-      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      // Nothing waiting at startup is pushed: a fresh session starts quiet.
-      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nhello there');
-      await until(() => notice(feed.replies).length >= 1);
-      const pushed = notice(feed.replies);
-      expect(pushed).toHaveLength(1);
-      expect(pushed[0]!.params.meta).toEqual({ id: PUSHED_ID, from: 'worker', seat: 'lead', team: 'acme' });
-      const content = pushed[0]!.params.content as string;
-      // The content opens with the message-display header, then the signed body whole.
-      expect(content.split('\n')[0]).toContain('worker');
-      expect(content).toContain('hello there');
-      const marker = JSON.parse(readFileSync(channelPushPath(at.dropDir, PUSHED_ID), 'utf8')) as Record<string, unknown>;
-      expect(marker).toMatchObject({ v: 1, kind: 'channel-push', id: PUSHED_ID, seat: 'lead', session: SESSION, status: 'sent (channel)' });
-      expect(String(marker.content_sha256)).toHaveLength(64);
-      expect(statSync(channelPushPath(at.dropDir, PUSHED_ID)).mode & 0o777).toBe(0o600);
-      // Capturing the stdio write is not a consumer acknowledgement. The reservation prevents
-      // duplicate wakes while the inbox still lists the message as unread.
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      const checked = await tool(feed, '9', 'inbox_check');
-      expect(JSON.parse(checked.content[0].text).unread.map((one: { id: string }) => one.id)).toEqual([PUSHED_ID]);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      expect(notice(feed.replies)).toHaveLength(1);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      feed.end();
-      expect(await running).toBe(0);
-    } finally {
-      at.cleanup();
-    }
-  });
 
   test('the notification carries the content and meta only: no key object rides in a frame shown to an agent', async () => {
     const at = place();
@@ -328,189 +300,112 @@ describe('the push', () => {
     }
   });
 
-  test('explicit ack settles a pushed message once and prevents fallback; duplicate ack preserves the receipt', async () => {
+  test('a serving seat holds git\'s root answer: later pushes start no git', async () => {
     const at = place();
-    const feed = queue();
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
     try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
       await until(() => existsSync(listenerPath(at.dropDir)));
-      signed(at, PUSHED_ID, 'ack this push');
-      const sent = new Date();
-      markPending(at.dropDir, { id: PUSHED_ID, from: 'worker', to: 'lead', body: 'ack this push', ts: sent.toISOString(), leg: 'channel', thread: PUSHED_ID });
-      await until(() => notice(feed.replies).length === 1);
-      expect(notice(feed.replies)).toHaveLength(1);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-
-      const first = await tool(feed, 'first', 'ack', { id: PUSHED_ID });
-      expect(first.isError).toBeUndefined();
-      expect(JSON.parse(first.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: true });
-      const before = readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8');
-      const receipt = JSON.parse(before) as SignedReceipt;
-      expect(receipt.payload).toMatchObject({ status: 'read', id: PUSHED_ID, read_by: 'channel', to: 'lead', session: SESSION });
-      const key = messageKeyState(at.home);
-      if (key.kind !== 'key') throw new Error('fixture key missing');
-      expect(verifyReceipt(receipt, key.key)).toBe(true);
-
-      const duplicate = await tool(feed, 'duplicate', 'ack', { id: PUSHED_ID });
-      expect(JSON.parse(duplicate.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: false });
-      expect(readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8')).toBe(before);
-      expect(JSON.parse((await tool(feed, 'unread', 'inbox_check')).content[0].text)).toEqual({ unread: [] });
-      const sockets: string[] = [];
-      await retryHeldDrops(recovery(at, new Date(sent.getTime() + CHANNEL_CONFIRM_MS + 1), sockets));
-      expect(sockets).toEqual([]);
-      expect(readPending(at.dropDir)).toEqual([]);
-    } finally {
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nfirst');
+      await until(() => notice(feed.replies).length >= 1);
+      const reads = gitRootReadCount();
+      signed(at, ACKED_ID, 'from a worker — admitted by: the owner\n\nsecond');
+      signed(at, IDLE_ID, 'from a worker — admitted by: the owner\n\nthird');
+      await until(() => notice(feed.replies).length >= 3);
+      expect(notice(feed.replies)).toHaveLength(3);
+      expect(gitRootReadCount()).toBe(reads);
       feed.end();
-      await running;
-      at.cleanup();
-    }
-  });
-
-  test('inbox_read can consume a pushed message before ack; later ack does not replace that receipt', async () => {
-    const at = place();
-    const feed = queue();
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
-    try {
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      signed(at, PUSHED_ID, 'read the pushed body');
-      await until(() => notice(feed.replies).length === 1);
-      expect(notice(feed.replies)).toHaveLength(1);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      const read = await tool(feed, 'read', 'inbox_read', { id: PUSHED_ID });
-      expect(read.isError).toBeUndefined();
-      expect(read.content[0].text).toBe('from worker (owner):\n\nread the pushed body');
-      const before = readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8');
-      const receipt = JSON.parse(before) as SignedReceipt;
-      expect(receipt.payload.read_by).not.toBe('channel-push');
-      const key = messageKeyState(at.home);
-      if (key.kind !== 'key') throw new Error('fixture key missing');
-      expect(verifyReceipt(receipt, key.key)).toBe(true);
-      const acked = await tool(feed, 'ack-after-read', 'ack', { id: PUSHED_ID });
-      expect(JSON.parse(acked.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: false });
-      expect(readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8')).toBe(before);
-    } finally {
-      feed.end();
-      await running;
-      at.cleanup();
-    }
-  });
-
-  test('an explicit reply settles an unacknowledged push and later ack preserves its read receipt', async () => {
-    const at = place();
-    const feed = queue();
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
-    try {
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      signed(at, PUSHED_ID, 'answer this push');
-      await until(() => notice(feed.replies).length === 1);
-      expect(notice(feed.replies)).toHaveLength(1);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      const replyIo = testIo(at.root, seatCaller());
-      const replied = await runReply([PUSHED_ID, 'the explicit answer'], replyIo, {
-        home: at.home,
-        now: () => new Date('2026-10-22T09:00:01.000Z'),
-        newId: () => ACKED_ID,
-      });
-      expect(replied, replyIo.err).toBe(0);
-      const before = readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8');
-      const receipt = JSON.parse(before) as SignedReceipt;
-      expect(receipt.payload.read_by).toBe('reply');
-      const key = messageKeyState(at.home);
-      if (key.kind !== 'key') throw new Error('fixture key missing');
-      expect(verifyReceipt(receipt, key.key)).toBe(true);
-      expect(existsSync(join(at.dropDir, `${PUSHED_ID}.replied.json`))).toBe(true);
-      const answer = JSON.parse(readFileSync(join(at.root, '.agents', 'send-drops', SESSION, 'worker', ACKED_ID), 'utf8'));
-      expect(answer.payload).toMatchObject({ to: 'worker', from: 'lead', thread: PUSHED_ID });
-      const acked = await tool(feed, 'ack-after-reply', 'ack', { id: PUSHED_ID });
-      expect(JSON.parse(acked.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: false });
-      expect(readFileSync(receiptPath(at.dropDir, PUSHED_ID), 'utf8')).toBe(before);
-      expect(JSON.parse((await tool(feed, 'unread-after-reply', 'inbox_check')).content[0].text)).toEqual({ unread: [] });
-    } finally {
-      feed.end();
-      await running;
-      at.cleanup();
-    }
-  });
-
-  test('a blocked ack receipt write leaves the push unread and an explicit retry can settle it', async () => {
-    const at = place();
-    const feed = queue();
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), feed, { home: at.home });
-    try {
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      signed(at, PUSHED_ID, 'retry acknowledgment after the receipt path is free');
-      await until(() => notice(feed.replies).length === 1);
-      expect(notice(feed.replies)).toHaveLength(1);
-      const path = receiptPath(at.dropDir, PUSHED_ID);
-      mkdirSync(path);
-      const failed = await tool(feed, 'blocked-ack', 'ack', { id: PUSHED_ID });
-      expect(failed.isError).toBe(true);
-      expect(failed.content[0].text).toContain('receipt name is held');
-      expect(statSync(path).isDirectory()).toBe(true);
-      const checked = await tool(feed, 'still-unread', 'inbox_check');
-      expect(JSON.parse(checked.content[0].text).unread.map((one: { id: string }) => one.id)).toEqual([PUSHED_ID]);
-      // Move the synthetic obstruction aside without changing the message or its reservation.
-      renameSync(path, join(at.root, 'held-read-name'));
-      const retried = await tool(feed, 'retry-ack', 'ack', { id: PUSHED_ID });
-      expect(retried.isError).toBeUndefined();
-      expect(JSON.parse(retried.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: true });
-      const key = messageKeyState(at.home);
-      if (key.kind !== 'key') throw new Error('fixture key missing');
-      expect(verifyReceipt(JSON.parse(readFileSync(path, 'utf8')) as SignedReceipt, key.key)).toBe(true);
-      expect(notice(feed.replies)).toHaveLength(1);
-    } finally {
-      feed.end();
-      await running;
-      at.cleanup();
-    }
-  });
-
-  test('an ignored notification survives restart unread and takes only one fallback after the confirmation window', async () => {
-    const at = place();
-    const first = queue();
-    const second = queue();
-    let restarted: Promise<number> | undefined;
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), first, { home: at.home });
-    try {
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      const body = 'the fake client ignores this notification';
-      signed(at, PUSHED_ID, body);
-      const sent = new Date();
-      markPending(at.dropDir, { id: PUSHED_ID, from: 'worker', to: 'lead', body, ts: sent.toISOString(), leg: 'channel', thread: PUSHED_ID });
-      await until(() => notice(first.replies).length === 1);
-      expect(notice(first.replies)).toHaveLength(1);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      const reservation = readFileSync(channelPushPath(at.dropDir, PUSHED_ID), 'utf8');
-      first.end();
       expect(await running).toBe(0);
-
-      restarted = runMcpServe({ seat: 'lead', session: SESSION }, testIo(at.root, seatCaller()), second, { home: at.home });
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      const check = await tool(second, 'after-restart', 'inbox_check');
-      expect(JSON.parse(check.content[0].text).unread.map((one: { id: string }) => one.id)).toEqual([PUSHED_ID]);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      expect(notice(second.replies)).toEqual([]);
-      expect(readFileSync(channelPushPath(at.dropDir, PUSHED_ID), 'utf8')).toBe(reservation);
-
-      const sockets: string[] = [];
-      await retryHeldDrops(recovery(at, new Date(sent.getTime() + CHANNEL_CONFIRM_MS - 1), sockets));
-      expect(sockets).toEqual([]);
-      expect(readPending(at.dropDir)).toHaveLength(1);
-      await retryHeldDrops(recovery(at, new Date(sent.getTime() + CHANNEL_CONFIRM_MS + 1), sockets));
-      expect(sockets).toEqual([PUSHED_ID]);
-      expect(readPending(at.dropDir)).toEqual([]);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      // A new watch pass after the recovery cannot spend the same fallback twice.
-      await retryHeldDrops(recovery(at, new Date(sent.getTime() + 2 * CHANNEL_CONFIRM_MS), sockets));
-      expect(sockets).toEqual([PUSHED_ID]);
-      const acked = await tool(second, 'late-ack', 'ack', { id: PUSHED_ID });
-      expect(JSON.parse(acked.content[0].text)).toEqual({ acknowledged: PUSHED_ID, written: true });
-      expect(notice(second.replies)).toEqual([]);
     } finally {
-      first.end();
-      second.end();
-      await running;
-      await restarted;
+      at.cleanup();
+    }
+  });
+
+  test('a launch flag dropped after the server started is read at the commit: no line and no notified marker', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      // A terminal-host resume re-tied the pane: the record now says the process carries no flag.
+      writeFileSync(
+        join(at.root, '.agents', 'team.state.json'),
+        `${JSON.stringify({ format: 1, sessions: { [SESSION]: { seats: { lead: { stage: 'ready', pane: 'pane-lead', channel_launch: false }, worker: { stage: 'ready', pane: 'pane-worker' } }, worktrees: {} } } })}\n`,
+      );
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nflag dropped');
+      await until(() => notice(feed.replies).length >= 1, 100);
+      expect(notice(feed.replies)).toHaveLength(0);
+      expect(channelNotified(at.dropDir, PUSHED_ID)).toBe(false);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a push reads its inputs under one run memo, and its commit re-proves the seat on fresh reads', async () => {
+    const at = place();
+    let memoInCommit: boolean | null = null;
+    const original = keys.messageKeyState;
+    const memoAtKey: boolean[] = [];
+    let armed = false;
+    const keySpy = spyOn(keys, 'messageKeyState').mockImplementation((home?: string) => {
+      if (armed) memoAtKey.push(currentRunMemo() !== null);
+      return original(home);
+    });
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const running = runMcpServe({ seat: 'lead', session: SESSION }, io, feed, {
+        home: at.home,
+        channelMark: (dir, id) => {
+          memoInCommit = currentRunMemo() !== null;
+          return markChannelNotified(dir, id);
+        },
+      });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      expect(currentRunMemo()).toBeNull();
+      signed(at, PUSHED_ID, 'from a worker — admitted by: the owner\n\nmemo');
+      armed = true;
+      await until(() => notice(feed.replies).length >= 1);
+      expect(notice(feed.replies)).toHaveLength(1);
+      // The record's checks read the key under the memo; the commit (the seat re-proof, the
+      // marker, the frame) runs outside it.
+      expect(memoAtKey[0]).toBe(true);
+      expect(memoInCommit as boolean | null).toBe(false);
+      expect(currentRunMemo()).toBeNull();
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
+      keySpy.mockRestore();
+      at.cleanup();
+    }
+  });
+
+  test('a record in a stamped folder created after the server started is pushed by the folder watch, not the next pass', async () => {
+    const at = place();
+    try {
+      const io = testIo(at.root, seatCaller());
+      const feed = queue();
+      const stamped = seatListingDirs(at.dropDir)[1]!;
+      expect(existsSync(stamped)).toBe(false);
+      // Both passes are set longer than this stretch: only a watch can deliver inside it.
+      const running = runMcpServe({ seat: 'lead', session: SESSION, fallbackMs: 60_000, namesMs: 60_000 }, io, feed, { home: at.home });
+      await until(() => existsSync(listenerPath(at.dropDir)));
+      const record = signRecord({
+        kind: 'message', id: PUSHED_ID, to: 'lead', to_id: at.leadId, root: realpathSync(at.root), session: SESSION,
+        at: '2026-10-22T09:00:00.000Z', body: 'from a worker — admitted by: the owner\n\nfirst into a new folder',
+        from: 'worker', from_id: at.workerId, rule: 'the owner', thread: PUSHED_ID,
+      }, at.home);
+      mkdirSync(stamped, { recursive: true, mode: 0o700 });
+      writeFileSync(join(stamped, PUSHED_ID), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+      await until(() => notice(feed.replies).length >= 1, 400);
+      expect(notice(feed.replies).map((one) => one.params.meta.id)).toEqual([PUSHED_ID]);
+      feed.end();
+      expect(await running).toBe(0);
+    } finally {
       at.cleanup();
     }
   });
@@ -587,36 +482,166 @@ describe('the push', () => {
       }
     });
   }
+});
 
-  test('a superseded launch cannot acknowledge a push from its old epoch', async () => {
+describe('an idle channel server', () => {
+  /** 7,500 drop names and 7,500 receipt names. A pass that parses every drop on each tick
+   *  spends seconds of CPU here; a pass that only lists names does not. */
+  function fillInbox(dropDir: string): void {
+    mkdirSync(dropDir, { recursive: true, mode: 0o700 });
+    for (let n = 0; n < 7_500; n += 1) {
+      const name = `bbbbbbbb-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+      writeFileSync(join(dropDir, name), '{}\n');
+      writeFileSync(join(dropDir, `${name}.read.json`), '{}\n');
+    }
+  }
+
+  function runner(at: Place, fallbackMs?: number): { child: ChildProcess; out: () => string; err: () => string; cpuPath: string; ready: string } {
+    const shell = paneShell({
+      bin: join(at.home, 'bin'),
+      dir: join(at.root, '.agents'),
+      session: SESSION,
+      seat: 'lead',
+      pane: 'pane-lead',
+      home: at.home,
+    });
+    const file = join(at.root, 'idle-serve.ts');
+    const cpuPath = join(at.root, 'idle-cpu.json');
+    const ready = join(at.root, 'idle-ready');
+    const serve = fileURLToPath(new URL('../src/mcp/serve.ts', import.meta.url));
+    writeFileSync(file, `import { existsSync, writeFileSync } from 'node:fs';
+import { runMcpServe } from ${JSON.stringify(serve)};
+const listener = process.env.LISTENER_PATH ?? '';
+const cpuPath = process.env.CPU_PATH ?? '';
+const ready = process.env.READY_PATH ?? '';
+let base: NodeJS.CpuUsage | null = null;
+let from = 0;
+const arm = setInterval(() => {
+  if (from !== 0 || !existsSync(listener)) return;
+  from = Date.now();
+  base = process.cpuUsage();
+  writeFileSync(ready, 'ready\\n');
+}, 50);
+process.on('SIGTERM', () => {
+  clearInterval(arm);
+  const used = base === null ? process.cpuUsage() : process.cpuUsage(base);
+  writeFileSync(cpuPath, JSON.stringify({ user: used.user, system: used.system, wall: from === 0 ? 0 : Date.now() - from }));
+  process.exit(0);
+});
+const fallback = process.env.FALLBACK_MS;
+await runMcpServe({
+  seat: 'lead',
+  session: process.env.TEAM_SESSION,
+  file: process.env.TEAM_FILE,
+  ...(fallback === undefined || fallback === '' ? {} : { fallbackMs: Number(fallback) }),
+}, {
+  stdout() {},
+  stderr(text) { process.stderr.write(text); },
+  cwd: process.cwd(),
+  env: process.env,
+  stdinIsTTY: false,
+});
+`);
+    let out = '';
+    let err = '';
+    const child = spawn(process.execPath, [file], {
+      cwd: at.root,
+      env: {
+        ...shell.env,
+        TEAM_SESSION: SESSION,
+        TEAM_FILE: join(at.root, '.agents', 'team.yaml'),
+        LISTENER_PATH: listenerPath(at.dropDir),
+        CPU_PATH: cpuPath,
+        READY_PATH: ready,
+        ...(fallbackMs === undefined ? {} : { FALLBACK_MS: String(fallbackMs) }),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8'); });
+    child.stderr?.on('data', (chunk: Buffer) => { err += chunk.toString('utf8'); });
+    return { child, out: () => out, err: () => err, cpuPath, ready };
+  }
+
+  async function stop(child: ChildProcess): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the server did not exit after kill')), 5_000);
+      child.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    child.kill();
+    await exited;
+  }
+
+  // A CPU benchmark that idles 10 s: runs when asked (TEAM_SCALE_TESTS=1), not by default.
+  test.skipIf(process.env.TEAM_SCALE_TESTS !== '1')('a large inbox stays under the CPU bound for 10s, and a new drop arrives through the folder watch', async () => {
     const at = place();
-    const statePath = join(at.root, '.agents', 'team.state.json');
-    const state = JSON.parse(readFileSync(statePath, 'utf8'));
-    const epoch = 'run_0123456789ab';
-    const claim = {
-      id: UNKNOWN_ID, at: '2026-10-22T09:00:00.000Z', incarnation: 'inc_0123456789ab',
-      epoch, sha256: 'a'.repeat(64), stage: 'claimed',
-    };
-    state.sessions[SESSION].briefs = { lead: claim };
-    writeFileSync(statePath, JSON.stringify(state));
-    const feed = queue();
-    const running = runMcpServe({ seat: 'lead', session: SESSION, epoch }, testIo(at.root, seatCaller()), feed, { home: at.home });
+    let running: ChildProcess | undefined;
     try {
-      await until(() => existsSync(listenerPath(at.dropDir)));
-      signed(at, PUSHED_ID, 'pushed under the original launch');
-      await until(() => notice(feed.replies).length === 1);
-      expect(notice(feed.replies)).toHaveLength(1);
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
-      state.sessions[SESSION].briefs.lead.epoch = 'run_ba9876543210';
-      writeFileSync(statePath, JSON.stringify(state));
-      const refused = await tool(feed, 'stale-ack', 'ack', { id: PUSHED_ID });
-      expect(refused.isError).toBe(true);
-      expect(refused.content[0].text).toContain('not the seat\'s current launch epoch');
-      expect(existsSync(receiptPath(at.dropDir, PUSHED_ID))).toBe(false);
+      fillInbox(at.dropDir);
+      const cpu = runner(at);
+      running = cpu.child;
+      await until(() => existsSync(cpu.ready) || cpu.child.exitCode !== null, 2_000);
+      expect(cpu.child.exitCode).toBeNull();
+      const idleFrom = Date.now();
+      const remain = async (): Promise<void> => {
+        const left = 10_000 - (Date.now() - idleFrom);
+        if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+      };
+      await remain();
+      await stop(cpu.child);
+      running = undefined;
+      const sample = JSON.parse(readFileSync(cpu.cpuPath, 'utf8')) as { user: number; system: number; wall: number };
+      expect(sample.wall).toBeGreaterThanOrEqual(9_000);
+      // Re-reading every file on the short tick of this folder stays above two seconds.
+      // Listing names and parsing only a new one stays under it.
+      expect(sample.user + sample.system).toBeLessThan(2_000_000);
+
+      const late = runner(at, 30_000);
+      running = late.child;
+      await until(() => late.err().includes('channel primed') || late.child.exitCode !== null, 2_000);
+      expect(late.child.exitCode).toBeNull();
+      const sentAt = Date.now();
+      signed(at, IDLE_ID, 'from a worker — admitted by: the owner\n\nwhile idle');
+      await until(() => late.out().includes(IDLE_ID) || late.child.exitCode !== null, 400);
+      expect(Date.now() - sentAt).toBeLessThan(1_500);
+      expect(late.out()).toContain(IDLE_ID);
+      await stop(late.child);
+      running = undefined;
     } finally {
-      feed.end();
-      await running;
+      if (running !== undefined && running.exitCode === null && running.signalCode === null) running.kill();
       at.cleanup();
     }
-  });
+  }, 60_000);
+
+  test('a foreign lock is left unseen at the give-up and delivered on the next pass once it is gone', async () => {
+    const at = place();
+    const id = 'eeeeeeee-0000-4000-8000-000000000105';
+    const holder = spawn('/bin/sleep', ['30'], { stdio: 'ignore' });
+    if (holder.pid === undefined) throw new Error('the foreign holder has no pid');
+    let running: ChildProcess | undefined;
+    try {
+      mkdirSync(at.dropDir, { recursive: true, mode: 0o700 });
+      writeFileSync(channelCommitLockPath(at.dropDir, id), `${String(holder.pid)}\n`, { mode: 0o600 });
+      const child = runner(at, 30_000);
+      running = child.child;
+      await until(() => child.err().includes('channel primed') || child.child.exitCode !== null, 2_000);
+      expect(child.child.exitCode).toBeNull();
+      signed(at, id, 'from a worker — admitted by: the owner\n\nforeign lock');
+      await until(() => child.err().includes('stayed busy') || child.child.exitCode !== null, 1_000);
+      expect(child.err()).toContain('stayed busy');
+      expect(child.out().includes(id)).toBe(false);
+      unlinkSync(channelCommitLockPath(at.dropDir, id));
+      await until(() => child.out().includes(id) || child.child.exitCode !== null, 400);
+      expect(child.out()).toContain(id);
+      await stop(child.child);
+      running = undefined;
+    } finally {
+      holder.kill();
+      if (running !== undefined && running.exitCode === null && running.signalCode === null) running.kill();
+      at.cleanup();
+    }
+  }, 20_000);
 });

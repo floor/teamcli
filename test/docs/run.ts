@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from '../helpers/default-channel.ts';
 // Runs one command reference page's examples. The commands are the real ones, in process: the
 // world, the home and the caller are handed in, so no example reaches herdr, a CLI, or the owner's
 // home. A `$ ` line is run, the lines under it must match byte for byte — so a fixture value
@@ -212,12 +213,16 @@ async function setup(page: Page): Promise<void> {
     // transcript judges it against this record, as it does for a real launch — and the id and
     // process identity this version writes, so no page shows the doctor's "launched before team
     // recorded its process" or "its id" note unless it says so on purpose (`state:` dropping a
-    // seat's `launched` or `id`).
+    // seat's `launched` or `id`). A seat in a pane carries the shell anchors and its CLI's start
+    // time too, as a launch of this version records them, so no page shows the doctor's "shell
+    // anchors absent" or "launched before team recorded its CLI's start time" note either.
     page.team.seats.forEach((seat, index) => {
       const id = `seat_${(4000 + index).toString(16).padStart(12, '0')}`;
-      const launched = { shell: 4000 + index, cli: [4100 + index] };
+      const launched = { shell: 4000 + index, cli: [4100 + index], cli_start: [1_700_000_100 + index] };
       const pane = world.paneOf(seat.name);
-      seats[seat.name] = pane === undefined ? { stage: 'ready', id, launched } : { stage: 'ready', id, pane, launched };
+      seats[seat.name] = pane === undefined
+        ? { stage: 'ready', id, launched }
+        : { stage: 'ready', id, pane, pane_shell: 4000 + index, pane_shell_start: 1_700_000_000 + index, launched };
     });
     session.seats = seats;
   }
@@ -329,6 +334,14 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
   const spec = page.spec;
   const world = page.world as World;
   const fixture = page.fixture;
+  if (['add.md', 'order.md', 'swap.md'].includes(page.name) && ['add', 'order', 'restart', 'swap'].includes(name ?? '')) {
+    // These default-launch transcripts need the registered roster and the lead's own project pair.
+    const loaded = loadTeamFile(fixture.root, { home: fixture.home });
+    if (loaded.ok) {
+      const lead = loaded.team.seats.find((seat) => seat.name === loaded.team.orchestrator);
+      registerDefaultChannelFixture(fixture.root, fixture.home, lead?.cli === 'claude-code' ? lead.name : undefined);
+    }
+  }
   switch (name) {
     case 'ack':
       // The page's clock is pinned, so the receipt's `at` is the page's instant.
@@ -452,13 +465,15 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'order':
       return runOrder(rest, io, world.orderSources());
     case 'send': {
-      // Every seat of the page's file is a live agent, so a native-CLI example resolves.
+      // Every seat of the page's file is a live agent, so a native-CLI example resolves — with
+      // the CLI herdr reports, which the socket address is read against: the page's own file
+      // declares it, and a seat whose row reports none answers no address.
       // `reply="…"` on the fence is the fake seat's answer on the thread: with it, the wait
       // finds a signed reply record on that thread and prints the reply;
       // without it, the seat stays silent and the wait times out.
-      const seats = page.team?.seats.map((seat) => seat.name) ?? ['claude-keeper'];
+      const seats = page.team?.seats.map((seat) => ({ name: seat.name, cli: seat.cli })) ?? [{ name: 'claude-keeper', cli: 'claude-code' }];
       const replyPath = reply !== undefined
-        ? writeDocReply(fixture.root, fixture.home, page.session, seats[0] ?? 'claude-keeper', spec.now, reply)
+        ? writeDocReply(fixture.root, fixture.home, page.session, seats[0]?.name ?? 'claude-keeper', spec.now, reply)
         : null;
       try {
         return await runSend(rest, io, sendHost(fixture, seats, spec.now, reply, sendId));
@@ -591,7 +606,7 @@ function writeDocReply(root: string, home: string, session: string, fromSeat: st
   return path;
 }
 
-function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string, sendId?: string): SendHost {
+function sendHost(fixture: Fixture, seats: { name: string; cli?: string | null }[], now: string, reply?: string, sendId?: string): SendHost {
   // A page that traces its own send's id pins it with `send-id="<uuid>"`: the steps are filed
   // under that id, so the `team trace <id>` line that follows reads a fixed story. Without one,
   // the wait example pins its own reply thread and every other send draws a fresh id.
@@ -602,7 +617,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
   // The seat's own evidence for this line: idle until the Enter, working after it.
   let working = false;
   return {
-    agents: () => seats.map((name, index) => ({ name, pane: `w1:p${String(index + 1)}` })),
+    agents: () => seats.map((seat, index) => ({ name: seat.name, pane: `w1:p${String(index + 1)}`, cli: seat.cli ?? null })),
     processInfo: () => ({ shell: SEND_PID, foreground: [] }),
     socketsDir: sockets,
     native: {
@@ -622,7 +637,7 @@ function sendHost(fixture: Fixture, seats: string[], now: string, reply?: string
           back.on('connect', () => {
             // The measured shape: the harness stamps its attribution wrapper around the body
             // (see src/send/reply.ts), so the page's example exercises the peel.
-            const wrapped = `<cross-session-message from="uds:/tmp/cc-socks/${String(SEND_PID)}.sock" from-name="${seats[0] ?? 'seat'}" from-mode="bypass">\n${reply}\n</cross-session-message>`;
+            const wrapped = `<cross-session-message from="uds:/tmp/cc-socks/${String(SEND_PID)}.sock" from-name="${seats[0]?.name ?? 'seat'}" from-mode="bypass">\n${reply}\n</cross-session-message>`;
             const frame = JSON.stringify({ type: 'user', message: { role: 'user', content: wrapped }, msg_id: 'reply-1' });
             back.end(`${frame}\n`, resolve);
           });

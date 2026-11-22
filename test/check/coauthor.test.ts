@@ -9,7 +9,7 @@ import { commits } from '../../src/commands/commits.ts';
 import { createRepository, type Repository } from './repository.ts';
 
 /** This repository's own team file, the one CI checks with. */
-const TEAM_FILE = fileURLToPath(new URL('../../.github/team.yaml', import.meta.url));
+const TEAM_FILE = fileURLToPath(new URL('../../.github/policy.yaml', import.meta.url));
 
 /** The rule as `check` prints it: the pattern's source, byte for byte. */
 const RULE = 'forbidden pattern ^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:';

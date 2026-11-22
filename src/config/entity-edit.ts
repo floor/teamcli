@@ -1,6 +1,9 @@
-// `team config get|set <entity>.<key> …` for the two keys of an entity's own record: the
-// `names.unique` word on seat nicknames (src/entities.ts reads it back) and the `reminders` list
-// the reminder chore fires (src/reminder/config.ts reads it back). The entity's entry lives in the
+// `team config get|set <entity>.<key> …` for the keys of an entity's own record: the
+// `names.unique` word on seat nicknames (src/entities.ts reads it back), the `reminders` list
+// the reminder chore fires (src/reminder/config.ts reads it back), and the `root` and
+// `worktrees` folders the entity's projects and worktrees sit in on this machine, which a team
+// file names as `{root}` and `{worktrees}` (src/file/root-word.ts reads them back; `unset`
+// removes either). The entity's entry lives in the
 // owner's entities file; this command changes that one key of an entry the file already declares,
 // and nothing else — not the file, not the entry, not a sibling key. A reminder list is held to
 // the daemon's own parser before it is written, so a list the daemon would refuse is never
@@ -11,16 +14,20 @@
 // admits a wildcard grant only: a grant that lists entities is refused with the one sentence in
 // src/client/general-grant.ts before the op is checked, and the entity is not read. A charter is
 // the owner's word for one folder, and this word is not a folder's, so the charter does not admit
-// it. There is no owner-seat request: the owner asked that relaxing the check need no answer, and
-// the grant is the standing answer.
+// it. The third way is the owner's signed answer to this exact write: `--request` records it and
+// `--approval <id>` applies it once (`ownerRequestDoor`). It is the only way on a machine whose
+// owner seat is pinned from another machine, where no terminal is the owner and no general grant
+// stands; the request is carried to the owner's signers as a file (`team approvals export`).
 
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { admitGeneral } from '../client/general-grant.ts';
-import { entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
+import { ownerRequestDoor } from '../client/owner-action-step.ts';
+import { checkedRootPath, ENTITY_ROOT_KEY, ENTITY_WORKTREES_KEY, entitiesPath, lockedEntities, NICKNAME_SCOPE_DEFAULT, NICKNAME_SCOPES, type NicknameScope } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isEntityName } from '../file/sections/entity.ts';
 import { cleanedIo, type Io } from '../io.ts';
@@ -35,8 +42,24 @@ import type { ConfigSources } from '../commands/config.ts';
 const NAMES_KEY = 'names.unique';
 const REMINDERS_KEY = 'reminders';
 const RULES_KEY = 'rules';
-type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY;
+const ROOT_KEY = ENTITY_ROOT_KEY;
+const WORKTREES_KEY = ENTITY_WORKTREES_KEY;
+/** The entity's two folders on this machine: the projects root and the worktrees folder. */
+function isFolderKey(key: EntityKey | null): key is typeof ROOT_KEY | typeof WORKTREES_KEY {
+  return key === ROOT_KEY || key === WORKTREES_KEY;
+}
+/** How a refusal or a report names a folder key. */
+function folderLabel(key: EntityKey | null): string {
+  return key === WORKTREES_KEY ? 'worktrees folder' : 'projects root';
+}
+/** The reserved path the composed view answers to. A leading `@` is a shape no entity name can
+ *  take (`isEntityName` starts with a letter or a digit), so the view cannot shadow an entity
+ *  called `composed`, and `composed.rules` stays that entity's own stored rules. */
+const COMPOSED_PATH = '@composed.rules';
+type EntityKey = typeof NAMES_KEY | typeof REMINDERS_KEY | typeof RULES_KEY | typeof ROOT_KEY | typeof WORKTREES_KEY;
 const FORM: Record<EntityKey, string> = {
+  [ROOT_KEY]: `team config set <entity>.${ROOT_KEY} <folder> [--dry-run]`,
+  [WORKTREES_KEY]: `team config set <entity>.${WORKTREES_KEY} <folder> [--dry-run]`,
   [NAMES_KEY]: `team config set <entity>.${NAMES_KEY} <word>`,
   [REMINDERS_KEY]: `team config set <entity>.${REMINDERS_KEY} <yaml list>`,
   [RULES_KEY]: `team config set <entity>.${RULES_KEY} <yaml list> [--dry-run]`,
@@ -154,7 +177,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   const dryRun = argv.includes('--dry-run');
   const args = readArgs(
     argv.filter((arg) => arg !== '--dry-run'),
-    ['approval', 'general', 'key'],
+    ['approval', 'general', 'key', 'reason'],
     ['json', 'request'],
   );
   const usage = (await import('../commands/config.ts')).USAGE;
@@ -166,8 +189,12 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     key === RULES_KEY && (entityName.startsWith('project.') || entityName.startsWith('projects.'));
   const targetName = isProjectRules ? entityName.replace(/^projects?\./, '') : entityName;
   let why: string | null = args.error ?? null;
-  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, or ${RULES_KEY}`;
-  if (why === null && verb === 'unset') {
+  if (why === null && key === null) why = `a path names an entity's ${NAMES_KEY}, ${REMINDERS_KEY}, ${RULES_KEY}, ${ROOT_KEY}, or ${WORKTREES_KEY}`;
+  if (why === null && isFolderKey(key) && isProjectRules) why = `a ${folderLabel(key)} is an entity's, not a project's: ${FORM[key]}`;
+  if (why === null && verb !== 'get' && path === COMPOSED_PATH) {
+    why = `${COMPOSED_PATH} is a view of the rules in force, not a stored value: it takes no set or unset; \`team config get ${COMPOSED_PATH}\` reads it`;
+  }
+  if (why === null && verb === 'unset' && !isFolderKey(key)) {
     why =
       key === NAMES_KEY
         ? `an entity's word has no unset: ${FORM[NAMES_KEY]} with the word you want (${NICKNAME_SCOPE_DEFAULT} is the default)`
@@ -175,24 +202,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
           ? `rules have no unset: ${FORM[RULES_KEY]} with an empty list ([] clears them)`
           : `an entity's reminders have no unset: ${FORM[REMINDERS_KEY]} with an empty list ([] clears them)`;
   }
-  if (why === null && verb !== 'get' && verb !== 'set') why = 'the entity form takes get or set';
+  if (why === null && verb !== 'get' && verb !== 'set' && !(verb === 'unset' && isFolderKey(key))) why = 'the entity form takes get or set';
+  if (why === null && verb === 'unset' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'get' && given > 2) why = `unexpected "${args.rest[2] ?? ''}"`;
   if (why === null && verb === 'set' && given === 2) why = `a value is required: ${FORM[key as EntityKey]}`;
   if (why === null && verb === 'set' && given > 3) why = `unexpected "${args.rest[3] ?? ''}"`;
-  if (why === null && (args.flags.has('request') || args.values.approval !== undefined)) {
-    const what =
-      key === NAMES_KEY
-        ? "an entity's word"
-        : key === RULES_KEY
-          ? isProjectRules
-            ? "a project's rules"
-            : "an entity's rules"
-          : "an entity's reminders";
-    why = `${what} take${key === NAMES_KEY ? 's' : ''} no --request or --approval: the owner runs it, or a seat under the owner's general grant`;
-  }
+  const asked = args.flags.has('request') || args.values.approval !== undefined;
+  if (why === null && asked && verb === 'get') why = '--request and --approval take set or unset: a get is any caller\'s';
+  if (why === null && args.flags.has('request') && args.values.approval !== undefined) why = '--request asks the owner seat and --approval runs an answered request: pass one';
+  if (why === null && asked && args.values.general !== undefined) why = '--general admits the write by a grant, and --request or --approval by the owner\'s answer: pass one';
+  if (why === null && args.values.reason !== undefined && !args.flags.has('request')) why = '--reason goes with --request';
   if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
-  if (why === null && args.values.general !== undefined && verb === 'get') why = '--general takes set';
-  if (why === null && !isEntityName(targetName)) {
+  if (why === null && args.values.general !== undefined && verb === 'get') why = `--general takes set${isFolderKey(key) ? ' or unset' : ''}`;
+  if (why === null && path !== COMPOSED_PATH && !isEntityName(targetName)) {
     why = `"${targetName}" is not an entity name: letters, digits, ".", "_" and "-", starting with a letter or a digit, 128 at most`;
   }
   if (why !== null) return usageRefused(io, json, why, usage);
@@ -202,7 +224,24 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   // is judged for shape here and for content by the daemon's own parser after the file is read.
   let word: NicknameScope | null = null;
   let list: YamlValue[] | null = null;
-  if (key === NAMES_KEY) {
+  // The folder as the owner writes it (`~/…` stays `~/…` in the file), and the path it reads as here.
+  let folder: { written: string; path: string } | null = null;
+  const home = sources.home ?? homedir();
+  if (isFolderKey(key)) {
+    if (verb === 'set') {
+      const checked = checkedRootPath(rawValue as string, home);
+      if (!checked.ok) {
+        refuse(io, json, 'config', {
+          id: 'config.entity.root-value',
+          message: `${checked.why}; nothing was written`,
+          repair: null,
+        });
+        // exit: config.entity.root-value
+        return 1;
+      }
+      folder = { written: (rawValue as string).trim().replace(/(.)\/+$/, '$1'), path: checked.root };
+    }
+  } else if (key === NAMES_KEY) {
     if (verb === 'set' && !(NICKNAME_SCOPES as readonly string[]).includes(rawValue as string)) {
       refuse(io, json, 'config', {
         id: 'config.entity.names-value',
@@ -238,10 +277,9 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     list = value;
   }
 
-  const home = sources.home ?? homedir();
   const file = isProjectRules ? projectsFile(home) : entitiesPath(home);
 
-  if (verb === 'get' && path === 'composed.rules') {
+  if (verb === 'get' && path === COMPOSED_PATH) {
     const loaded = loadTeamFile(io.cwd, { home });
     if (!loaded.ok) return noValue(io, json, loaded.errors.map((e) => e.message).join('; '));
     const seat = loaded.team.seats[0];
@@ -249,7 +287,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     if (json) {
       writeJson(io, 'team.config-value', {
         format: 1,
-        path: 'composed.rules',
+        path: COMPOSED_PATH,
         value: composedRulesOf(loaded.team, seat, loaded.root, undefined, 'file', home),
         source: 'composed',
       });
@@ -307,6 +345,26 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       }
       if (json) writeJson(io, 'team.config-value', { format: 1, path: `${entityName}.${key}`, value: got.value, source: isProjectRules ? 'project' : 'entity' });
       else io.stdout(shownValue(got.value));
+    } else if (isFolderKey(key)) {
+      const got = getAt(record, hasEntitiesWrapper(record) ? ['entities', entityName, key] : [entityName, key]);
+      if (!got.found || typeof got.value !== 'string') {
+        const reads = key === WORKTREES_KEY ? `; its worktrees sit in <root>/worktrees` : '';
+        return noValue(io, json, `entity "${entityName}" names no ${folderLabel(key)} in ${file}${reads}`);
+      }
+      const checked = checkedRootPath(got.value, home);
+      if (json) {
+        writeJson(io, 'team.config-value', {
+          format: 1,
+          path: `${entityName}.${key}`,
+          value: got.value,
+          source: 'entity',
+          ...(checked.ok ? { resolved: checked.root } : { problem: checked.why }),
+        });
+      } else {
+        io.stdout(`${got.value}\n`);
+        // A word the reader refuses is what the file says, not what is in force: say so.
+        if (!checked.ok) io.stderr(`team config: ${checked.why}: a team that writes {root} is refused until it is set again\n`);
+      }
     } else {
       const lookupPath = hasEntitiesWrapper(record)
         ? ['entities', entityName, 'names', 'unique']
@@ -327,9 +385,42 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     return 0;
   }
 
-  // The door: the owner at a terminal, or a seat the owner's general grant covers for this
-  // entity. Nothing is read from the file before one of the two admits the write.
-  if (args.values.general !== undefined) {
+  // The door: the owner at a terminal, a seat the owner's general grant covers for this entity,
+  // or the owner's signed answer to exactly this write. Nothing is read from the file before one
+  // of the three admits the write. An answer binds the file's folder, the entity and the words.
+  // It is checked first with nothing claimed, then the write is tried with nothing written, and
+  // only a write that would go through spends the answer.
+  const door = (dry: boolean) => ownerRequestDoor(
+    'config',
+    'team-entity-config',
+    argv,
+    { request: args.flags.has('request'), approval: args.values.approval, dry, json, ...(args.values.reason === undefined ? {} : { reason: args.values.reason }) },
+    io,
+    { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) },
+    // Bound as the parser read the line — the verb, the path and the value — and the file it
+    // writes, so the card can show the exact change and the run writes nothing else.
+    { root: dirname(file), team: targetName, head: null, words: [...args.rest, `file=${file}`] },
+  );
+  let spendAnswer = false;
+  // A project's rules through an answer name the project by its id, exactly: a display name can
+  // later be moved to another project, so it is never what an answer binds. The write under the
+  // lock then requires that same id.
+  if (asked && isProjectRules) {
+    const exact = exactProjectId(file, targetName);
+    if (exact !== null) return pathRefused(io, json, exact);
+  }
+  if (asked) {
+    const step = door(true);
+    if (step.kind === 'requested') {
+      // exit: config.entity.approval-requested
+      return 0;
+    }
+    if (step.kind !== 'admitted') {
+      // exit: config.entity.approval-refused
+      return 1;
+    }
+    spendAnswer = !dryRun;
+  } else if (args.values.general !== undefined) {
     const admitted = admitGeneral(home, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key as string), 'config', targetName, sources.now?.() ?? new Date());
     if (!admitted.ok) return generalRefused(io, json, admitted.why);
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
@@ -341,6 +432,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       const actionLabel =
         key === NAMES_KEY
           ? "sets an entity's word"
+          : isFolderKey(key)
+            ? `sets an entity's ${folderLabel(key)}`
           : key === RULES_KEY
             ? isProjectRules
               ? "writes a project's rules"
@@ -350,12 +443,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
   }
 
+  // An answer is spent only by a write that goes through, inside the file's lock: the write is
+  // planned under the lock, a plan that is refused keeps the answer for a corrected run, and the
+  // answer is claimed just before the planned text is written (or, for a value already in place,
+  // before the unchanged plan returns).
+  const spend = (): boolean => door(false).kind === 'admitted';
+
   if (isProjectRules) {
     let outcome: ReturnType<typeof setProjectRules>;
     try {
       outcome = setProjectRules(home, targetName, list as string[], {
         dryRun,
-        allowDisplayName: true,
+        allowDisplayName: !asked,
+        ...(spendAnswer ? { claim: spend } : {}),
       });
     } catch (error) {
       const msg = error instanceof ProjectsError || error instanceof Error ? error.message : String(error);
@@ -364,6 +464,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       }
       return unreadable(io, json, msg);
     }
+    // exit: config.entity.approval-refused
+    if (outcome.claimRefused === true) return 1;
     if (!outcome.changed) {
       if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: `${entityName}.${key as string}`, changed: false, ...(dryRun ? { dry_run: true } : {}), source: 'project', comments_kept: true });
       else io.stdout(`nothing changed in ${file}\n`);
@@ -387,21 +489,30 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   }
 
   const entitiesFile = entitiesPath(home);
-  const runEntityWrite = ():
+  const runEntityWrite = (write: boolean = !dryRun, claim?: () => boolean):
+    | { kind: 'claim-refused' }
     | { kind: 'path'; why: string }
     | { kind: 'unreadable'; why: string }
     | { kind: 'reminders-problem'; why: string }
     | { kind: 'unchanged' }
     | { kind: 'written'; text: string; kept: boolean } => {
-    if (!existsSync(entitiesFile)) {
+    // A projects root is the first word a fresh machine needs, before any other entry exists: a
+    // set makes the file and the entry when they are missing, and an unset of a root that is not
+    // there changes nothing. Every other key keeps to an entry the file already declares.
+    const makesEntry = isFolderKey(key) && verb === 'set';
+    // Every outcome that stands as done spends an answer the run carries, a value already absent
+    // included, so a replay of the same answer is refused as any replay is.
+    const done = (): { kind: 'unchanged' } | { kind: 'claim-refused' } => (claim !== undefined && !claim() ? { kind: 'claim-refused' } : { kind: 'unchanged' });
+    if (isFolderKey(key) && verb === 'unset' && !existsSync(entitiesFile)) return done();
+    if (!existsSync(entitiesFile) && !makesEntry) {
       return {
         kind: 'path',
         why: `${entitiesFile} does not exist: no entry for entity "${targetName}"; nothing was written`,
       };
     }
-    let text: string;
+    let text = '';
     try {
-      text = readFileSync(entitiesFile, 'utf8');
+      if (existsSync(entitiesFile)) text = readFileSync(entitiesFile, 'utf8');
     } catch (error) {
       return {
         kind: 'unreadable',
@@ -410,7 +521,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     }
     let root: YamlNode;
     try {
-      root = parseYaml(text);
+      root = text.trim() === '' ? { kind: 'map', line: 1, entries: [] } : parseYaml(text);
     } catch (error) {
       return {
         kind: 'unreadable',
@@ -427,13 +538,14 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
     const wrapped = hasEntitiesWrapper(record);
     const entryLookup = wrapped ? ['entities', targetName] : [targetName];
     const entry = getAt(record, entryLookup);
-    if (!entry.found) {
+    if (!entry.found && isFolderKey(key) && verb === 'unset') return done();
+    if (!entry.found && !makesEntry) {
       return {
         kind: 'path',
         why: `${entitiesFile}: no entry for entity "${targetName}"; nothing was written`,
       };
     }
-    if (!isMap(entry.value)) {
+    if (entry.found && !isMap(entry.value)) {
       return {
         kind: 'path',
         why: `${entitiesFile}: entity "${targetName}" is not a map; nothing was written`,
@@ -445,7 +557,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       key === NAMES_KEY
         ? [...entryLookup, 'names', 'unique']
         : [...entryLookup, key as string];
-    const value: YamlValue | undefined = key === NAMES_KEY ? (word as string) : (list as YamlValue[]);
+    const value: YamlValue | undefined =
+      key === NAMES_KEY ? (word as string) : isFolderKey(key) ? folder?.written : (list as YamlValue[]);
     const changed = withValue(record, recordPath, value);
     if (!changed.ok) {
       return {
@@ -453,9 +566,7 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
         why: `entity "${targetName}" ${key as string}: ${changed.why}; nothing was written`,
       };
     }
-    if (!changed.changed) {
-      return { kind: 'unchanged' };
-    }
+    if (!changed.changed) return done();
     const edited = editedRecordText(text, recordPath, value, changed.root);
     // A reminder list is held to the daemon's own parser on the text that would be written. A
     // problem on this entity refuses the write with the parser's reason, whatever the file carried
@@ -480,7 +591,8 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
       );
       if (refused !== undefined) return { kind: 'reminders-problem', why: refused.why };
     }
-    if (!dryRun) {
+    if (claim !== undefined && !claim()) return { kind: 'claim-refused' };
+    if (write) {
       writeOwnerFile(entitiesFile, edited.text);
     }
     return { kind: 'written', text: edited.text, kept: edited.kept };
@@ -488,10 +600,19 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
 
   let entityOutcome: ReturnType<typeof runEntityWrite>;
   try {
-    entityOutcome = dryRun ? runEntityWrite() : lockedEntities(home, runEntityWrite);
+    if (spendAnswer) {
+      // Planned, claimed and written under the one lock. A plan that is refused spends nothing,
+      // and its refusal is said below; one that changes nothing is the write the owner answered,
+      // already in place, and spends the answer as a write would, so a replay is refused.
+      entityOutcome = lockedEntities(home, () => runEntityWrite(true, spend));
+    } else {
+      entityOutcome = dryRun ? runEntityWrite() : lockedEntities(home, () => runEntityWrite());
+    }
   } catch (error) {
     return unreadable(io, json, error instanceof Error ? error.message : String(error));
   }
+  // exit: config.entity.approval-refused
+  if (entityOutcome.kind === 'claim-refused') return 1;
   if (entityOutcome.kind === 'path') return pathRefused(io, json, entityOutcome.why);
   if (entityOutcome.kind === 'unreadable') return unreadable(io, json, entityOutcome.why);
   if (entityOutcome.kind === 'reminders-problem') return remindersProblem(io, json, entityOutcome.why);
@@ -506,16 +627,47 @@ export async function runEntityRecordEdit(argv: string[], rawIo: Io, sources: Co
   } else {
     const count = list?.length ?? 0;
     const itemLabel = key === RULES_KEY ? 'rule' : 'reminder';
-    const shown = key === NAMES_KEY ? (word as string) : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
+    const shown =
+      key === NAMES_KEY
+        ? (word as string)
+        : isFolderKey(key)
+          ? folder === null ? 'removed' : folder.written === folder.path ? folder.path : `${folder.written} (${folder.path})`
+          : `${String(count)} ${itemLabel}${count === 1 ? '' : 's'}`;
+    const done = isFolderKey(key) && verb === 'unset' ? 'unset' : 'set';
     if (dryRun) {
-      io.stdout(`dry-run: would set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
+      io.stdout(`dry-run: would ${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n${entityOutcome.text}`);
     } else {
-      io.stdout(`set ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
+      io.stdout(`${done} ${entityName}.${key as string}: ${shown} in ${entitiesFile}\n`);
+      // What the change means for the entity's teams: `{root}` in their files reads the new folder.
+      if (isFolderKey(key)) {
+        const word = key === WORKTREES_KEY ? '{worktrees}' : '{root}';
+        io.stderr(folder === null
+          ? key === WORKTREES_KEY
+            ? `team config: teams of entity "${entityName}" read {worktrees} as <root>/worktrees again\n`
+            : `team config: a team of entity "${entityName}" that writes {root} is now refused until a root is set again\n`
+          : `team config: teams of entity "${entityName}" read ${word} as ${folder.path}\n`);
+      }
       if (!entityOutcome.kept) io.stderr(`team config: the entities file was rewritten whole to change ${entityName}.${key as string}; its comments were not kept\n`);
     }
   }
   // exit: config.entity.written
   return 0;
+}
+
+/** Why `name` is not the exact id of a project in `file`, naming the id when `name` is a display
+ *  name; null when it is one. */
+function exactProjectId(file: string, name: string): string | null {
+  let projects: YamlValue | undefined;
+  try {
+    const record = toValue(parseYaml(readFileSync(file, 'utf8')));
+    projects = isMap(record) ? record.projects : undefined;
+  } catch {
+    return `${file} cannot be read, so project "${name}" cannot be named exactly; nothing was recorded or written`;
+  }
+  if (isMap(projects) && Object.hasOwn(projects, name)) return null;
+  const byName = isMap(projects) ? Object.entries(projects).find(([, raw]) => isMap(raw) && raw.name === name) : undefined;
+  if (byName !== undefined) return `"${name}" is a project's display name; an owner-seat answer binds the project's id: use project.${byName[0]}.rules; nothing was recorded or written`;
+  return `no project has the id "${name}" in ${file}; an owner-seat answer binds a project's id; nothing was recorded or written`;
 }
 
 /** One problem as a value, so the same complaint before and after an edit compares equal. */
@@ -528,6 +680,8 @@ function problemKey(problem: { entity: string | null; name: string | null; why: 
 function entityKeyOf(path: string | undefined): EntityKey | null {
   if (path === undefined) return null;
   if (path.endsWith(`.${NAMES_KEY}`)) return NAMES_KEY;
+  if (path.endsWith(`.${ROOT_KEY}`) && path.length > ROOT_KEY.length + 1) return ROOT_KEY;
+  if (path.endsWith(`.${WORKTREES_KEY}`) && path.length > WORKTREES_KEY.length + 1) return WORKTREES_KEY;
   if (path.endsWith(`.${REMINDERS_KEY}`)) return REMINDERS_KEY;
   if (path.endsWith(`.${RULES_KEY}`) && path.length > RULES_KEY.length + 1) return RULES_KEY;
   return null;

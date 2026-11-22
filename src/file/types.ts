@@ -77,6 +77,13 @@ export type SeatWebhook = {
   urlFile: string;
   secretFile: string;
   /**
+   * The CLI the routine runs the seat as, when the row says so (`claude-code`, `cursor`, …). A
+   * webhook counts as the seat's delivery only when this target is the seat's own declared CLI.
+   * Absent, the target is read from the URL's host where that host names one CLI's vendor
+   * service, and a host that names none leaves the target open, which counts as before.
+   */
+  target?: string;
+  /**
    * The header the secret authenticates, when the routine reads it somewhere other than the
    * default. Set, the secret file's one line is that header's value verbatim — no scheme word is
    * added. Absent, the adapter sends the form rows used before this field existed:
@@ -135,7 +142,24 @@ export type Seat = {
    * only when asked to resolve a launcher; otherwise the launch line is the command.
    */
   launcher?: string;
+  /** Overrides what a shipped launcher's role default gives the seat: `read` holds it to reads
+   *  and `team`, `write` lets it write whatever its role. Omitted: the role decides (reviewer,
+   *  tester and assistant read; every other role writes). */
+  access?: 'read' | 'write';
+  /** Set when `cwd` is the team's seat folder because the file names none. Not a file word: the
+   *  approved record keeps the `.` the file implies, so a record approved before the seat folder
+   *  existed keeps its signature (team-record-c14n-v1 is frozen). */
+  cwdDefaulted?: true;
+  /** A file whose text is added to this seat's own rules at every launch, after the team's: a
+   *  standing brief that is the seat's alone. Relative to the team's root, or absolute. */
+  brief?: string;
   cwd: string;
+  /**
+   * Set when `cwd` is outside the project and matches no trust path. Not a file word and not
+   * hashed: `up`, `add` and `check` refuse this seat unless the path is the worktree recorded
+   * for it. Omitted otherwise, so every file that loaded before keeps the digest it had.
+   */
+  cwdOutside?: true;
   /**
    * The file's label: written, or `<model> <version>` in lowercase. Hashed with the seat.
    * A written one is the workspace title; `workspaceLabel` uses the name and role when it was omitted.
@@ -171,6 +195,18 @@ export type Seat = {
    * Absent otherwise, so a file that marks none keeps every digest it had.
    */
   human?: true;
+  /**
+   * The seat's own word on whether it may control the computer (computer use, the user's
+   * browser, desktop apps), when the file writes `desktop_control`. Absent otherwise, so a file
+   * that writes none keeps the digest it had; the team's word, then on, stands under it.
+   */
+  desktopControl?: boolean;
+  /**
+   * The seat opts out of the team-inbox channel. Absent means on: every claude-code seat gets
+   * the channel, and a file that writes no `channel` key keeps the digest it had. `off` is the
+   * only stored word.
+   */
+  channelOff?: true;
   /**
    * The seat's own word on the watch's typed wake retry, when the file writes one: `on` lets
    * the watch type the same wake a send types once a message has gone unread past its window;
@@ -298,6 +334,12 @@ export type TeamFile = {
    */
   senderName: SenderNameMode | null;
   /**
+   * The file's own word on whether its seats may control the computer, or null/absent when it
+   * writes none: on is the default. A seat's own word wins over it. Non-owner and additive, as
+   * `sender_name` is: a file written before it keeps its digests.
+   */
+  desktopControl?: boolean | null;
+  /**
    * The file's own word on the store a send leaves for its seats, when the file writes one:
    * `first`, `parallel` or `none`, read for a seat whose chain says nothing nearer. Non-owner and
    * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
@@ -348,9 +390,19 @@ export type TeamFile = {
     /** How long a delivered message may go without the seat's signed read receipt before the
      *  watch retries it once; the report follows at twice this window. */
     unreadAfter: number;
+    /** How long a lead's unread drop waits before the lead itself is woken. Three minutes
+     *  when the file omits it. A tempo scales it with the other waits. */
+    leadUnreadAfter: number;
     /** How long a proven "working" presence may stand, with unread mail waiting, before the
      *  seat reads as stuck and the lead is told; 15 minutes when the file omits it. */
     stuckAfter: number;
+    /** How long this root's watch may stay in `starting` without a watch work seam before the
+     *  daemon restarts it; existing 120-second default, not scaled. Progress semantics are the
+     *  lead's 2026-11-11 05:55Z decision; independent heartbeats do not refresh this clock. */
+    watchStartLimit?: number;
+    /** How many heartbeats this root's chores child may miss before that same restart, even
+     *  while its CPU is still advancing; 30 when the file omits it. Not scaled. */
+    childLateLimit?: number;
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];

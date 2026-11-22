@@ -12,9 +12,14 @@ Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (lat
 `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per line to
 `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|drop|mcp-inbox|native|headless-resume|channel|session|webhook>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","stamped":true,"body_sha256":"<sha256 hex>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|drop|mcp-inbox|native|headless-resume|channel|session|webhook>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>","rule":"<admission rule>","wake_keys_sent":<true|false>}
 
-The fields after `outcome` are optional. `from_team` is the sending team's registry id, written by
+The fields after `outcome` are optional. `stamped` and `body_sha256` are written together on a
+stamped send's line: the line then carries no body (`body` is empty) but the body's sha256, and
+the body lives only in the stamped record. `rule` is the rule that admitted the pair, written on a first-leg delivery's line: `team trace`
+reads that walk's staging from it. `wake_keys_sent` is written when the send ran a typed
+wake that did not deliver: it says whether any key reached the pane, so the watch can tell a wake
+refused before any key from one submitted and not taken. `from_team` is the sending team's registry id, written by
 the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a
 receipt line for the same id that carries none takes it from the send's own line when the feed
 merges them. It is what lets the SEAT cell tell a sender from another team apart from a local seat
@@ -203,26 +208,24 @@ exit 0
 
 After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and
 body. No server serves this seat's inbox and no event adapter took it, so the send ends at the
-drop leg — `via drop`: the line reads `queued, not woken` with the pull-only class words, and the
-seat's own read writes the signed receipt a running watch records as one more line,
-`delivered (read)`:
+drop leg — the command says on stderr that no live route delivered it, keeps the copy in the bus
+inbox and exits 1, and the feed's line reads `not delivered` via drop. The seat's own read writes
+the signed receipt a running watch records as one more line, `delivered (read)`:
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
-team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
-team beacon, session "beacon"
-gpt-reviewer: queued, not woken (drop, 0 ms); queued; the typed wake failed (the send host binds no pane writer; nothing was typed); gpt-reviewer reads it at its next turn, and nothing here gives it one (pull-only) (id <id>)
-exit 0
+team send: gpt-reviewer: not delivered: no live route; kept in gpt-reviewer's inbox (id <id>)
+exit 1
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                  SEAT                   DETAIL
-  09:00:00  queued, not woken (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                              SEAT                   DETAIL
+  09:00:00  not delivered (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                                  SEAT                   DETAIL
-  09:00:00  queued, not woken (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                              SEAT                   DETAIL
+  09:00:00  not delivered (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 ```

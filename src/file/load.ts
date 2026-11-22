@@ -1,7 +1,9 @@
+import { traceBeatWork } from '../diagnostics/beat-work.ts';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { type FsReader } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -60,6 +62,68 @@ export function isNoRepository(problem: Problem): boolean {
 // chose it). Inside it, `.agents` must be a real directory and `team.yaml` a real file. A link at
 // either is not opened. `null` is the ordinary miss (nothing there); `'link'` is a link standing
 // where the file would be.
+/** A seat's own folder, `<root>/worktrees/<project>/<team>/<seat>` (the seat_folder default), is
+ *  read as `<root>`'s team: a seat started there runs `team` commands that find their team from
+ *  the folder (2026-11-12: a seat moved there could not read its inbox). Only when the shape is
+ *  exact and the team agrees with it: `<project>` and `<team>` are that team's own, and `<seat>` is
+ *  one of its seats (review finding, 2026-11-12). No other parent is walked. */
+function seatFolderTeam(cwd: string): { root: string; path: string } | 'link' | null {
+  const shape = seatFolderShape(cwd);
+  if (shape === null) return null;
+  const plain = plainFolderTeam(shape.root);
+  if (plain === null || plain === 'link') return plain;
+  let text: string;
+  try {
+    text = readFileSync(plain.path, 'utf8');
+  } catch {
+    return null;
+  }
+  return teamOwnsSeatFolder(text, shape) ? plain : null;
+}
+
+type SeatFolderShape = { root: string; project: string; team: string; seat: string };
+
+/** The four segments of a seat folder path, or null for any other shape. */
+function seatFolderShape(cwd: string): SeatFolderShape | null {
+  let here: string;
+  try {
+    here = realpathSync(cwd);
+  } catch {
+    return null;
+  }
+  const teamDir = dirname(here);
+  const projectDir = dirname(teamDir);
+  const worktrees = dirname(projectDir);
+  if (basename(worktrees) !== 'worktrees') return null;
+  return { root: dirname(worktrees), project: basename(projectDir), team: basename(teamDir), seat: basename(here) };
+}
+
+/** Whether the team this text defines owns that seat folder: its project (in_project, else the
+ *  team's project) and team name are the middle segments, and the leaf names one of its seats. */
+function teamOwnsSeatFolder(text: string, shape: SeatFolderShape): boolean {
+  const checked = validateWithWorkspaceMode(text, shape.root, {});
+  if (!checked.ok) return false;
+  const team = checked.team;
+  return team.project === shape.team && (team.inProject ?? team.project) === shape.project
+    && team.seats.some((seat) => seat.name === shape.seat);
+}
+
+/** The team root of a seat's own folder for the registry: the same exact shape and the same
+ *  agreement as seatFolderTeam, judged on the registry's record of that root (a team whose
+ *  `.agents/team.yaml` was migrated away still has one), or else on its own team file. */
+function seatFolderRoot(cwd: string, home: string): string | null {
+  const shape = seatFolderShape(cwd);
+  if (shape === null) return null;
+  let stored;
+  try {
+    stored = readStoredTeamConfig(home, teamIdOf(shape.root));
+  } catch {
+    return null;
+  }
+  if (stored !== null) return teamOwnsSeatFolder(stored.text, shape) ? shape.root : null;
+  return seatFolderTeam(cwd) !== null ? shape.root : null;
+}
+
 function plainFolderTeam(cwd: string): { root: string; path: string } | 'link' | null {
   let here: string;
   try {
@@ -99,6 +163,181 @@ function realOrResolved(path: string): string {
   }
 }
 
+/** A long-lived process's own memory of the roots git named: the machine daemon and its children
+ *  read the same dozen checkouts on every beat, and each read was a synchronous `git` child on
+ *  the one event loop (2026-11-15: 14 reads, up to 12.9 s, inside one endpoint refresh under
+ *  load). Only a found root is kept, and a hit stands only while its binding reads the same
+ *  (`gitWitness`); a folder git did not place is asked again every time, as before. A CLI run
+ *  never holds one: its per-run memo covers it. */
+type HeldGitRoot = { root: string; common: string; at: number; binding: string };
+
+/** One path's identity, read with lstat alone; `-` when nothing is there, null on any other
+ *  failure. A `.git` directory is judged by device and inode only (git rewrites its contents on
+ *  ordinary reads; a moved or recloned repository is a new directory). A `.git` file is a
+ *  worktree's one-line pointer, and its words are part of it, since a replaced file can reuse an
+ *  inode and a size. */
+function pathId(path: string, pointer: boolean): string | null {
+  try {
+    const st = lstatSync(path);
+    const kind = st.isDirectory() ? 'd' : st.isSymbolicLink() ? 'l' : 'f';
+    const base = `${kind}:${String(st.dev)}:${String(st.ino)}`;
+    if (!pointer || kind !== 'f') return base;
+    const words = st.size <= 4096 ? readFileSync(path, 'utf8') : '';
+    return `${base}:${String(st.mtimeMs)}:${String(st.size)}:${words}`;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? '-' : null;
+  }
+}
+
+type GitWitness = { text: string; bound: { level: string; kind: 'd' | 'f' | 'l' } | null };
+
+/** Everything git's answer for `key` can depend on in the tree, read without git: the folder's
+ *  real path and inode, and every `.git` entry (or its absence) from that folder up to the
+ *  filesystem's top. A folder or worktree replaced at the same path, or a repository initialised
+ *  anywhere above the folder, reads differently. `bound` is the nearest `.git` entry: the one
+ *  git binds the folder to. Null when any part cannot be read. */
+function gitWitness(key: string): GitWitness | null {
+  const real = realOrResolved(key);
+  const folder = pathId(real, false);
+  if (folder === null || folder === '-') return null;
+  const parts = [`${real}=${folder}`];
+  let bound: GitWitness['bound'] = null;
+  let at = real;
+  for (let depth = 0; depth < 256; depth++) {
+    const entry = pathId(join(at, '.git'), true);
+    if (entry === null) return null;
+    parts.push(entry);
+    if (bound === null && entry !== '-') bound = { level: at, kind: entry[0] as 'd' | 'f' | 'l' };
+    const up = dirname(at);
+    if (up === at) return { text: parts.join('|'), bound };
+    at = up;
+  }
+  return null;
+}
+
+/** Whether git's common directory is the one the nearest `.git` entry names: the directory
+ *  itself, or the `commondir` of the worktree folder a pointer file names. Anything else (a link,
+ *  an unreadable pointer, an environment that steered git elsewhere) is not held. */
+function witnessAgrees(witness: GitWitness, common: string): boolean {
+  const bound = witness.bound;
+  if (bound === null) return false;
+  const named = realOrResolved(common);
+  const dotGit = join(bound.level, '.git');
+  if (bound.kind === 'd') return realOrResolved(dotGit) === named;
+  if (bound.kind !== 'f') return false;
+  try {
+    const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'))?.[1];
+    if (pointer === undefined) return false;
+    const gitdir = resolve(bound.level, pointer);
+    let shared = gitdir;
+    try {
+      shared = resolve(gitdir, readFileSync(join(gitdir, 'commondir'), 'utf8').trim());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+    return realOrResolved(shared) === named;
+  } catch {
+    return false;
+  }
+}
+
+/** The held binding: the witness and the common directory's own identity. */
+function heldBinding(witness: GitWitness | null, common: string): string | null {
+  if (witness === null) return null;
+  const shared = pathId(common, false);
+  if (shared === null || shared === '-') return null;
+  return `${witness.text}|${shared}`;
+}
+
+type GitRootHold = { entries: Map<string, HeldGitRoot>; ttlMs: number; now: () => number; holders: number };
+let gitRootHold: GitRootHold | null = null;
+
+/** How many times this process has started git for a root: what a test reads to tell an answer
+ *  the hold gave from one git gave. */
+let gitRootReads = 0;
+export function gitRootReadCount(): number {
+  return gitRootReads;
+}
+
+/** A test's seam between git's answer and the second witness; null outside a test. */
+let gitAnsweredHook: ((cwd: string) => void) | null = null;
+export function setGitAnsweredHook(hook: ((cwd: string) => void) | null): void {
+  gitAnsweredHook = hook;
+}
+
+/** How long a held root stands before git is asked again, and how many folders are held. */
+export const HELD_GIT_ROOT_MS = 10 * 60_000;
+export const HELD_GIT_ROOT_LIMIT = 512;
+
+/** Keeps the roots git names for this process until the returned release runs. Nested holds share
+ *  one memory; the last release drops it. */
+export function holdGitRoots(options: { ttlMs?: number; now?: () => number } = {}): () => void {
+  if (gitRootHold === null) {
+    gitRootHold = { entries: new Map(), ttlMs: options.ttlMs ?? HELD_GIT_ROOT_MS, now: options.now ?? Date.now, holders: 0 };
+  }
+  const hold = gitRootHold;
+  hold.holders += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    hold.holders -= 1;
+    if (hold.holders <= 0 && gitRootHold === hold) gitRootHold = null;
+  };
+}
+
+/** The inputs, besides the folder and its files, that decide which root git names: the program
+ *  `PATH` finds, the configuration `HOME` and `XDG_CONFIG_HOME` select, and every `GIT_*`
+ *  variable. A held root is reused only by a run whose inputs digest the same, so a process that
+ *  serves runs with different environments (the warm send host) never answers one run with a
+ *  root git gave another. Exported for tests. */
+export function gitEnvDigest(env: Record<string, string | undefined> = process.env): string {
+  const parts: string[] = [];
+  for (const name of ['PATH', 'HOME', 'XDG_CONFIG_HOME']) parts.push(`${name}=${env[name] ?? '\u0000unset'}`);
+  for (const name of Object.keys(env).filter((key) => key.startsWith('GIT_')).sort()) parts.push(`${name}=${env[name] ?? ''}`);
+  return createHash('sha256').update(parts.join('\u0000')).digest('hex').slice(0, 32);
+}
+
+function heldGitRoot(holdKey: string, key: string): string | undefined {
+  const hold = gitRootHold;
+  if (hold === null) return undefined;
+  const held = hold.entries.get(holdKey);
+  if (held === undefined) return undefined;
+  if (held.root === '') {
+    // A held "no repository": it stands while the folder and every `.git` absence above it read
+    // the same (keepNoRoot), within the same time bound.
+    const now = gitWitness(key);
+    if (hold.now() - held.at >= hold.ttlMs || now === null || now.bound !== null || now.text !== held.binding) {
+      hold.entries.delete(holdKey);
+      return undefined;
+    }
+    return '';
+  }
+  if (hold.now() - held.at >= hold.ttlMs || heldBinding(gitWitness(key), held.common) !== held.binding) {
+    hold.entries.delete(holdKey);
+    return undefined;
+  }
+  return held.root;
+}
+
+/** Holds git's answer only when one stable binding produced it: the witness read before git ran
+ *  and the one read after it are the same, and the nearest `.git` entry names the common
+ *  directory git answered. A change while git ran leaves its answer unheld, never paired with a
+ *  later tree. */
+function keepGitRoot(holdKey: string, key: string, before: GitWitness | null, root: string, common: string): void {
+  const hold = gitRootHold;
+  if (hold === null || before === null) return;
+  const after = gitWitness(key);
+  if (after === null || after.text !== before.text || !witnessAgrees(after, common)) return;
+  const binding = heldBinding(after, common);
+  if (binding === null) return;
+  if (!hold.entries.has(holdKey) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
+    const oldest = hold.entries.keys().next();
+    if (oldest.done !== true) hold.entries.delete(oldest.value);
+  }
+  hold.entries.set(holdKey, { root, common, at: hold.now(), binding });
+}
+
 export function findRoot(cwd: string): string | null {
   const memo = currentRunMemo();
   const key = resolve(cwd);
@@ -106,14 +345,26 @@ export function findRoot(cwd: string): string | null {
     const cached = memo.gitRoots.get(key);
     if (cached !== undefined) return cached === '' ? null : cached;
   }
+  const holdKey = gitRootHold === null ? key : `${gitEnvDigest()}\u0000${key}`;
+  const held = heldGitRoot(holdKey, key);
+  if (held !== undefined) {
+    memo?.gitRoots.set(key, held);
+    return held === '' ? null : held;
+  }
+  const before = gitRootHold === null ? null : gitWitness(key);
+  gitRootReads += 1;
   try {
-    const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    const common = traceBeatWork('git root read (sync)', () => execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(5_000),
-    }).trim();
+    })).trim();
     const root = common ? dirname(common) : null;
+    if (root !== null && gitRootHold !== null) {
+      gitAnsweredHook?.(cwd);
+      keepGitRoot(holdKey, key, before, root, common);
+    }
     if (memo !== null) {
       memo.gitRoots.set(key, root ?? '');
       if (root !== null) {
@@ -122,10 +373,40 @@ export function findRoot(cwd: string): string | null {
       }
     }
     return root;
-  } catch {
+  } catch (error) {
+    if (gitRootHold !== null) keepNoRoot(holdKey, key, before, error);
     memo?.gitRoots.set(key, '');
     return null;
   }
+}
+
+/** Variables that move git's repository discovery away from the folder it runs in. */
+const REPOSITORY_LOCATION_VARIABLES = [
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM',
+  'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT',
+] as const;
+
+/** Holds git's "not a repository" answer for a folder with no `.git` entry anywhere above it,
+ *  read the same before and after git ran, and only when git itself said so (exit status 128): a
+ *  timeout or a missing git is never held. The entry sits in the run's git-environment partition
+ *  (`gitEnvDigest`), like a found root, so a run with another `GIT_DIR` asks git itself. A
+ *  long-lived process (the daemon, the warm send host) then stops starting a git child for a
+ *  folder such as a team home that is not a checkout. */
+function keepNoRoot(holdKey: string, key: string, before: GitWitness | null, error: unknown): void {
+  const hold = gitRootHold;
+  if (hold === null || before === null || before.bound !== null) return;
+  // Only ordinary discovery from the folder is witnessed: a variable that points git at a
+  // repository elsewhere (or bounds its search) names files the folder witness never sees, so a
+  // "no repository" answer under one is asked again every time.
+  if (REPOSITORY_LOCATION_VARIABLES.some((name) => process.env[name] !== undefined)) return;
+  if ((error as { status?: unknown } | null)?.status !== 128) return;
+  const after = gitWitness(key);
+  if (after === null || after.bound !== null || after.text !== before.text) return;
+  if (!hold.entries.has(holdKey) && hold.entries.size >= HELD_GIT_ROOT_LIMIT) {
+    const oldest = hold.entries.keys().next();
+    if (oldest.done !== true) hold.entries.delete(oldest.value);
+  }
+  hold.entries.set(holdKey, { root: '', common: '', at: hold.now(), binding: after.text });
 }
 
 /** Said once, on a read that had to use the team file because the registry holds no config record. */
@@ -144,6 +425,9 @@ export type LoadTeamFileOptions = {
   session?: string;
   /** This read's source. Absent: the `team-config.source` resolution (registry by default). */
   source?: 'registry' | 'file';
+  /** `keep` reads `{root}` and `{worktrees}` it cannot fill as written, refusing nothing: the
+   *  reads of `team down` and `team status`, which stop and show a team, never launch one. */
+  unfilled?: 'strict' | 'keep';
   env?: Record<string, string | undefined>;
 };
 
@@ -188,7 +472,10 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
   // same root `team migrate` imports: the registry is still looked up there, and only a folder
   // with no record falls through to the plain team file.
   const found = findRoot(cwd);
-  const root = found ?? realOrResolved(cwd);
+  // A seat's own folder (`<root>/worktrees/<project>/<team>/<seat>`) is its team root's, for the
+  // registry as for the file (seatFolderTeam).
+  const seatRoot = found === null ? seatFolderRoot(cwd, home) : null;
+  const root = found ?? seatRoot ?? realOrResolved(cwd);
   const path = join(root, TEAM_FILE);
   const id = teamIdOf(root);
   let stored;
@@ -276,7 +563,7 @@ function readTeamYaml(cwd: string, options: LoadTeamFileOptions = {}): LoadResul
       // file, present or missing, stays the one file — so a nested `.agents/team.yaml` cannot
       // take its place. A link at `.agents` or at `team.yaml` is not that file: it is refused
       // and not followed. `--file` still opens the path it names.
-      const plain = plainFolderTeam(cwd);
+      const plain = plainFolderTeam(cwd) ?? seatFolderTeam(cwd);
       if (plain === 'link') {
         return { ok: false, errors: [{ line: 0, message: LINK_NOT_FOLLOWED }] };
       }
@@ -321,10 +608,44 @@ export function loadTeamText(
   text: string,
   root: string,
   path: string,
-  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {},
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' } = {},
   reread?: () => string,
 ): LoadResult {
-  let result = validateWithWorkspaceMode(text, root, options);
+  return loadTeamTextOnce(text, root, path, options, reread);
+}
+
+// One command run validates the same team text several times (the prologue, the charter targets,
+// the session and the leads admission each load it). The text's own validation is pure for a
+// given text, root and options, so within one run it is kept, keyed by the text's digest: a write
+// in the run that changes the file is a new key, and each caller gets its own copy. The placement
+// checks that read the live filesystem (realpath and symbolic links of trust entries, seat folders
+// and the workspace path) are never kept: every load runs them again. Validation also reads the
+// policy chain, the lead chain and the project registry; every atomic write (state, policy,
+// config) and every registry or entity write in the run drops the kept results.
+function validatedText(
+  text: string,
+  root: string,
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' },
+): ReturnType<typeof validateWithWorkspaceMode> {
+  // A custom filesystem reader is a test's or a dry plan's own view: never memoised.
+  const memo = options.fs === undefined ? currentRunMemo() : null;
+  if (memo === null) return validateWithWorkspaceMode(text, root, options);
+  const key = `${createHash('sha256').update(text).digest('hex')}\0${root}\0${options.home ?? ''}\0${options.session ?? ''}\0${options.unfilled ?? ''}`;
+  const hit = memo.teamLoads.get(key);
+  if (hit !== undefined) return structuredClone(hit as ReturnType<typeof validateWithWorkspaceMode>);
+  const result = validateWithWorkspaceMode(text, root, options);
+  if (result.ok) memo.teamLoads.set(key, structuredClone(result));
+  return result;
+}
+
+function loadTeamTextOnce(
+  text: string,
+  root: string,
+  path: string,
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string; unfilled?: 'strict' | 'keep' },
+  reread?: () => string,
+): LoadResult {
+  let result = validatedText(text, root, options);
   if (!result.ok && result.parse === true && reread !== undefined) {
     // The parse itself failed, which a file replaced under this reader can do transiently
     // (a writer that is not the atomic one): read and validate the settled file once more,
@@ -335,7 +656,7 @@ export function loadTeamText(
     } catch {
       return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
     }
-    result = validateWithWorkspaceMode(text, root, options);
+    result = validatedText(text, root, options);
   }
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };
@@ -449,7 +770,11 @@ export function placedProblems(
         if ('error' in landed) return false;
         return seatLanding === landed.landing || seatLanding.startsWith(landed.landing.endsWith(sep) ? landed.landing : landed.landing + sep);
       });
-      if (!trusted) {
+      // A relative cwd outside the project and outside every trust path is kept
+      // (`cwdOutside`) and judged per seat. A worktree recorded for that seat is
+      // accepted there; anything else refuses only that seat at up, add, and check.
+      // Failing the file here rejected the recorded worktree and every other seat.
+      if (!trusted && seat.cwdOutside !== true) {
         problems.push({ line: seat.line, message: `seat ${seat.name}: cwd "${seat.cwd}" is outside trust` });
       }
     }
@@ -484,13 +809,14 @@ export function placedProblems(
 // requirements to learn its entity and project, then validated for real in the resolved mode.
 // A file that writes its mode is validated once, as before; so is every file when the chain holds
 // no `workspace-mode` (the release default is `worktree`).
-function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader }): ReturnType<typeof validateTeamFile> {
+export function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader; unfilled?: 'strict' | 'keep' }): ReturnType<typeof validateTeamFile> {
   // The default lead's chain is read from the same home the policy chain uses, so a team that
   // names no lead in its file resolves one the same way under either source.
   const leadHome = options.home ?? homedir();
-  const plain = () => validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root });
+  const unfilled = options.unfilled !== undefined ? { unfilled: options.unfilled } : {};
+  const plain = () => validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, ...unfilled });
   if (fileDeclaresWorkspaceMode(text)) return plain();
-  const probe = validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, workspaceMode: 'shared' });
+  const probe = validateTeamFile(text, { home: options.home, leadHome, fs: options.fs, root, workspaceMode: 'shared', ...unfilled });
   if (!probe.ok) return plain();
   let mode: 'worktree' | 'shared' = 'worktree';
   try {

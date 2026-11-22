@@ -25,7 +25,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { deliverBriefs, duringAddressWrite, testIo } from './helpers.ts';
+import { deliverBriefs, duringAddressWrite, fixtureLaunchPlace, testIo } from './helpers.ts';
 import { NOW, fake, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 
 // Pids no real session holds: the socket folder walked is the fixture's own temp folder.
@@ -34,7 +34,9 @@ const SESSION_PID = 990121;
 const paneOf = (name: string): string => `fixture-pane-${name}`;
 
 let restored: Array<() => void> = [];
+const wrapBases: string[] = [];
 afterEach(() => {
+  wrapBases.length = 0;
   for (const undo of restored.reverse()) undo();
   restored = [];
 });
@@ -60,6 +62,7 @@ function placeSocket(made: World, pid = SESSION_PID): string {
  *  is the launch's, and it is not the one this build attests (`generated` is absent). */
 function wrapper(word: string): string {
   const base = mkdtempSync(join(tmpdir(), 'team-check-wrap-'));
+  wrapBases.push(base);
   restored.push(() => rmSync(base, { recursive: true, force: true }));
   const fakeCli = join(base, 'fake-cli');
   writeFileSync(fakeCli, '#!/bin/sh\nexit 0\n');
@@ -119,14 +122,14 @@ function settle(made: World, names: readonly string[]): void {
   updateState(made.dir, (state) => {
     const one = (state.sessions.acme ??= emptySession());
     one.watch = { pid: 1, heartbeat: NOW.toISOString() };
-    // The record a current launch writes: a Codex seat's line carries its profile's pinned feature.
+    // The record a current launch writes: a Codex seat's line carries its profile's pinned features.
     for (const name of names) one.seats[name] = {
       stage: 'ready',
       pane: paneOf(name),
       workspace: 'fixture-ws',
       watcher: 'hook',
       launch_line: name === 'native'
-        ? 'codex -m test -c features.mcp_oauth_refresh_coordination=false'
+        ? 'codex -m test'
         : 'claude',
     };
   });
@@ -177,6 +180,7 @@ function check(made: World, names: readonly string[]): { code: number; out: stri
     now: () => NOW,
     home: made.home,
     sockets: socketsDir(made),
+    launchPlace: fixtureLaunchPlace(dirname(made.root), ...wrapBases),
   });
   return { code, out: `${io.out}${io.err}` };
 }
@@ -206,7 +210,7 @@ async function statusReach(made: World, seat: string, names: readonly string[]):
 /** The real send to the same fixture: what its walk actually did with the socket leg. */
 async function sendTo(made: World, seat: string) {
   const host = fake(made, {
-    agents: () => [{ name: seat, pane: paneOf(seat) }],
+    agents: () => [{ name: seat, pane: paneOf(seat), cli: seat === 'native' ? 'codex' : 'claude' }],
     processInfo: () => ({ shell: SHELL_PID, foreground: [SESSION_PID] }),
     socketsDir: socketsDir(made),
   });
@@ -315,11 +319,25 @@ test('a seat with no socket is a note naming its class, and the exit stays clear
   expect(sent.frames).toEqual([]);
 });
 
+/** The worker's own order: neither the socket nor the typed wake, so the check treats that as
+ *  the worker's choice. The lead keeps the build's order, which can still wake it. */
+function orderOnWorker(made: World): void {
+  const path = join(made.dir, 'team.yaml');
+  const text = readFileSync(path, 'utf8');
+  const at = text.indexOf('    name: wrapped\n');
+  if (at < 0) throw new Error('the wrapped seat was not in the team file');
+  const launch = text.indexOf('\n    launch:', at);
+  const end = launch < 0 ? -1 : text.indexOf('\n', launch + 1);
+  if (end < 0) throw new Error('the wrapped seat has no launch');
+  writeFileSync(path, `${text.slice(0, end)}\n    delivery_order: [session, drop]${text.slice(end)}`);
+}
+
 test('a declared delivery order that names neither socket nor typed is a choice, not a finding', async () => {
   // The same wrapper seat as the first scene, which the check flags when the build's own order
   // stands: a declared order that leaves the socket out silences that finding, and the send's
   // walk follows the order, so all three readers agree the socket is not taken.
-  const { made, names } = fixture([{ name: 'wrapped', role: 'implementer', launch: wrapper('accept') }], ['mcp-inbox', 'drop']);
+  const { made, names } = fixture([{ name: 'wrapped', role: 'implementer', launch: wrapper('accept') }], null);
+  orderOnWorker(made);
   settle(made, names);
   placeSocket(made);
   const { status, sent } = await agree(made, 'wrapped', names, 'typed');
@@ -424,6 +442,7 @@ test('a retained pane whose CLI ended is named once, by its pane reading', async
     now: () => NOW,
     home: made.home,
     sockets: socketsDir(made),
+    launchPlace: fixtureLaunchPlace(dirname(made.root), ...wrapBases),
   });
   const out = `${io.out}${io.err}`;
   expect(out).toContain('difference: lead: its pane runs no CLI and its process was never recorded');

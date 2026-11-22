@@ -31,6 +31,8 @@ const EN = {
   'page.approve_once': 'Approve once',
   'page.always_allow': 'Always allow',
   'page.deny': 'Deny',
+  'page.unreadable': 'This request cannot be read, so it cannot be answered here: {why}',
+  'page.changed': 'This request changed since it was shown; nothing was signed. Read the card again.',
   // The approval card (src/client/approval-card.ts): the owner must know instantly what she
   // accepts or rejects, with no extra context. The title is an action verb and its object in plain
   // words; the question is who wants it and why, ending `OK?`; the scope names the team and says
@@ -50,6 +52,11 @@ const EN = {
   'card.scope.changes': 'Team {team} · {change}',
   'card.scope.changes.many': 'Team {team} · {changes}',
   'card.scope.development-mode': 'This Mac · all teams',
+  // A request carried from another machine (src/client/owner-carry.ts) names that machine beside
+  // its team, so the owner never reads it as one for the machine she answers on.
+  'card.scope.team.machine': 'Team {team} on {machine} · no permission change',
+  'card.scope.changes.many.machine': 'Team {team} on {machine} · {changes}',
+  'card.scope.development-mode.machine': 'Machine {machine} · all teams',
   'card.scope.always': 'always allows this, until revoked',
   'card.scope.always.base': '{base} · always allows this, until revoked',
   'card.scope.deny': 'refused, nothing changes',
@@ -77,6 +84,24 @@ const EN = {
   'card.what.team-config': "change the team's record",
   'card.what.team-general-grant': 'issue a general grant',
   'card.what.development-mode': "set the machine's development mode",
+  // An entity's own record and the machine daemon: each card names the one thing that changes,
+  // read from the request's bound words, and never a folder.
+  'card.what.team-entity-config': "change an entity's record",
+  'card.what.team-entity-config.root': "change where an entity's projects sit",
+  'card.what.team-entity-config.worktrees': "change where an entity's worktrees sit",
+  'card.what.team-entity-config.names': "change how far apart an entity's seat nicknames stay",
+  'card.what.team-entity-config.reminders': "change an entity's reminders",
+  'card.what.team-entity-config.rules': "change an entity's rules",
+  'card.what.team-entity-config.project-rules': "change a project's rules",
+  'card.what.team-daemon': 'change the machine daemon',
+  'card.what.team-daemon.install': 'install the machine daemon',
+  'card.what.team-daemon.restart': 'restart the machine daemon',
+  'card.what.team-daemon.uninstall': 'remove the machine daemon',
+  'card.what.team-daemon.fault-watch': 'test one watch of the machine daemon',
+  'card.scope.entity': 'Entity {team} · changes its record',
+  'card.scope.entity.machine': 'Entity {team} on {machine} · changes its record',
+  'card.scope.daemon': 'This machine · the machine daemon',
+  'card.scope.daemon.machine': 'Machine {machine} · the machine daemon',
   'card.title.development-mode': 'Set the development mode',
   'card.title.development-mode.local-fast': 'Turn on fast local development',
   'card.title.development-mode.pr-per-change': 'Use a pull request for every change',

@@ -265,13 +265,18 @@ function bannerNames(id: string, declared: Running): boolean {
   return sortedTokens(rest) === sortedTokens(name);
 }
 
+function bannerVersionAt(id: string): { parts: string[]; at: number } {
+  const parts = id.toLowerCase().split(/[^a-z0-9]+/).filter((part) => part !== '');
+  const at = parts.findIndex((part) => /^v?[0-9]+$/.test(part));
+  return { parts, at };
+}
+
 /** The wrapper's banner id as the file's two fields, for the column and drift line of an id that
  *  names another model: the id's leading words are the model and the numeric run after them is the
  *  version — `glm-5.3` is GLM 5.3, `deepseek-v4` is deepseek v4. An id with no version-shaped part
  *  keeps the declaration's version. */
 function bannerRunning(id: string, declared: Running): Running {
-  const parts = id.toLowerCase().split(/[^a-z0-9]+/).filter((part) => part !== '');
-  const at = parts.findIndex((part) => /^v?[0-9]+$/.test(part));
+  const { parts, at } = bannerVersionAt(id);
   if (at <= 0) return { model: id, version: declared.version };
   return { model: parts.slice(0, at).join(' '), version: parts.slice(at).join('.') };
 }
@@ -318,6 +323,36 @@ export function signedSeatModel(
   if (proof === 'cli') return runningModel(seat.cli, screen);
   // An unreadable launch line: the model is unread, and unread is never a drift.
   return null;
+}
+
+/** A display fallback is not evidence that a provider was observed or that drift was repaired. */
+export type SeatModelObservation =
+  | { source: 'unread'; model: null; fields: { model: 'unread'; version: 'unread' } }
+  | { source: 'screen' | 'provider' | 'declaration'; model: Running;
+      fields: { model: 'screen' | 'provider' | 'declaration'; version: 'screen' | 'provider' | 'declaration' } };
+
+export function signedSeatModelObservation(
+  seat: { cli: string; model: string; version: string; launch?: string; modelFrom?: 'launcher' },
+  screen: string | undefined,
+): SeatModelObservation {
+  const model = signedSeatModel(seat, screen);
+  if (model === null) return { source: 'unread', model: null, fields: { model: 'unread', version: 'unread' } };
+  if (wrapperSeat(seat)) {
+    const banner = bannerModel(screen);
+    if (banner === null) return { source: 'declaration', model, fields: { model: 'declaration', version: 'declaration' } };
+    // The legacy value can borrow its version from the declaration. A family-only banner
+    // proves the family, never that borrowed version (lead finding, 2026-11-11 03:55Z).
+    const versionObserved = bannerNames(banner, seat)
+      ? findVersion(idTokens(banner), versionWords(seat.version), true) !== null
+      : bannerVersionAt(banner).at > 0;
+    return { source: 'provider', model, fields: { model: 'provider', version: versionObserved ? 'provider' : 'declaration' } };
+  }
+  return { source: 'screen', model, fields: { model: 'screen', version: 'screen' } };
+}
+
+export function positiveModelObservation(reading: SeatModelObservation): reading is SeatModelObservation & { model: Running } {
+  return (reading.source === 'screen' || reading.source === 'provider')
+    && reading.fields.model !== 'declaration' && reading.fields.version !== 'declaration';
 }
 
 /** The model a seat runs, read with a registry record's own provenance: the record's cli and

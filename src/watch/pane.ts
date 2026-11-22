@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execProcessToolSync } from '../process-tools-adapter.ts';
 import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -266,7 +266,7 @@ export function watchLaunchOf(path: string | undefined, dir: string): WatchLaunc
 /** The command line of the process at `pid`, or null when it is gone or cannot be read. */
 export function processCommandOf(pid: number): string | null {
   try {
-    const line = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'command=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),

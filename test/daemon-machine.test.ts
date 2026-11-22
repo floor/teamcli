@@ -148,7 +148,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       const health = await daemonHealth(home);
       expect(health.state).toBe('running');
       expect(health.startedBy).toBe('service-manager');
-      expect(health.features).toEqual({ broker: 'absent' });
+      expect(health.features).toEqual({ broker: 'absent', watch: 'off' });
       expect(health.roots).toHaveLength(1);
       expect(health.roots[0]).toMatchObject({ root, team: 'acme', send: 'serving', bus: 'serving', why: null });
       expect(health.roots[0]?.firstPass).toBeDefined();
@@ -903,6 +903,9 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(unit).not.toContain('/repo');
     expect(unit).toContain('RunAtLoad');
     expect(unit).toContain('KeepAlive');
+    // Delivery runs in the daemon: never the background class, which starves its event loop.
+    expect(unit).toMatch(/<key>ProcessType<\/key>\s*<string>Interactive<\/string>/);
+    expect(unit).not.toContain('<string>Background</string>');
     expect(calls[0]?.[0]).toBe('launchctl');
     expect(calls[0]?.slice(1, 3)).toEqual(['bootstrap', 'gui/501']);
     expect(calls[0]?.[3]).toBe(installed.unitPath);
@@ -1300,6 +1303,22 @@ describe('team daemon status, install, uninstall and run', () => {
     // A source checkout has no packaged commit; the record says so rather than inventing one.
     expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, gitHead: null }))).toBe(0);
     expect(seen[1]?.gitHead).toBeNull();
+  });
+
+  test('run hands the reaper it read at its start to the daemon, and none when it has none', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, reaper: { pid: 1116, start: 812 } }))).toBe(0);
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, reaper: null }))).toBe(0);
+    // A manual start under no service manager reads none of its own.
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start }))).toBe(0);
+    expect(seen.map((input) => input.reaper)).toEqual([{ pid: 1116, start: 812 }, undefined, undefined]);
+    // The folder this process answers for its temporary files rides with it, for `team doctor`.
+    expect(seen.map((input) => input.tempDir)).toEqual([tmpdir(), tmpdir(), tmpdir()]);
   });
 
   test('run hosts a watch only when --watch is given; --watch belongs to run or install', async () => {

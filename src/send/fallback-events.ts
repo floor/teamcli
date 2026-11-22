@@ -72,7 +72,8 @@
 // receives neither.
 import { createHash } from 'node:crypto';
 import { writeStateFile } from '../file-write.ts';
-import { type Dir, existsSync, lstatSync, mkdirSync, opendirSync, readdirSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { type Dir, existsSync, lstatSync, opendirSync, readdirSync } from 'node:fs';
+import { mkdirSync, renameSync, rmdirSync, unlinkSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join, sep } from 'node:path';
 import { logTag, type Caller } from '../caller.ts';
 import { appendEvent, verifySignedEvent, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
@@ -81,6 +82,7 @@ import { readEntityOrchestrator, type EntityOrchestrator } from '../bus/seats.ts
 import { recordDir } from '../commands/messages.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { deliveryEscalationDelay, type DeliveryEscalationSource } from '../policy/delivery.ts';
 import { eventThresholdsInForce } from '../policy/thresholds.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -89,6 +91,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { appendStoreLine, ensureFoldersBelow, ensureStoreLadder, historyPath, readNoFollow } from './history.ts';
 import { dropMessage } from './native.ts';
 import { readSealedRecord, recordAuthOfSealed, recordFile, sameFolder } from './record.ts';
+import { mailTreeOf } from '../queue/mail-tree.ts';
 
 /** The receiver as TeamCLI verified it: the registry team and seat, the seat's registry id when
  *  one exists, the session the seat stands in, and the checkout the record is written under. */
@@ -105,8 +108,9 @@ export type CanonicalRecipient = {
 export type TransportRoute = string;
 
 /** The words a transport fact may use. No `answered` and no `read`: a transport carries, it does
- *  not read. `held` means the record was stored but no seat was woken. */
-export type AttemptOutcome = 'delivered' | 'held' | 'timeout' | 'unreachable' | 'refused';
+ *  not read. `held` means the record was stored but no seat was woken; `pending` means the
+ *  daemon accepted a wake whose child has not reported an outcome yet. */
+export type AttemptOutcome = 'pending' | 'delivered' | 'held' | 'timeout' | 'unreachable' | 'refused';
 
 /** What the transport returned for an attempt, kept typed. A missing receipt is explicit
  *  `unknown`, never an empty string; `maybe-consumed` says a kernel write may have landed and no
@@ -190,7 +194,7 @@ export type FallbackMarker = {
   recordDigest: string;
   /** The sender's log tag, fixed at the first fact: a restart reuses it for the escalation. */
   sender: string;
-  status: 'trying' | 'all-failed' | 'delivered';
+  status: 'trying' | 'pending' | 'all-failed' | 'delivered';
   /** The most recent attempts: a summary. `attemptLedgerFileName` names the full ledger. */
   attempts: AttemptRecord[];
   allFailedAt?: string;
@@ -387,6 +391,41 @@ export function noteTransport(ctx: FallbackContext, fact: TransportFact): Fallba
   }
 }
 
+/** Record the wake child's ending against the caller's already staged
+ * signed copy. Neither the daemon's plain-body copy nor a claimed sender supplies the episode
+ * identity. Reuse the deferred-note verification and locked fallback writer; this records an
+ * outcome only and does not admit a send or create a read receipt. */
+export function noteTypedWake(input: {
+  root: string; home: string; project: string; session: string; seat: string; id: string;
+  outcome: 'delivered' | 'unreachable'; reason: string; at: Date; ms: number;
+}): FallbackNote {
+  try {
+    const fact: TransportFact = {
+      recipient: { team: input.project, root: input.root, session: input.session, seat: input.seat, toId: null },
+      messageId: input.id, recordDigest: 'unread', route: 'typed',
+      outcome: input.outcome, reason: input.reason, at: input.at.toISOString(), ms: input.ms,
+      liveRoutesRemain: false,
+    };
+    const problem = factProblem(fact);
+    if (problem !== null) return { ok: false, kind: 'marker', reason: problem };
+    const path = recordFile(recordDir(input.root, input.session, input.seat), input.id);
+    const read = readSealedRecord(path);
+    if (!read.ok || read.sealed === null) return { ok: false, kind: 'marker', reason: 'the staged typed-wake record could not be read' };
+    const text = readNoFollow(path);
+    if (text === null) return { ok: false, kind: 'marker', reason: 'the staged typed-wake record could not be read' };
+    fact.recipient.toId = typeof read.sealed.payload.to_id === 'string' ? read.sealed.payload.to_id : null;
+    fact.recordDigest = createHash('sha256').update(text).digest('hex');
+    const loaded = readTeamConfig(input.root, { home: input.home });
+    if (!loaded.ok) return { ok: false, kind: 'marker', reason: 'the typed-wake team configuration could not be read' };
+    const ctx: EscalationContext = { root: input.root, home: input.home, team: loaded.team, now: () => input.at };
+    const record = noteRecordOf(ctx, fact, input.at.getTime());
+    if (!record.ok) return { ok: false, kind: 'marker', reason: record.reason };
+    return withKeyLock(ctx, fact.recipient, fact.messageId, () => noteLocked(ctx, fact, record.from, { dedupe: true }));
+  } catch (error) {
+    return { ok: false, kind: 'marker', reason: errorMessage(error) };
+  }
+}
+
 /** A fact written beside the record because the episode's key was busy: the send may return, and
  *  the next `drainDeferredNotes` pass records it under the same lock, exactly once. */
 export type DeferredNote = { ok: true; state: 'deferred'; notePath: string };
@@ -508,6 +547,13 @@ function noteLocked(
     }
   }
 
+  // A fast child can finish before the sender records the daemon's answer. A late handoff
+  // cannot reopen a settled episode, nor duplicate an earlier pending fact.
+  if (fact.outcome === 'pending' && (marker.status === 'delivered' || marker.status === 'all-failed'
+    || marker.attempts.some((seen) => seen.route === fact.route && seen.outcome === 'pending'))) {
+    return { ok: true, state: 'duplicate', marker, eventDuplicate: false, dueAt: marker.dueAt ?? null };
+  }
+
   // A replayed deferred fact: the attempt already stands, so the ledger keeps one line and no
   // state moves. The instant is the fact's own, fixed when the send built it, so it is the same
   // on the replay as on the call that landed it.
@@ -626,8 +672,8 @@ function noteLocked(
     };
   }
 
-  if (fact.liveRoutesRemain) {
-    marker.status = 'trying';
+  if (fact.outcome === 'pending' || fact.liveRoutesRemain) {
+    marker.status = fact.outcome === 'pending' ? 'pending' : 'trying';
     const wrote = writeMarker(path, marker);
     if (!wrote.ok) return { ok: false, kind: 'marker', reason: wrote.reason };
     return {
@@ -804,7 +850,7 @@ export function* drainDeferredNotesSteps(
 function* notesUnderSteps(root: string, limit = Number.POSITIVE_INFINITY): Generator<void, { path: string; text: string | null }[]> {
   const found: { path: string; text: string | null }[] = [];
   if (limit <= 0) return found;
-  const base = join(root, '.agents', 'send-drops');
+  const base = mailTreeOf(root);
   for (const session of yield* folderNamesSteps(base)) {
     const sessionDir = join(base, session);
     for (const seat of yield* folderNamesSteps(sessionDir)) {
@@ -991,7 +1037,7 @@ export function* escalationSteps(
  *  a walk still trying, an escalation already decided, or a due instant still ahead. */
 function settledAt(marker: FallbackMarker, at: Date): boolean {
   if (marker.outbox !== undefined) return false;
-  if (marker.status === 'delivered' || marker.status === 'trying') return true;
+  if (marker.status === 'delivered' || marker.status === 'trying' || marker.status === 'pending') return true;
   if (marker.escalatedAt !== undefined) return true;
   if (marker.dueAt === undefined) return false;
   const due = Date.parse(marker.dueAt);
@@ -1866,7 +1912,7 @@ function* markersUnderSteps(
   root: string,
 ): Generator<void, ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[]> {
   const found: ({ kind: 'ok'; path: string; marker: FallbackMarker } | { kind: 'unreadable'; path: string })[] = [];
-  const base = join(root, '.agents', 'send-drops');
+  const base = mailTreeOf(root);
   const seen = new Set<string>();
   let markerCount = 0;
   for (const session of yield* folderNamesSteps(base)) {
@@ -1985,7 +2031,7 @@ function normalizeReceipt(value: unknown): RelayReceipt {
   return { kind: 'unknown' };
 }
 
-const OUTCOMES: readonly AttemptOutcome[] = ['delivered', 'held', 'timeout', 'unreachable', 'refused'];
+const OUTCOMES: readonly AttemptOutcome[] = ['pending', 'delivered', 'held', 'timeout', 'unreachable', 'refused'];
 const MESSAGE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SEGMENT = /^[^/\\\u0000]+$/;
 
@@ -2029,7 +2075,7 @@ function markerOf(value: unknown): FallbackMarker | null {
   if (recipient === null) return null;
   if (typeof raw.recordDigest !== 'string' || raw.recordDigest === '') return null;
   if (typeof raw.sender !== 'string' || raw.sender === '') return null;
-  if (raw.status !== 'trying' && raw.status !== 'all-failed' && raw.status !== 'delivered') return null;
+  if (raw.status !== 'trying' && raw.status !== 'pending' && raw.status !== 'all-failed' && raw.status !== 'delivered') return null;
   if (!Array.isArray(raw.attempts)) return null;
   const attempts: AttemptRecord[] = [];
   for (const entry of raw.attempts) {

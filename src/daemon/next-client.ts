@@ -9,10 +9,10 @@
 // `NextAnswer` under `next`; until the host adds that shape, every v1 answer is a refusal and
 // nothing is claimed.
 import { randomUUID } from 'node:crypto';
-import { connect } from 'node:net';
 import type { TaskRecord } from '../tasks/adapter.ts';
 import type { NextAnswer, NextClaim, NextRefusalCode } from './next.ts';
 import { DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION } from './protocol.ts';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 
 /** The broker client's own deadline shape: a hung daemon must not hang the seat. */
 export const DAEMON_NEXT_DEADLINE_MS = 5000;
@@ -158,7 +158,6 @@ export function askDaemonNext(
     let connected = false;
     let buffer = '';
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const socket = connect(socketPath);
     const finish = (outcome: DaemonNextOutcome) => {
       if (settled) return;
       settled = true;
@@ -166,13 +165,7 @@ export function askDaemonNext(
       socket.destroy();
       done(outcome);
     };
-    timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
-    socket.setEncoding('utf8');
-    socket.once('connect', () => {
-      connected = true;
-      socket.write(`${JSON.stringify(request)}\n`);
-    });
-    socket.on('data', (chunk: string) => {
+    const read = (chunk: string): void => {
       buffer += chunk;
       const at = buffer.indexOf('\n');
       if (at < 0) {
@@ -200,8 +193,17 @@ export function askDaemonNext(
         return;
       }
       finish({ kind: 'wrong' });
+    };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, {
+      open: () => {
+        connected = true;
+        socket.write(`${JSON.stringify(request)}\n`);
+      },
+      text: read,
+      close: () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }),
     });
-    socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
-    socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
+    timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
+    Bun.connect(options).catch(refused);
   });
 }

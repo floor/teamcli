@@ -13,6 +13,7 @@ import { loadReadings, type Seen } from '../src/budgets/readings.ts';
 import { budgetTable } from '../src/budgets/table.ts';
 import { runApprove } from '../src/approve/command.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -297,7 +298,8 @@ describe('a seat the approval lists as changed', () => {
 
   function watchSources(screens: Record<string, string>): WatchSources {
     let left = 1;
-    return {
+    // A hand-run watch only prints daemon status. The hosted loop is the pass that folds accounts.
+    return withHostedLoop({
       live: () => live(screens),
       machine: () => fine,
       standing: standingSource(home),
@@ -313,7 +315,7 @@ describe('a seat the approval lists as changed', () => {
       wait: async () => --left > 0,
       alive: () => false,
       pid: 4242,
-    };
+    });
   }
 
   test('its figure is folded under the live file\'s account, with no drift line', async () => {

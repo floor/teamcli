@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
@@ -13,6 +14,7 @@ import { LINK_NOT_FOLLOWED, NOT_A_REPO, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { readLaunchedTeam } from '../file/team-text.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
@@ -22,6 +24,7 @@ import { pullSession } from '../send/session-cli.ts';
 import { emptySession, readState, withLock, writeAtomic, STATE_FILE, type State } from '../state.ts';
 import { approvalStanding, findStore, readApproval, type Standing } from '../store/store.ts';
 import { fillPattern, publicNameHit, realLanding, taskProblem } from '../worktree/place.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // What the command reads from outside the process, so a test can point the approval store elsewhere.
 export type WorktreeSources = {
@@ -157,17 +160,22 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
     }
   }
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(sources.home ?? homedir(), io.cwd, args.values.seat, io);
+  const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = { home: sources.home, checkOnly: true };
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so the seats and the worktree placement are the record's,
   // never missed over the file the session launched from. A `--file` names its file, and is read
-  // as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+  // as that file. A cwd inside a registered root does not consult the pointer.
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, readOptions)
+        : launched !== undefined
+          ? readLaunchedTeam(launched, readOptions)
+          : readTeamConfig(io.cwd, readOptions);
   const placed = loaded.ok ? placedProblems(loaded.team, loaded.root, sources.home) : [];
   if (!loaded.ok || placed.length) {
     const problems = loaded.ok ? placed : loaded.errors;
@@ -862,6 +870,7 @@ function commitsOnNoRemote(root: string, worktree: string, branch: string, base:
 }
 
 function realSetup(cwd: string, command: string): number {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('sh', ['-c', command], {
     cwd,
     encoding: 'utf8',
@@ -891,6 +900,7 @@ function publishedBranch(root: string, branch: string): string | null {
 }
 
 function git(cwd: string, args: string[]): Run {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',

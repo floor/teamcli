@@ -17,7 +17,7 @@ import {
 
 const ROOT = join(import.meta.dir, '..');
 const SCRIPT = join(ROOT, 'scripts', 'check-public-names.ts');
-const TEAM_FILE = join(ROOT, '.github', 'team.yaml');
+const TEAM_FILE = join(ROOT, '.github', 'policy.yaml');
 
 const SECRET = ['qw', 'rtz', '-', 'syn', 'th'].join('');
 const OTHER = ['qw', 'rtz', '-', 'oth', 'er'].join('');

@@ -30,6 +30,9 @@ const PULL_ONLY = {
   class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: false, listener: false,
   unread: null, oldest_unread_seconds: null,
 } as const;
+/** The same reading for a seat whose profile declares a typed wake (Codex without a bound queue,
+ *  Grok): no adapter wakes it, and its typed wake does. */
+const TYPED_WAKE = { ...PULL_ONLY, class: 'typed-wake', wakeable: true } as const;
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
 
@@ -188,7 +191,7 @@ describe('team seats', () => {
     // An unread screen keeps the declared display, marked declared and unread together.
     // The WAKE column is every seat's class, `!` marking the ones a message cannot wake.
     expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5                         high    working                               working  trace   now          pane-1  !pull-on-turn');
-    expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (declared, unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2  !pull-on-turn');
+    expect(io.out).toContain('codex-acme               -         seat_222222222222  implementer          codex        GPT-6 Sol (declared, unread)            xhigh   idle (screen not recognised), parked  idle     herdr   4m ago       pane-2  typed-wake');
     expect(io.out).toContain('deepseek-acme            -         seat_333333333333  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       done (screen not recognised)          done     herdr   1h ago       pane-3  !pull-on-turn');
     expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       idle (screen not recognised)          idle     herdr   -            pane-4  !pull-on-turn');
     expect(io.out).toContain('4 seats');
@@ -237,7 +240,7 @@ describe('team seats', () => {
     });
     const io = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file], io, { ...statusSources, home })).toBe(0);
-    expect(io.out).toMatch(/codex-acme .* !pull-on-turn \(endpoint, no bound conversation\)\n/);
+    expect(io.out).toMatch(/codex-acme .* typed-wake \(endpoint, no bound conversation\)\n/);
     // Every other seat is the same class without the note: no endpoint record proves nothing.
     expect(io.out).toMatch(/claude-coordinator-acme .* !pull-on-turn\n/);
 
@@ -246,7 +249,7 @@ describe('team seats', () => {
     const parsed = assertMatchesOutputSchema<SeatsJson>(jsonIo.out, SEATS_OUTPUT_SCHEMA);
     const row = parsed.seats.find((one) => one.name === 'codex-acme');
     expect(row?.wake).toEqual({
-      class: 'pull-on-turn', wakeable: false, conversation: false, endpoint: true,
+      class: 'typed-wake', wakeable: true, conversation: false, endpoint: true,
       listener: false, unread: 0, oldest_unread_seconds: null,
     });
   });
@@ -327,7 +330,7 @@ describe('team seats', () => {
     const code = await runSeats(['--file', file, '--all'], io, statusSources);
     expect(code).toBe(0);
     // A retained seat is done (its process is gone), not judged blind on its day-old trace.
-    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -       !pull-on-turn');
+    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -       typed-wake');
     expect(io.out).toContain('5 seats');
   });
 
@@ -386,7 +389,7 @@ describe('team seats', () => {
       last_active: '2026-10-02T14:10:00Z',
       pane: null,
       launch_line: 'grok --model grok-4.7',
-      wake: PULL_ONLY,
+      wake: TYPED_WAKE,
     });
 
     const ioErr = testIo(dir, { kind: 'owner' });
@@ -590,7 +593,7 @@ describe('team status --all', () => {
     expect(io.out).toContain('team acme-web, session "acme-web"');
     expect(io.out).toContain('SEAT                     NICKNAME  ID                 ROLE                 CLI          MODEL                                   EFFORT  STATUS                                STATE    SOURCE   LAST ACTIVE  PANE    WAKE');
     expect(io.out).toContain('claude-coordinator-acme  -         seat_111111111111  project coordinator  claude-code  Claude Opus 5.5                         high    working                               working  trace    now          pane-1  !pull-on-turn');
-    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -       !pull-on-turn');
+    expect(io.out).toContain('grok-acme                -         seat_555555555555  reviewer             grok         Grok 4.7                                -       stopped                               done     process  1d ago       -       typed-wake');
     expect(io.out).toContain('no differences');
     expect(io.out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');
   });

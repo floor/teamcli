@@ -1,6 +1,6 @@
 // `team check` names unread work: every seat carrying a message with no signed read receipt
 // past its seat's unread window — the file's `watch.unread_after` when it moved the section, else
-// the class default (60 s for this file's pull-only seats; ADR zeus-message-path, D2) — read
+// the class default (60 s for this file's pull-only seats; ADR architect-message-path, D2) — read
 // through the same `listUnread` the watch's unread wake uses. A read receipt clears it, a message
 // inside the window is not named, the general seat brief keeps its own read difference, and a
 // person's drop is never asked for a receipt. The pane here is a scripted screen; no live session

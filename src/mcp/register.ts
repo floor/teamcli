@@ -20,7 +20,8 @@
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
 import { readStateFile, writeStateFile } from '../file-write.ts';
-import { existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +30,7 @@ import { currentBriefClaim } from '../launch/general-brief.ts';
 import { fillInboxPlace, inboxEntryName, profileFor, type InboxPlace } from '../profiles/profile.ts';
 import { registeredRootOf, type RegisteredRoot } from '../registry/teams.ts';
 import { readState } from '../state.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** A registration's outcome: made, or refused with the reason the seat's line carries. */
 export type InboxRegistration = { ok: true } | { ok: false; reason: string };
@@ -74,6 +76,7 @@ export function selfRunner(): { command: string; entry: string } {
 
 function runIn(cwd: string): (command: string, args: readonly string[]) => InboxRun {
   return (command, args) => {
+    hostedCommit('node:child_process.spawnSync');
     const result = spawnSync(command, [...args], {
       cwd,
       encoding: 'utf8',
@@ -321,17 +324,28 @@ function isIgnored(folder: string, target: string): boolean {
   return ignored !== null && ignored.code === 0;
 }
 
-/** Appends `target` to the common git dir's info/exclude, the same place `team init` writes. */
+/** Appends `target` to the common git dir's info/exclude, the same place `team init` writes,
+ *  anchored at the seat folder's own path in the work tree. A pattern with a slash in it is
+ *  read from the top of the work tree, so the bare `.grok/config.toml` ignored only the top
+ *  folder's file and a seat folder nested below it stayed un-ignored (17 Nov reboot simulation). */
+export function excludeLineFor(prefix: string, target: string): string {
+  const inside = prefix.trim().replace(/^\/+/, '');
+  return `/${inside === '' || inside.endsWith('/') ? inside : `${inside}/`}${target}`;
+}
+
 function excludeTarget(folder: string, target: string): boolean {
   const common = runGit(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (common === null || common.code !== 0) return false;
+  const prefix = runGit(folder, ['rev-parse', '--show-prefix']);
+  if (prefix === null || prefix.code !== 0) return false;
+  const line = excludeLineFor(prefix.stdout, target);
   const root = common.stdout.trim();
   const path = join(root, 'info', 'exclude');
   try {
     mkdirSync(dirname(path), { recursive: true });
     const current = readStateFile(path, undefined, root) ?? '';
-    if (current.split('\n').some((line) => line.trim() === target)) return true;
-    writeStateFile(path, `${current}${current !== '' && !current.endsWith('\n') ? '\n' : ''}${target}\n`, { root });
+    if (current.split('\n').some((have) => have.trim() === line)) return true;
+    writeStateFile(path, `${current}${current !== '' && !current.endsWith('\n') ? '\n' : ''}${line}\n`, { root });
     return true;
   } catch {
     return false;
@@ -339,6 +353,7 @@ function excludeTarget(folder: string, target: string): boolean {
 }
 
 function runGit(folder: string, args: readonly string[]): { code: number; stdout: string } | null {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', [...args], {
     cwd: folder,
     encoding: 'utf8',

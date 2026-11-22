@@ -8,7 +8,8 @@
 // left when it died between the rename and the unlink: they are inert (their name is not the
 // source spelling a child can claim), and the sweep keeps the machine folder from collecting
 // them. A sweep looks only at regular files directly inside the folder: a link is never followed.
-import { lstatSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { renameSync, unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { claimedTokenPath, INHERIT_KINDS, INHERIT_NONCE_PATTERN } from './paths.ts';
 

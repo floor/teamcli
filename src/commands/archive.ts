@@ -8,7 +8,8 @@
 // actually there: a team that never launched has no state, and one no message ever reached has no
 // drops. Links are never followed into the archive.
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
@@ -26,6 +27,7 @@ import { storePath, storesFolder } from '../store/store.ts';
 import { version } from '../version.ts';
 import { realSources, runDown, type DownSources } from './down.ts';
 import { raiseSecurityRefusal } from './reply.ts';
+import { LEGACY_TREE } from '../queue/mail-tree.ts';
 
 export const archive: Command = (argv, io) => runArchive(argv, io, realSources);
 export default archive;
@@ -61,7 +63,7 @@ export type ArchiveManifest = {
   drops: { files: number; seats: Record<string, number> } | null;
 };
 
-const DROPS = 'send-drops';
+const DROPS = LEGACY_TREE;
 /** How deep a copied tree may go: `drops/<session>/<seat>/<id>` is three. */
 const TREE_DEPTH = 4;
 

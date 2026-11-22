@@ -29,7 +29,11 @@ import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, recordRenames } from './helpers
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-21T18:00:00Z');
-const SUMMARY_RE = /^(\d+) seats? repaired, (\d+) skipped \(working\), (\d+) refused(?: \((.+)\))?$/m;
+/** A restore names the daemon's missing watch and bus after the counters. The counters stay. */
+const DAEMON_GAPS =
+  "; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root";
+const SUMMARY_RE =
+  /^(\d+) seats? repaired, (\d+) skipped \(working\), (\d+) refused(?: \((.+)\))?(?:; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root)$/m;
 
 const OPUS_IDLE = CLAUDE_IDLE;
 const SONNET_IDLE = CLAUDE_IDLE.replaceAll('Opus 5.5', 'Sonnet 5.5');
@@ -395,11 +399,11 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
     expect(world.runs).toEqual([]);
     expect(ioPlain.out).toContain('orchestrator: ready\n');
     expect(ioPlain.out).toContain('builder-1: ready\n');
-    expect(ioPlain.err).toContain('0 seats repaired, 0 skipped (working), 0 refused\n');
-    expect(SUMMARY_RE.exec(ioPlain.err)?.[0]).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    expect(ioPlain.err).toContain(`0 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}\n`);
+    expect(SUMMARY_RE.exec(ioPlain.err)?.[0]).toBe(`0 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}`);
 
     const logText = readFileSync(join(place.dir, 'team.log'), 'utf8');
-    expect(logText).toContain('0 seats repaired, 0 skipped (working), 0 refused');
+    expect(logText).toContain(`0 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}`);
 
     // Verify `--json` contract on the same 0/0/0 baseline
     const worldJson = buildWorld(place, seeds);
@@ -420,7 +424,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
         line: string;
       };
     }>(ioJson.out, UP_OUTPUT_SCHEMA);
-    expect(doc.action_summary).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    expect(doc.action_summary).toBe(`0 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}`);
     expect(doc.restore_summary).toEqual({
       repaired: 0,
       skipped_working: 0,
@@ -428,7 +432,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
       repaired_seats: [],
       skipped_working_seats: [],
       refused_seats: [],
-      line: '0 seats repaired, 0 skipped (working), 0 refused',
+      line: `0 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}`,
     });
     expect(doc.notes).toContain('orchestrator: ready');
     expect(doc.notes).toContain('operator-1: ready');
@@ -449,7 +453,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
     expect(worldOne.closes).toEqual(['w3']);
     expect(worldOne.runs).toHaveLength(1);
     expect(worldOne.runs[0]?.command).toContain('--resume ses-b1');
-    expect(ioOne.err).toContain('1 seat repaired, 0 skipped (working), 0 refused\n');
+    expect(ioOne.err).toContain(`1 seat repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}\n`);
 
     // 2 seats (1 drifted on moved pane + 1 missing pane with carryable session) in `--json`: plural (`2 seats repaired`)
     const twoRepaired = healthySeeds(place.home, place.root).map((s) => {
@@ -477,7 +481,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
         line: string;
       };
     }>(ioTwo.out, UP_OUTPUT_SCHEMA);
-    expect(doc.action_summary).toBe('2 seats repaired, 0 skipped (working), 0 refused');
+    expect(doc.action_summary).toBe(`2 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}`);
     expect(doc.restore_summary).toEqual({
       repaired: 2,
       skipped_working: 0,
@@ -485,7 +489,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
       repaired_seats: ['builder-1', 'builder-2'],
       skipped_working_seats: [],
       refused_seats: [],
-      line: '2 seats repaired, 0 skipped (working), 0 refused',
+      line: `2 seats repaired, 0 skipped (working), 0 refused${DAEMON_GAPS}`,
     });
   });
 
@@ -510,7 +514,7 @@ describe('canonical restore-summary line in plain, --json, and team.log', () => 
     expect(exit).toBe(0);
     expect(world.closes).toEqual([]);
     expect(world.runs).toEqual([]);
-    expect(io.err).toContain('0 seats repaired, 2 skipped (working), 0 refused\n');
+    expect(io.err).toContain(`0 seats repaired, 2 skipped (working), 0 refused${DAEMON_GAPS}\n`);
   });
 
   test('a working seat whose agent record ties another is never closed', async () => {

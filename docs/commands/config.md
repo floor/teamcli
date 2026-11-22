@@ -2,8 +2,8 @@
 
 Three things: the team's own record, read and edited with `get`, `set`, `unset` and `edit` — what
 `.agents/team.yaml` used to hold, before [`team migrate`](migrate.md) moved it into the registry —
-two keys of the owner's entity record, `<entity>.names.unique` and `<entity>.reminders`; and the
-settings registry, printed with `keys`.
+keys of the owner's entity record, `<entity>.names.unique`, `<entity>.reminders` and
+`<entity>.root`; and the settings registry, printed with `keys`.
 
 ## The team's record: get, set, unset, edit
 
@@ -30,6 +30,16 @@ leaves.
 A record the registry holds is written there (`edited_by: config <verb>`);
 on the legacy `file` source the team file is written instead.
 
+Successful team-record edits append `record-write` lines through the existing team log writer,
+in `.agents/team.log`. Each changed key names the time, caller and caller's team when the roster
+resolves it, admitting rule, command and target team. Known seat flags, CLI words and watch or
+machine measurements include `old` and `new`; `{ "absent": true }` marks a missing value.
+Free text (including models, launch recipes and rules) and every unknown key may contain a secret:
+their lines contain the key and `changed: true`, with neither value. Seat paths use names rather
+than positions; list order and formatting changes have their own redacted markers. Refused edits
+and edits that change nothing append no record-write line. The same reporting covers the team
+definition edits made by `add`, `remove`, and a restart lifting or restoring a stopped mark.
+
 Writes are the owner's, from a terminal outside a pane, as editing the file was; `get` is any
 caller's. One unset is the exception: a team's `leads` seat clears its own team's stopped mark —
 `team config unset seats.<seat>.stopped` — with no card, dev mode on or off, the same seat that
@@ -43,7 +53,7 @@ team runs.
 | the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
 | a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
 
-## The entity's and project's records: names.unique, reminders, and rules
+## The entity's and project's records: names.unique, reminders, rules, and root
 
     team config get <entity>.names.unique [--json]
     team config set <entity>.names.unique <word>
@@ -55,7 +65,13 @@ team runs.
     team config set <entity>.rules <yaml list> [--dry-run] [--json]
     team config get project.<id>.rules [--json]
     team config set project.<id>.rules <yaml list> [--dry-run] [--json]
-    team config get composed.rules [--json]
+    team config get @composed.rules [--json]
+    team config get <entity>.root [--json]
+    team config set <entity>.root <folder> [--dry-run] [--json]
+    team config unset <entity>.root [--dry-run] [--json]
+    team config get <entity>.worktrees [--json]
+    team config set <entity>.worktrees <folder> [--dry-run] [--json]
+    team config unset <entity>.worktrees [--dry-run] [--json]
 
 A path whose last segment is `names.unique` or `reminders` names one key of an entity's own
 entry, not the team's record. Both live with the rest of the entry in the owner's entities file
@@ -64,8 +80,27 @@ the entity name may itself carry dots (the last segment is the key). Likewise, `
 reads or writes the entity-wide standing rules in `~/.config/team/entities.yaml`, and
 `project.<id>.rules` (or `projects.<id>.rules`) reads or writes the project-wide standing rules in
 `~/.config/team/projects.yaml`. Passing `--dry-run` to `set` prints the planned change without
-writing to disk. `team config get composed.rules` prints the composed rules (entity, home project,
-and team) with their origin headings.
+writing to disk. `team config get @composed.rules` prints the composed rules (entity, home project,
+and team) with their origin headings; the `@` path is reserved for that view (no entity name can
+start with `@`) and takes no `set` or `unset`, so an entity or project named `composed` keeps
+`composed.rules` for its own stored rules.
+
+`<entity>.root` is the folder the entity's repositories sit directly under on this machine — an
+absolute path or `~/…`, of letters, digits and `/ . _ - @ +` only (after a leading `~/`), never the filesystem's root,
+the home or a folder above it — which a team file names as `{root}`
+([the team file's reference](../team-file.md#the-entitys-projects-root-root)). It is the machine's
+own word, never derived from the home: a set writes it as given (a trailing slash dropped) and
+says the folder it reads as, and on a fresh machine it creates the entity's entry, and the entities
+file, which no other key of this form does; a
+relative path, the filesystem's root, or a path that writes `{root}` itself is refused and nothing
+is written. `unset` removes it, after which a team of the entity that writes `{root}` is refused
+until one is set again. `get --json` adds the folder it reads as (`resolved`). A path whose first
+segment is a section of the team's own record (`seats.root` is a seat named `root`) stays the
+team's. A set says on stderr the folder the entity's teams now read `{root}` as.
+
+`<entity>.worktrees` is the folder the entity's worktrees sit in on this machine, which a team file
+names as `{worktrees}`; unset, it is `<root>/worktrees`. It takes the same values, the same
+refusals and the same door as `<entity>.root`, and `unset` puts it back to `<root>/worktrees`.
 
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
 every team of the entity), `project` (within one project), `team` (within one team) or `off`.
@@ -90,13 +125,25 @@ the default is in force.
 A set is the owner's, at a terminal, or a seat's under the owner's general grant: 0.5.10 admits a
 wildcard grant only, so one that lists entities is refused until 0.5.11, and the grant's
 operations must admit `config`. The charter is the owner's word for one folder and does not reach
-it. There is no owner-seat request for this word: the grant is the standing answer, and the owner
-sets it directly when no grant admits it.
+it. The owner's signed answer is the third way, for every entity key and for a project's rules:
+`--request [--reason <text>]` records the exact `set` or `unset` for the owner seat, and
+`--approval <request-id>` applies it once the owner has answered. The answer binds the entities
+file's folder, the entity and every word of the change; it is checked first, the write is then
+tried with nothing written, and only a write that would go through (or that finds the value
+already in place) spends it, so a write refused for a missing entry keeps the answer for a
+corrected run. The write is planned, the answer spent and the planned text written under the
+file's one lock, so a file that changes in between cannot spend an answer for a write that is
+then refused. The owner's card names the exact change: set or unset, the key, the value in full
+and the file. An entity's record is answered once or denied: `always` is refused, and no
+standing rule ever admits one. A project's rules through an answer name the project by its id
+(`project.<id>.rules`), never its display name, and the write under the lock requires that id. `--request` and `--approval` take no `get`, never go together, and never go
+with `--general`. On a machine whose owner seat is pinned from another machine this is the only
+way, and the request is carried with `team approvals export`.
 
 | Outcome | Exit |
 | --- | --- |
 | the key printed, set, or already written | 0 |
-| the caller is neither the owner nor admitted by the grant, the word is not one of the four, a reminder list the parser refuses, or the file declares no such entry or key | 1 |
+| the caller is neither the owner nor admitted by the grant or an answer, an answer is refused, the word is not one of the four, a reminder list the parser refuses, or the file declares no such entry or key | 1 |
 | the invocation is not one of the forms, or the entities file cannot be read | 2 |
 
 ## The settings registry: keys
@@ -123,6 +170,7 @@ order in force. The registry names the policy on each row so the two can be told
 | `nickname` | seat | unique in the team, never `lead` | unset | — | at once |
 | `delivery_order` | seat | delivery legs, tighten only | the team's order, else `typed, drop` | `delivery-order` | at once |
 | `human` | seat | true or false | false | — | at once |
+| `desktop_control` | team, seat | true or false | true | — | the CLI's next start: a restart that resumes |
 
 `restart that resumes` is what `team restart` does for a CLI that keeps its session: the value is
 handed to the CLI at its next start. `at once` is a value TeamCLI reads on its next command with no
@@ -147,20 +195,24 @@ restart.
 
 ```console
 $ team config keys ; echo "exit $?"
-  KEY             LEVELS  ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES
-  model           seat    a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes
-  effort          seat    one of the CLI profile's effort levels                           -            -               restart that resumes
-  nickname        seat    unique in the team, never lead                                   -            -               at once
-  delivery_order  seat    delivery legs, tighten only                                      typed, drop  delivery-order  at once
-  human           seat    true or false                                                    false        -               at once
+  KEY              LEVELS      ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES
+  model            seat        a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes
+  effort           seat        one of the CLI profile's effort levels                           -            -               restart that resumes
+  nickname         seat        unique in the team, never lead                                   -            -               at once
+  delivery_order   seat        delivery legs, tighten only                                      typed, drop  delivery-order  at once
+  human            seat        true or false                                                    false        -               at once
+  desktop_control  team, seat  true or false                                                    true         -               restart that resumes
 exit 0
 ```
 
-Every key is a seat key today, so `seat` lists them all and a level above a seat has none yet:
+`desktop_control` is the one key a team may also set (see
+[`desktop_control`](../team-file.md#desktop_control)); every other key is a seat key, so `team`
+lists only it:
 
 ```console
 $ team config keys team ; echo "exit $?"
-no settings are registered at team level
+  KEY              LEVELS      ALLOWED        DEFAULT  GOVERNED BY  APPLIES
+  desktop_control  team, seat  true or false  true     -            restart that resumes
 exit 0
 ```
 
@@ -233,6 +285,18 @@ $ team config keys seat --json ; echo "exit $?"
       "default": false,
       "governed_by": null,
       "applies": "at-once"
+    },
+    {
+      "key": "desktop_control",
+      "levels": [
+        "team",
+        "seat"
+      ],
+      "type": "boolean",
+      "allowed": "true or false",
+      "default": true,
+      "governed_by": null,
+      "applies": "restart-resume"
     }
   ]
 }

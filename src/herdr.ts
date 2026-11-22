@@ -1,11 +1,17 @@
+import { hostedCommit } from './host/request-scope.ts';
+import { traceChildStep } from './diagnostics/child-steps.ts';
+import { directSocketOf, herdrDirect, sessionAnswersNow } from './herdr-direct.ts';
+import { traceBeatWork } from './diagnostics/beat-work.ts';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, closeSync, constants, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, fsyncSync, lstatSync, readFileSync, statSync } from 'node:fs';
+import { fchmodSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from './host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { execText, wasAborted, wasKilled, type ChildOptions } from './child.ts';
 import { resolveForgeShim } from './settings/forge-shim.ts';
 import { assertNoLink, tomlString, writePrivate } from './launch/private-file.ts';
+import { orphanReapers } from './orphan-reaper.ts';
 
 // The only module that talks to herdr. Reading is the default. The calls that change a session
 // are `startServer`, `workspaceCreate`, `paneRun`, `agentRename`, `workspaceClose`, `sessionStop`,
@@ -77,8 +83,21 @@ export function endHerdrSnapshot(id: number | null): void {
   }
 }
 
+/** The server a snapshot keeps a read under: the socket the read reaches when that is certain
+ *  (`directSocketOf`), so the caller's own server and the same session asked by name are one read;
+ *  the session's name otherwise. Read at call time: a hosted request's environment is its own. */
+function snapshotServer(session: string | undefined): string {
+  const socket = directSocketOf(session);
+  return socket === null ? `name:${session ?? ''}` : `socket:${socket}`;
+}
+
+/** A mutation guard must not reuse the planning pass's cached agent list. */
+export function evictHerdrAgentList(session?: string): void {
+  activeSnapshot?.agents.delete(snapshotServer(session));
+}
+
 export function evictHerdrPaneProcessInfo(pane: string, session?: string): void {
-  activeSnapshot?.processInfo.delete(`${session ?? ''}\0${pane}`);
+  activeSnapshot?.processInfo.delete(`${snapshotServer(session)}\0${pane}`);
 }
 
 /** The raw stdout of one `herdr` call, or null when the call failed or printed nothing. Tests
@@ -90,16 +109,49 @@ export function setHerdrCapture(exec: HerdrCapture | null): void {
 }
 
 function run(args: string[], session?: string): unknown {
+  return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => runMeasured(args, session));
+}
+
+/** The one limit a synchronous read has, socket and CLI fallback together. */
+const SYNC_READ_LIMIT_MS = 10_000;
+let syncReadLimitMs = SYNC_READ_LIMIT_MS;
+
+/** Tests only: the synchronous read limit (undefined restores 10 s). */
+export function setHerdrSyncReadLimitForTests(ms: number | undefined): void {
+  syncReadLimitMs = ms ?? SYNC_READ_LIMIT_MS;
+}
+
+/** What the CLI fallback may still wait after the socket attempt took `elapsedMs` of `limitMs`:
+ *  the rest of the same limit, or null once it is spent. Exported for tests. */
+export function fallbackBudgetMs(limitMs: number, elapsedMs: number): number | null {
+  const left = limitMs - Math.max(0, elapsedMs);
+  return left >= 1 ? Math.floor(left) : null;
+}
+
+function runMeasured(args: string[], session?: string): unknown {
   if (customRun) return customRun(args, session);
+  // The read-only calls go over the host's socket when the CLI's own socket is certain; the
+  // answer is the same `result` the CLI prints. Any other case starts the CLI, as before. The
+  // two share one limit: a fallback after a socket attempt waits only for what is left of it.
+  const limit = syncReadLimitMs;
+  const started = Date.now();
+  const direct = traceBeatWork('terminal-host read (socket)', () => herdrDirect(args, session, limit));
+  if (direct !== undefined) return direct.result;
+  const budget = fallbackBudgetMs(limit, Date.now() - started);
+  if (budget === null) throw Object.assign(new Error('the terminal host did not answer in time'), { code: 'ETIMEDOUT' });
   const full = session ? ['--session', session, ...args] : args;
-  const out = execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
+  const out = traceBeatWork('terminal-host read (sync)', () => execFileSync('herdr', full, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: budget }));
   return (JSON.parse(out) as { result?: unknown }).result;
 }
 
 /** What one async read takes: the child's own kill after `timeoutMs`, and the loop's stop. */
 export type HerdrReadOptions = ChildOptions;
 
-async function runAsync(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
+function runAsync(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
+  return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => runAsyncMeasured(args, session, options));
+}
+
+async function runAsyncMeasured(args: string[], session: string | undefined, options: HerdrReadOptions): Promise<unknown> {
   if (customRun) return customRun(args, session);
   const full = session ? ['--session', session, ...args] : args;
   const out = await execText('herdr', full, options);
@@ -121,26 +173,35 @@ function agentSessionOf(value: unknown): string | undefined {
 }
 
 // The agents a `agent list` result names, in its order. One parser for the sync and async reads.
-function agentsOf(result: unknown): HerdrAgent[] {
-  return (((result as { agents?: Record<string, unknown>[] })?.agents) ?? []).map((agent) => {
+function agentsOf(result: unknown): HerdrAgent[] | null {
+  if (!result || typeof result !== 'object') return null;
+  const rows = (result as { agents?: unknown }).agents;
+  if (!Array.isArray(rows)) return null;
+  const agents: HerdrAgent[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+    const agent = row as Record<string, unknown>;
+    if (typeof agent.pane_id !== 'string' || agent.pane_id === ''
+      || typeof agent.workspace_id !== 'string' || agent.workspace_id === '') return null;
     const session = agentSessionOf(agent.agent_session);
     const displayAgent = typeof agent.display_agent === 'string' && agent.display_agent ? agent.display_agent : undefined;
-    return {
+    agents.push({
       name: typeof agent.name === 'string' && agent.name ? agent.name : null,
       agent: typeof agent.agent === 'string' ? agent.agent : null,
-      pane: String(agent.pane_id),
-      workspace: String(agent.workspace_id),
+      pane: agent.pane_id,
+      workspace: agent.workspace_id,
       status: typeof agent.agent_status === 'string' ? agent.agent_status : 'unknown',
       cwd: typeof agent.cwd === 'string' ? agent.cwd : null,
       ...(session ? { session } : {}),
       ...(displayAgent ? { displayAgent } : {}),
-    };
-  });
+    });
+  }
+  return agents;
 }
 
 // The agents herdr lists, or null when herdr can't be reached.
 export function agentList(session?: string): HerdrAgent[] | null {
-  const key = session ?? '';
+  const key = snapshotServer(session);
   if (activeSnapshot !== null && activeSnapshot.agents.has(key)) {
     return activeSnapshot.agents.get(key) ?? null;
   }
@@ -257,7 +318,7 @@ export function paneProcesses(pane: string, session?: string): PaneProcesses | n
  * foreground names are read from, so a pass asks the terminal host once for the pane.
  */
 export function paneProcessInfo(pane: string, session?: string): unknown | null {
-  const key = `${session ?? ''}\0${pane}`;
+  const key = `${snapshotServer(session)}\0${pane}`;
   if (activeSnapshot !== null && activeSnapshot.processInfo.has(key)) {
     return activeSnapshot.processInfo.get(key) ?? null;
   }
@@ -288,11 +349,18 @@ export async function paneProcessesAsync(pane: string, session: string | undefin
 
 export type HerdrWorkspace = { id: string; label: string };
 
-function workspacesOf(result: unknown): HerdrWorkspace[] {
-  return (((result as { workspaces?: Record<string, unknown>[] })?.workspaces) ?? []).map((workspace) => ({
-    id: String(workspace.workspace_id),
-    label: typeof workspace.label === 'string' ? workspace.label : '',
-  }));
+/** An unread or malformed inventory cannot prove a recorded workspace absent. */
+function workspacesOf(result: unknown): HerdrWorkspace[] | null {
+  if (!result || typeof result !== 'object') return null;
+  const rows = (result as { workspaces?: unknown }).workspaces;
+  if (!Array.isArray(rows)) return null;
+  const workspaces: HerdrWorkspace[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+    if (typeof row.workspace_id !== 'string' || row.workspace_id === '') return null;
+    workspaces.push({ id: row.workspace_id, label: typeof row.label === 'string' ? row.label : '' });
+  }
+  return workspaces;
 }
 
 export function workspaceList(session?: string): HerdrWorkspace[] | null {
@@ -345,6 +413,28 @@ export function workspacePaneDisplays(workspace: string, session?: string): Work
   } catch {
     return null;
   }
+}
+
+/** One session's pane displays in one awaited read. The terminal host's PaneListParams has
+ * optional workspace_id; absent, collect_panes_for_workspace(None) walks all workspaces
+ * (adapter source read 2026-11-11, schema/panes.rs and app/creation.rs). */
+export async function sessionPaneDisplaysAsync(
+  session: string,
+  options: HerdrReadOptions = {},
+): Promise<WorkspacePaneDisplay[] | null> {
+  try {
+    const result = await runAsync(['pane', 'list'], session, options) as { panes?: unknown } | undefined;
+    if (!result || !Array.isArray(result.panes)) return null;
+    const panes: WorkspacePaneDisplay[] = [];
+    for (const entry of result.panes) {
+      if (!entry || typeof entry !== 'object') return null;
+      const p = entry as Record<string, unknown>;
+      if (typeof p.pane_id !== 'string' || p.pane_id === '' || typeof p.workspace_id !== 'string' || p.workspace_id === '') return null;
+      panes.push({ pane: p.pane_id, workspace: p.workspace_id,
+        ...(typeof p.display_agent === 'string' && p.display_agent !== '' ? { displayAgent: p.display_agent } : {}) });
+    }
+    return panes;
+  } catch { return null; }
 }
 
 // The pane ids in a workspace, or null when herdr can't be reached or the workspace does not exist.
@@ -449,7 +539,7 @@ export function sessionRunning(name: string): boolean | null {
 // returns the call's stdout and throws when herdr exits non-zero or the call times out.
 export type CaptureExec = (args: string[]) => string;
 const shellCaptureExec: CaptureExec = (args) =>
-  execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
+  traceBeatWork('terminal-host capture (sync)', () => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 }));
 let captureExec: CaptureExec = shellCaptureExec;
 
 /** Swaps the process call the metadata calls make; null restores the real one. */
@@ -460,6 +550,10 @@ export function setCaptureExec(exec: CaptureExec | null): void {
 // What a herdr command printed, or null when it did not run. Exit status is not the answer: a
 // command aimed at a session that does not exist can print an error and exit 0.
 function capture(args: string[], session?: string): string | null {
+  return traceChildStep(`terminal-host ${args.slice(0, 2).join(' ')}`, () => captureMeasured(args, session));
+}
+
+function captureMeasured(args: string[], session?: string): string | null {
   if (customCapture) return customCapture(args, session);
   const full = [...(session ? ['--session', session] : []), ...args];
   try {
@@ -560,6 +654,7 @@ export function forgeShimText(real: string): string {
  *  created exclusively, so a pre-created link cannot be followed. False when it could not be
  *  written; the caller then closes the fallback rather than leaving the environment as it was. */
 export function writeForgeShim(dir: string, real: string): boolean {
+  hostedCommit('herdr writeForgeShim');
   const file = join(dir, FORGE_CLI);
   const text = forgeShimText(real);
   try {
@@ -675,6 +770,7 @@ export function seatServerEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.Proc
 // so the forge shim stands ahead of the machine's CLI (see `seatServerEnv`). Refuses unless the
 // session is absent: a second server for a session that already runs has been seen to drop it.
 export function startServer(session: string): boolean {
+  hostedCommit('herdr startServer');
   if (sessionState(session) !== 'absent') return false;
   let env: NodeJS.ProcessEnv;
   try {
@@ -694,9 +790,85 @@ export function startServer(session: string): boolean {
   }
 }
 
+// Starts the server of a session the terminal host lists as stopped (a machine restart left it
+// down), detached, in the same clean environment as `startServer`. The server restores the
+// session's saved panes. Refuses unless the session reads stopped: never a second server for a
+// running session, and never a session that does not exist. The check is the awaited session
+// list (bounded, abortable), read immediately before the spawn: the daemon's loop never blocks
+// on it. 'not-stopped' when the session is absent or running; 'unread' when herdr did not answer.
+// The caller holds the session's run lock for the whole call (the observation below is the one
+// taken under it). After the awaited session list, with nothing awaited before the spawn:
+// `proveNow` (the caller's proof), a synchronous look at the session's own socket (only proven
+// absence goes on), then `reserve` (the caller's durable in-flight record, written before the
+// spawn: false refuses). `spawned` gets the child's pid and start time as soon as it exists, so a
+// daemon that dies at any point still leaves a record that blocks a second server. A server not
+// up within the bound returns 'failed' with that child; its caller must not spawn another while
+// it lives.
+export type StoppedServerStart =
+  | { kind: 'started' | 'not-stopped' | 'unread' | 'refused' }
+  | { kind: 'failed'; child?: { pid: number; start: number | null } };
+export type StoppedServerHooks = {
+  proveNow?: () => boolean;
+  reserve?: () => boolean;
+  spawned?: (child: { pid: number; start: number | null }) => void;
+};
+export async function startStoppedServer(
+  session: string,
+  options: HerdrReadOptions = {},
+  hooks: StoppedServerHooks = {},
+  startOf: (pid: number) => number | null = () => null,
+): Promise<StoppedServerStart> {
+  hostedCommit('herdr startStoppedServer');
+  if (session === '') return { kind: 'not-stopped' };
+  const sessions = await sessionListAsync(options);
+  if (sessions === null) return { kind: 'unread' };
+  const found = sessions.find((one) => one.name === session);
+  if (found === undefined || found.running) return { kind: 'not-stopped' };
+  // From here to the spawn nothing is awaited.
+  if (hooks.proveNow !== undefined && !hooks.proveNow()) return { kind: 'refused' };
+  const answers = sessionAnswersNow(session);
+  if (answers === 'answers') return { kind: 'not-stopped' };
+  if (answers === 'unknown') return { kind: 'unread' };
+  let env: NodeJS.ProcessEnv;
+  try {
+    env = seatServerEnv(process.env, homedir());
+  } catch {
+    return { kind: 'failed' };
+  }
+  const args = session === 'default' ? ['server'] : ['--session', session, 'server'];
+  if (hooks.reserve !== undefined && !hooks.reserve()) return { kind: 'refused' };
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn('herdr', args, { env, detached: true, stdio: 'ignore' });
+  } catch {
+    return { kind: 'failed' };
+  }
+  if (child.pid !== undefined) hooks.spawned?.({ pid: child.pid, start: startOf(child.pid) });
+  // The spawn's own outcome is awaited (an error event is handled, never left unhandled), then
+  // the session must read running within the bound: only then is the server up.
+  const spawned = await new Promise<boolean>((resolve) => {
+    child.once('error', () => resolve(false));
+    child.once('spawn', () => {
+      child.unref();
+      resolve(true);
+    });
+  });
+  if (!spawned || child.pid === undefined) return { kind: 'failed' };
+  const pid = child.pid;
+  const until = Date.now() + (options.timeoutMs ?? 15_000);
+  while (Date.now() < until) {
+    if (options.signal?.aborted === true) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const now = await sessionListAsync(options);
+    if (now?.find((one) => one.name === session)?.running === true) return { kind: 'started' };
+  }
+  return { kind: 'failed', child: { pid, start: startOf(pid) } };
+}
+
 // Sets a workspace's label, which herdr draws as sidebar line 1. `herdr workspace rename --help`
 // names the two arguments and no flags. False when herdr doesn't answer or reports an error.
 export function workspaceRename(workspace: string, label: string, session?: string): boolean {
+  hostedCommit('herdr workspaceRename');
   const out = capture(['workspace', 'rename', workspace, label], session);
   if (out === null) return false;
   const body = parsed(out);
@@ -708,6 +880,7 @@ export function workspaceCreate(
   label: string,
   session?: string,
 ): { pane: string; workspace: string } | null {
+  hostedCommit('herdr workspaceCreate');
   const result = resultOf(['workspace', 'create', '--cwd', cwd, '--label', label, '--no-focus'], session) as {
     root_pane?: { pane_id?: unknown };
     workspace?: { workspace_id?: unknown };
@@ -720,11 +893,49 @@ export function workspaceCreate(
 
 // Types a command into a pane and sends it. For a seat's launch, at a shell. An exit into an
 // agent is `typeText` and then `pressEnter`, and only after the screen was read as idle again.
+/** How long a launch waits for a new pane's shell to reach its prompt. */
+export const PANE_RUN_PROMPT_WAIT_MS = 15_000;
+const PANE_RUN_RETRY_MS = 250;
+
+function blockFor(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Whether herdr refused the line only because the pane's shell has not reached its prompt yet:
+ *  the terminal is still in canonical mode, which takes at most 1024 bytes a line (herdr 0.9.5:
+ *  `pane_send_failed`, "…canonical mode with a 1024-byte limit; wait for the shell prompt and
+ *  retry"). Measured 2026-11-12: a launch typed ~100 ms after its workspace was made hit this
+ *  with a 1105-byte first line; the same pane took a 8000-byte line once its shell was up. */
+function waitsForPrompt(said: string): boolean {
+  return said.includes('pane_send_failed') && said.includes('canonical mode');
+}
+
 export function paneRun(pane: string, command: string, session?: string): boolean {
-  const out = capture(['pane', 'run', pane, command], session);
-  if (out === null) return false;
-  const body = parsed(out);
-  return body === null || !isHerdrError(body);
+  hostedCommit('herdr paneRun');
+  const deadline = Date.now() + PANE_RUN_PROMPT_WAIT_MS;
+  for (;;) {
+    let out: string | null;
+    let refused = '';
+    if (customCapture) {
+      out = customCapture(['pane', 'run', pane, command], session);
+    } else {
+      try {
+        out = traceChildStep('terminal-host pane run', () => captureExec([...(session ? ['--session', session] : []), 'pane', 'run', pane, command]));
+      } catch (error) {
+        const e = error as { stderr?: unknown; stdout?: unknown };
+        refused = `${String(e.stderr ?? '')}${String(e.stdout ?? '')}`;
+        out = null;
+      }
+    }
+    if (out !== null) {
+      const body = parsed(out);
+      if (body === null || !isHerdrError(body)) return true;
+      refused = out;
+    }
+    // The shell is still starting: the same line is offered again once it is at its prompt.
+    if (!waitsForPrompt(refused) || Date.now() >= deadline) return false;
+    blockFor(PANE_RUN_RETRY_MS);
+  }
 }
 
 // The id team reports a pane's display_agent under. Herdr 0.7.1 requires `--source`; nothing
@@ -742,6 +953,7 @@ export const SIDEBAR_TTL_CAP_MS = 86_400_000;
 // 2026-11-04, scratch session). The policy layer clamps before this, and the adapter still
 // refuses what the host would refuse.
 export function reportDisplayAgent(pane: string, text: string, session?: string, ttlMs?: number): boolean {
+  hostedCommit('herdr reportDisplayAgent');
   if (ttlMs !== undefined && (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > SIDEBAR_TTL_CAP_MS)) {
     return false;
   }
@@ -753,13 +965,33 @@ export function reportDisplayAgent(pane: string, text: string, session?: string,
   return body === null || !isHerdrError(body);
 }
 
+/** Display-only report with the same TTL and response checks as the synchronous adapter.
+ * execText uses SIGKILL at the existing child-read deadline; no synchronous exit wait. */
+export async function reportDisplayAgentAsync(
+  pane: string, text: string, session: string, ttlMs: number,
+  options: HerdrReadOptions = {},
+): Promise<boolean> {
+  hostedCommit('herdr reportDisplayAgentAsync');
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > SIDEBAR_TTL_CAP_MS) return false;
+  const args = ['pane', 'report-metadata', pane, '--source', DISPLAY_AGENT_SOURCE, '--display-agent', text, '--ttl-ms', String(ttlMs)];
+  try {
+    const out = await traceChildStep('terminal-host pane report-metadata', () => customCapture !== null
+      ? customCapture(args, session)
+      : execText('herdr', ['--session', session, ...args], options));
+    if (out === null) return false;
+    const body = parsed(out);
+    return body === null || !isHerdrError(body);
+  } catch { return false; }
+}
+
 // ── The sidebar layout keys team owns in the host's config ──────────────────────────────────
 //
-// Two keys, one edit: the sidebar table `ui.sidebar.agents.rows` — a block team owns whole once
-// marked — and the `[ui]` key `status_indicators`, owned at the assignment line because `[ui]`
-// is a table the owner fills with other keys. Ownership is marked by the same trailing comment
-// in both places. Everything else in the owner's file is preserved byte-for-byte, and the write
-// is validated through the host and rolled back from bytes held in memory before the rename.
+// Two keys, one edit: the sidebar table's `rows` assignment — and `row_gap` only when
+// `workspace.sidebar.row_gap` is set — and the `[ui]` key `status_indicators`, owned at its
+// assignment line because `[ui]` is a table the owner fills with other keys. The marker sits on
+// the sidebar table's header and on the indicators line. Every other line in the sidebar table,
+// marked or not, stays byte-for-byte, and the write is validated through the host and rolled
+// back from bytes held in memory before the rename.
 
 /** The closed token vocabulary the sidebar layout accepts (probed 2026-11-04, herdr 0.9.5). */
 export const SIDEBAR_TOKENS = ['state_icon', 'machine', 'workspace', 'tab', 'state_text', 'agent'] as const;
@@ -886,22 +1118,55 @@ function appendLines(lines: string[], added: readonly string[]): void {
   else lines.push(...added, '');
 }
 
-/** The pure splice: the marked sidebar table and the marked `[ui]` key, one pass. A table or
- *  key whose marker is present is replaced whole; one without it is adopted — the value is
- *  spliced in place and the marker is added — never clobbered. Anchors match uncommented lines
- *  only, and everything outside the spliced span is preserved byte-for-byte; a splice that
+/** The pure splice: the sidebar table's `rows` assignment and the marked `[ui]` key, one pass.
+ *  A table without the marker is adopted — the header gains the marker and `rows` is spliced in
+ *  place. A table that already carries the marker keeps that header byte-for-byte and the same
+ *  splice replaces only `rows`. `rowGap`, when given, is written the same way, after `rows`;
+ *  when omitted, an existing `row_gap` line is left untouched. Anchors match uncommented lines
+ *  only, and every line that is not the spliced assignment stays byte-for-byte; a splice that
  *  changes nothing reads back equal (`changed: false`). */
 export type SidebarSplice =
   | { ok: true; text: string; changed: boolean }
   | { ok: false; reason: string };
 
+/** Replaces `key`'s assignment inside the table at `tableAt`, or inserts `valueLine`. `rows`
+ *  lands just under the header; `row_gap` lands just after the rows value. A value whose
+ *  brackets never close, or that opens an inline table, is refused and nothing is kept. */
+function placeAssignment(lines: string[], tableAt: number, key: string, valueLine: string, after: 'header' | 'rows'): string | null {
+  const span = tableSpan(lines, tableAt);
+  const at = assignmentAt(lines, span.start + 1, span.end + 1, key);
+  if (at >= 0) {
+    const spanned = valueSpan(lines, at, span.end + 1);
+    if (spanned === null) return `the ${key} value cannot be bounded; edit it by hand`;
+    lines.splice(spanned.start, spanned.end - spanned.start + 1, valueLine);
+    return null;
+  }
+  let insertAt = tableAt + 1;
+  if (after === 'rows') {
+    const rowsAt = assignmentAt(lines, span.start + 1, span.end + 1, 'rows');
+    if (rowsAt >= 0) {
+      const rowsSpan = valueSpan(lines, rowsAt, span.end + 1);
+      insertAt = (rowsSpan === null ? rowsAt : rowsSpan.end) + 1;
+    }
+  }
+  lines.splice(insertAt, 0, valueLine);
+  return null;
+}
+
 export function spliceSidebarRows(
   text: string,
   rows: readonly (readonly string[])[],
   indicators: string,
+  rowGap?: number,
 ): SidebarSplice {
   const rowsValue = `[${rows.map((row) => `[${row.map(tomlString).join(', ')}]`).join(', ')}]`;
-  const markedTable = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, `rows = ${rowsValue}`];
+  const rowsLine = `rows = ${rowsValue}`;
+  const gapLine = rowGap === undefined ? null : `row_gap = ${String(rowGap)}`;
+  const tableLines = (): string[] => {
+    const block = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, rowsLine];
+    if (gapLine !== null) block.push(gapLine);
+    return block;
+  };
   const uiLine = `status_indicators = ${tomlString(indicators)} ${SIDEBAR_BLOCK_MARKER}`;
   const lines = text === '' ? [] : text.split('\n');
 
@@ -922,31 +1187,26 @@ export function spliceSidebarRows(
     }
   }
 
+  const placeRows = (tableAtNow: number): string | null => {
+    const rowsReason = placeAssignment(lines, tableAtNow, 'rows', rowsLine, 'header');
+    if (rowsReason !== null) return rowsReason;
+    if (gapLine === null) return null;
+    return placeAssignment(lines, tableAtNow, 'row_gap', gapLine, 'rows');
+  };
+
   if (tableAt < 0 && uiAt < 0) {
     // Both keys are appended in one pass, one blank line between the two tables.
-    appendLines(lines, [...markedTable, '', `[${UI_TABLE}]`, uiLine]);
+    appendLines(lines, [...tableLines(), '', `[${UI_TABLE}]`, uiLine]);
   } else {
-    // The sidebar table.
+    // The sidebar table. A marked header stays as it was written; an unmarked one gains the marker.
     if (tableAt < 0) {
-      appendLines(lines, markedTable);
+      appendLines(lines, tableLines());
     } else {
       const header = headerOf(lines[tableAt] ?? '') as HeaderLine;
-      const span = tableSpan(lines, tableAt);
-      if (header.comment !== null && header.comment.includes(SIDEBAR_BLOCK_MARKER)) {
-        lines.splice(span.start, span.end - span.start + 1, ...markedTable);
-      } else {
-        lines[tableAt] = `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`;
-        const at = assignmentAt(lines, span.start + 1, span.end + 1, 'rows');
-        if (at >= 0) {
-          const spanned = valueSpan(lines, at, span.end + 1);
-          if (spanned === null) {
-            return { ok: false, reason: 'the rows value cannot be bounded; edit it by hand' };
-          }
-          lines.splice(spanned.start, spanned.end - spanned.start + 1, `rows = ${rowsValue}`);
-        } else {
-          lines.splice(tableAt + 1, 0, `rows = ${rowsValue}`);
-        }
-      }
+      const marked = header.comment !== null && header.comment.includes(SIDEBAR_BLOCK_MARKER);
+      if (!marked) lines[tableAt] = `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`;
+      const placed = placeRows(tableAt);
+      if (placed !== null) return { ok: false, reason: placed };
     }
 
     // The status indicators, in the shared [ui] table — its anchor is found again here,
@@ -974,11 +1234,13 @@ export function spliceSidebarRows(
 export function renderSidebarTomlBlock(
   rows: readonly (readonly string[])[],
   indicators: string,
+  rowGap?: number,
 ): string {
   const rowsValue = `[${rows.map((row) => `[${row.map(tomlString).join(', ')}]`).join(', ')}]`;
+  const table = [`[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`, `rows = ${rowsValue}`];
+  if (rowGap !== undefined) table.push(`row_gap = ${String(rowGap)}`);
   return [
-    `[${SIDEBAR_TABLE}] ${SIDEBAR_BLOCK_MARKER}`,
-    `rows = ${rowsValue}`,
+    ...table,
     '',
     `[${UI_TABLE}]`,
     `status_indicators = ${tomlString(indicators)} ${SIDEBAR_BLOCK_MARKER}`,
@@ -1099,6 +1361,8 @@ function parseSidebarRowsLiteral(raw: string): string[][] | null {
 export type SidebarConfigReading = {
   rows: string[][] | null;
   indicators: string | null;
+  /** The table's `row_gap` when it is a whole number from 0 up; null when the line is absent or not that. */
+  rowGap: number | null;
   /** True when `rows` has at least one row containing the `'agent'` token. */
   hasAgentToken: boolean;
 };
@@ -1149,8 +1413,19 @@ export function readSidebarConfig(text: string): SidebarConfigReading {
     }
   }
 
+  let rowGap: number | null = null;
+  if (tableAt >= 0) {
+    const gapAt = assignmentAt(lines, tableAt + 1, rowsUntil, 'row_gap');
+    if (gapAt >= 0) {
+      const stripped = stripTomlComment(lines[gapAt] ?? '');
+      const eq = stripped.indexOf('=');
+      const raw = eq >= 0 ? stripped.slice(eq + 1).trim() : '';
+      if (/^(0|[1-9][0-9]*)$/.test(raw)) rowGap = Number(raw);
+    }
+  }
+
   const hasAgentToken = rows !== null && rows.some((row) => row.includes('agent'));
-  return { rows, indicators, hasAgentToken };
+  return { rows, indicators, rowGap, hasAgentToken };
 }
 
 /** `herdr config check` (probed 2026-11-04): exit 0 with `config: ok` on a file the host
@@ -1177,6 +1452,7 @@ export function hostConfigCheck(): { ok: boolean; text: string } {
 export type ConfigReload = { applied: boolean; text: string };
 
 export function reloadConfig(session: string): ConfigReload {
+  hostedCommit('herdr reloadConfig');
   let result: unknown;
   try {
     result = run(['server', 'reload-config'], session);
@@ -1258,7 +1534,9 @@ export function applySidebarLayout(
   indicators: string,
   sessions: readonly string[],
   deps: SidebarApplyDeps,
+  rowGap?: number,
 ): SidebarApply {
+  hostedCommit('herdr applySidebarLayout');
   const file = hostConfigPath(home);
   const reloads = (): { reloaded: string[]; failed: { session: string; text: string }[] } => {
     const reloaded: string[] = [];
@@ -1286,7 +1564,7 @@ export function applySidebarLayout(
     return { kind: 'refused', reason: error instanceof Error ? error.message : String(error), restored: 'untouched' };
   }
 
-  const spliced = spliceSidebarRows(priorText ?? '', rows, indicators);
+  const spliced = spliceSidebarRows(priorText ?? '', rows, indicators, rowGap);
   if (!spliced.ok) return { kind: 'refused', reason: spliced.reason, restored: 'untouched' };
   if (!spliced.changed) {
     const { reloaded, failed } = reloads();
@@ -1324,7 +1602,24 @@ export function applySidebarLayout(
 // (`AgentRenameError::NotAgent`) and on one whose managed launch is pending; an unparseable
 // answer or an envelope without a result is a failure, never a success. The pane's label is
 // never read as its name: `pane rename` sets a sidebar label, not `AgentInfo.name`.
+/**
+ * Declares the pane an agent of `agent` to herdr, idle, under the `team` source. herdr 0.7.x no
+ * longer detects some CLIs on its own (the jules TUI: `agent rename` answered `agent_not_found`
+ * on a pane whose foreground process was `jules`, 2026-11-16); after this report the same pane
+ * was listed as `jules`, `idle`, and `agent rename` named it. Display and naming only: nothing
+ * is typed into the pane.
+ */
+export function reportAgentPresent(pane: string, agent: string, session?: string): boolean {
+  hostedCommit('herdr reportAgentPresent');
+  const out = capture(['pane', 'report-agent', '--source', 'team', '--agent', agent, '--state', 'idle', pane], session);
+  if (out === null) return false;
+  const body = parsed(out);
+  if (body !== null && typeof body === 'object' && !Array.isArray(body) && isHerdrError(body)) return false;
+  return true;
+}
+
 export function agentRename(pane: string, name: string, session?: string): boolean {
+  hostedCommit('herdr agentRename');
   const named = (listed: HerdrAgent[] | null): boolean =>
     listed?.some((agent) => agent.pane === pane && agent.name === name) === true;
   if (named(agentList(session))) return true;
@@ -1342,6 +1637,7 @@ export function agentRename(pane: string, name: string, session?: string): boole
 // text left the pane's text exactly as it was and only moved the focus (see the result of the
 // slice that added this call). False when herdr doesn't list the target or the call failed.
 export function focusAgent(target: string, session?: string): boolean {
+  hostedCommit('herdr focusAgent');
   const out = capture(['agent', 'focus', target], session);
   if (out === null) return false;
   const body = parsed(out);
@@ -1349,14 +1645,72 @@ export function focusAgent(target: string, session?: string): boolean {
 }
 
 export function workspaceClose(workspace: string, session?: string): boolean {
+  hostedCommit('herdr workspaceClose');
+  // The CLI processes in front of the workspace's shells, read before the close: a CLI that
+  // ignores the hangup outlives its pane as an orphan (seen 2026-11-13: four Codex processes
+  // reparented to launchd after restarts, one holding a seat's conversation so the relaunched
+  // seat could not open it).
+  const owned = (workspacePanes(workspace, session) ?? []).flatMap((pane) => paneProcesses(pane, session)?.foreground ?? []);
   const out = capture(['workspace', 'close', workspace], session);
   if (out === null) return false;
   const body = parsed(out);
-  return body !== null && !isHerdrError(body);
+  const closed = body !== null && !isHerdrError(body);
+  if (closed && owned.length > 0) {
+    endOrphans(owned, parentPidOf, (pid) => process.kill(pid, 'SIGTERM'), sleepSync, orphanReapers());
+  }
+  return closed;
+}
+
+/** Ends the processes this close owned that outlived it: each pid read in front of the closed
+ *  pane's shell and now reparented to pid 1, or to a reaper the daemon recorded at its start
+ *  (`reapers`: the service manager that starts this user's processes, src/orphan-reaper.ts). A
+ *  pid that exited, or that still has any other parent, is left alone. Waits up to two seconds
+ *  for the hangup to work first. Returns the pids ended. */
+export function endOrphans(
+  owned: readonly number[],
+  parentOf: (pid: number) => number | null,
+  end: (pid: number) => void,
+  sleep: (ms: number) => void,
+  reapers: readonly number[] = [],
+): number[] {
+  hostedCommit('herdr endOrphans');
+  let left = [...new Set(owned)];
+  for (let waited = 0; waited < 2_000 && left.length > 0; waited += 250) {
+    sleep(250);
+    left = left.filter((pid) => parentOf(pid) !== null);
+  }
+  const ended: number[] = [];
+  for (const pid of left) {
+    const parent = parentOf(pid);
+    if (parent !== 1 && (parent === null || !reapers.includes(parent))) continue;
+    try {
+      end(pid);
+      ended.push(pid);
+    } catch {
+      // Gone between the read and the signal, or not ours to signal: nothing to end.
+    }
+  }
+  return ended;
+}
+
+/** A live process's parent pid, or null when it has exited. Reads `ps -o ppid=` only. */
+function parentPidOf(pid: number): number | null {
+  try {
+    const out = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const parent = Number(out);
+    return out === '' || !Number.isInteger(parent) ? null : parent;
+  } catch {
+    return null;
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 // Stops a session, which herdr keeps listed as stopped.
 export function sessionStop(name: string): boolean {
+  hostedCommit('herdr sessionStop');
   const out = capture(['session', 'stop', name]);
   if (out === null) return false;
   return sessionStopped(out, name);
@@ -1372,6 +1726,7 @@ export function sessionStopped(stdout: string, name: string): boolean {
 // lists it stopped. `up` deletes a stopped session this team's state records, then starts it.
 // A delete while the session is still running is refused by herdr and returns false.
 export function sessionDelete(name: string): boolean {
+  hostedCommit('herdr sessionDelete');
   const out = capture(['session', 'delete', name]);
   if (out === null) return false;
   return sessionCleared(out, name);
@@ -1389,8 +1744,16 @@ export function sessionCleared(stdout: string, name: string): boolean {
 // The process call behind paneRead, injectable for tests: it returns the call's stdout and
 // throws when herdr refuses an option or the call times out. The real one shells out.
 export type PaneExec = (args: string[]) => string;
-const shellPaneExec: PaneExec = (args) =>
-  execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 });
+// The styled read goes over the host's socket when the CLI's own socket is certain
+// (src/herdr-direct.ts): the same text, without a process start per read. An error answer throws
+// as the CLI's exit does; any other miss starts the CLI.
+const shellPaneExec: PaneExec = (args) => {
+  const session = args[0] === '--session' ? args[1] : undefined;
+  const direct = herdrDirect(session === undefined ? args : args.slice(2), session);
+  const text = (direct?.result as { read?: { text?: unknown } } | undefined)?.read?.text;
+  if (typeof text === 'string') return text;
+  return traceBeatWork('terminal-host pane read (sync)', () => execFileSync('herdr', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }));
+};
 let paneExec: PaneExec = shellPaneExec;
 
 /** Swaps the process call paneRead makes; null restores the real one. */
@@ -1468,6 +1831,7 @@ export function herdrCommand(session: string | undefined, ...args: string[]): st
 // The two functions that type. Their callers have just seen the pane at an empty idle prompt,
 // look at it again between the text and the Enter, and type nothing anywhere else.
 export function typeText(pane: string, text: string, session?: string): boolean {
+  hostedCommit('herdr typeText');
   try {
     execFileSync('herdr', [...(session ? ['--session', session] : []), 'pane', 'send-text', pane, text], { stdio: 'ignore', timeout: 10_000 });
     return true;
@@ -1488,6 +1852,7 @@ export async function typeTextAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr typeTextAsync');
   try {
     await execText(
       'herdr',
@@ -1501,6 +1866,7 @@ export async function typeTextAsync(
 }
 
 export function pressEnter(pane: string, session?: string): boolean {
+  hostedCommit('herdr pressEnter');
   return sendKey(pane, SUBMIT_ENTER, session);
 }
 
@@ -1512,6 +1878,7 @@ export async function agentPromptAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr agentPromptAsync');
   try {
     await execText(
       'herdr',
@@ -1529,11 +1896,13 @@ export async function pressEnterAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr pressEnterAsync');
   return sendKeyAsync(pane, 'enter', session, options);
 }
 
 /** One key, by the name `herdr pane send-keys` takes. The same call `pressEnter` uses. */
 export function sendKey(pane: string, key: string, session?: string): boolean {
+  hostedCommit('herdr sendKey');
   try {
     execFileSync('herdr', [...(session ? ['--session', session] : []), 'pane', 'send-keys', pane, key], { stdio: 'ignore', timeout: 10_000 });
     return true;
@@ -1548,6 +1917,7 @@ export async function sendKeyAsync(
   session?: string,
   options: HerdrReadOptions = {},
 ): Promise<boolean> {
+  hostedCommit('herdr sendKeyAsync');
   try {
     await execText(
       'herdr',
@@ -1656,10 +2026,11 @@ export function setHerdrWaitExec(exec: HerdrWaitExec | null): void {
   waitExec = exec ?? shellWaitExec;
 }
 
-/** Parses one `herdr wait agent-status` exit and output into a structured wait outcome.
- *  Probed against herdr 0.7.1:
- *  - match exits 0 and prints `{"event":"pane.agent_status_changed","data":{"pane_id":"...","workspace_id":"...","agent_status":"done",...}}`
- *  - timeout exits 1 and prints `timed out waiting for agent status change`
+/** Parses one `herdr agent wait` exit and output into a structured wait outcome.
+ *  Probed against herdr 0.9.5 (`herdr wait agent-status`, the 0.7.1 form, is gone there):
+ *  - match exits 0 and prints `{"result":{"agent":{"pane_id":"...","workspace_id":"...","agent_status":"done",...}}}`
+ *    (0.7.1 printed the same fields under `data`, and both are read)
+ *  - timeout exits 1 and prints `timed out waiting for agent status` (0.7.1 added ` change`)
  *  - invalid pane / unreachable daemon exits non-zero with a JSON error envelope or message. */
 export function parseWaitAgentStatusOutput(
   code: number | null,
@@ -1671,34 +2042,28 @@ export function parseWaitAgentStatusOutput(
   const trimmedOut = stdout.trim();
   const trimmedErr = stderr.trim();
   const combined = `${trimmedOut}\n${trimmedErr}`.toLowerCase();
-  if (code !== 0 && combined.includes('timed out waiting for agent status change')) {
+  if (code !== 0 && combined.includes('timed out waiting for agent status')) {
     return { outcome: 'timeout' };
   }
   if (code === 0) {
     if (trimmedOut !== '') {
       try {
-        const body = JSON.parse(trimmedOut) as HerdrEnvelope & {
-          event?: unknown;
-          data?: {
-            pane_id?: unknown;
-            workspace_id?: unknown;
-            agent_status?: unknown;
-            agent?: unknown;
-          };
-        };
+        type WaitData = { pane_id?: unknown; workspace_id?: unknown; agent_status?: unknown; agent?: unknown };
+        const body = JSON.parse(trimmedOut) as HerdrEnvelope & { event?: unknown; data?: WaitData; result?: { agent?: WaitData } };
         if (isHerdrError(body)) {
           return { outcome: 'error', message: trimmedOut };
         }
-        const rawStatus = body.data?.agent_status;
+        const data = body.data ?? body.result?.agent;
+        const rawStatus = data?.agent_status;
         const status = isHerdrAgentStatus(rawStatus) ? rawStatus : requestedStatus;
-        const pane = typeof body.data?.pane_id === 'string' && body.data.pane_id !== ''
-          ? body.data.pane_id
+        const pane = typeof data?.pane_id === 'string' && data.pane_id !== ''
+          ? data.pane_id
           : fallbackPane;
-        const workspace = typeof body.data?.workspace_id === 'string' && body.data.workspace_id !== ''
-          ? body.data.workspace_id
+        const workspace = typeof data?.workspace_id === 'string' && data.workspace_id !== ''
+          ? data.workspace_id
           : undefined;
-        const agent = typeof body.data?.agent === 'string' && body.data.agent !== ''
-          ? body.data.agent
+        const agent = typeof data?.agent === 'string' && data.agent !== ''
+          ? data.agent
           : undefined;
         return {
           outcome: 'changed',
@@ -1719,28 +2084,28 @@ export function parseWaitAgentStatusOutput(
   };
 }
 
-/** Waits for `pane`'s agent status in `herdr` to reach `status` within `timeoutMs`.
+/** Waits for `pane`'s agent status in `herdr` to reach `status` (or any of them) within `timeoutMs`.
  *  Read-only: never types or sends a key into any pane. */
 export async function waitAgentStatus(
   pane: string,
-  status: HerdrAgentStatus,
+  status: HerdrAgentStatus | readonly HerdrAgentStatus[],
   timeoutMs = 30_000,
   session?: string,
   signal?: AbortSignal,
 ): Promise<HerdrWaitOutcome> {
+  const statuses = typeof status === 'string' ? [status] : status;
   const args = [
     ...(session && session !== 'default' ? ['--session', session] : []),
+    'agent',
     'wait',
-    'agent-status',
     pane,
-    '--status',
-    status,
+    ...statuses.flatMap((one) => ['--until', one]),
     '--timeout',
     String(Math.max(1, Math.round(timeoutMs))),
   ];
   try {
     const { code, stdout, stderr } = await waitExec(args, signal);
-    return parseWaitAgentStatusOutput(code, stdout, stderr, pane, status);
+    return parseWaitAgentStatusOutput(code, stdout, stderr, pane, statuses[0]!);
   } catch (error) {
     return {
       outcome: 'error',

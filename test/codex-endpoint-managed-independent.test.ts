@@ -8,7 +8,7 @@ import type { CodexEndpointRecord } from '../src/daemon/presence/endpoint-record
 import { validateTeamFile } from '../src/file/validate.ts';
 import { codexEndpointSocket, ensureCodexEndpoint } from '../src/launch/codex-endpoint.ts';
 import { executePlan, type Host } from '../src/launch/execute.ts';
-import { codexCommandHasFlag, codexCommandRemoteUrl, upPlan, type Step, type UpSeat } from '../src/launch/plan.ts';
+import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointStartConfig, upPlan, type Step, type UpSeat } from '../src/launch/plan.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { deliverBriefs, shortSocketBase, testIo } from './helpers.ts';
@@ -240,7 +240,8 @@ function checkWorld() {
   const standing = verifiedOf(parsed.team, TEAM, root, NOW);
   deliverBriefs({ dir, root, session: SESSION, seats: ['lead', SEAT], home, at: NOW.toISOString() });
   const socket = codexEndpointSocket(dir, SESSION, SEAT, BINDING)!;
-  const record: CodexEndpointRecord = { url: socket.url, binding: BINDING, pid: 811, started_at: NOW.toISOString(), config: CONFIG };
+  // A current launch records the line's config closed by the profile's feature pins.
+  const record: CodexEndpointRecord = { url: socket.url, binding: BINDING, pid: 811, started_at: NOW.toISOString(), config: codexEndpointStartConfig('codex -a never -s read-only -c model_reasoning_effort=low') };
   const live: Live = {
     running: true,
     agents: [

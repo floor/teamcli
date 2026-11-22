@@ -36,6 +36,7 @@ import {
   type IdleDispatchInput, type WorkPush, type WorkPushRequest,
 } from '../src/watch/dispatch.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const MIN = 60_000;
 const NOW = Date.parse('2026-10-20T03:00:00Z');
@@ -94,6 +95,14 @@ seats:
 /** The same crew with a plain launch line: a Claude seat with no event adapter is pull-on-turn,
  *  the class the dispatcher spends no attempt on. */
 const PULL_CREW = CREW.replaceAll(PUSH_LAUNCH, 'claude');
+
+/** The plain crew whose workers' team file opts in to the cross-session socket (`inbound:
+ *  accept`): the socket is a route only when the team declares it, so these are the workers a
+ *  standing, carried and unheld socket makes push-class. */
+const SOCKET_CREW = PULL_CREW.replace(
+  /(name: (worker-[12])\n(?: {4}[a-z_]+: [^\n]*\n)*? {4}launch: claude)\n/g,
+  '$1\n    inbound: accept\n',
+);
 
 /** One worker wakeable, the other not: the mixed reading the skip must not apply to the whole. */
 const MIXED_CREW = CREW.replace(
@@ -428,6 +437,75 @@ describe('a seat nothing can wake while it is idle', () => {
     expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
   });
 
+  test('a seat whose profile declares a typed wake is spent its attempt like any wakeable seat', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    // worker-1 keeps no adapter (pull-on-turn); worker-2 runs Cursor, woken by its typed wake.
+    const typed = PULL_CREW.replace(
+      `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: claude`,
+      'name: worker-2\n    cli: cursor\n    vendor: test\n    model: Grok\n    version: "4.7"\n    launch: cursor',
+    );
+    // The pane shows Cursor's own empty idle box (the captured 2026.10.22 frame).
+    const cursorIdle = readFileSync(join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22', 'idle.txt'), 'utf8');
+    // Its launch recorded the shell anchors the typed wake proves the pane by.
+    const anchored = stateAt(new Date(NOW - 10 * MIN).toISOString());
+    anchored.seats['worker-2'] = { ...anchored.seats['worker-2']!, pane_shell: 111, pane_shell_start: 5 };
+    const result = await dispatchIdleWork(input({ push, state: anchored, team: teamOf(typed), live: live({ 'worker-2': { screen: cursorIdle } }) }));
+    expect(calls.map((one) => `${one.seat} ${one.cli}`)).toEqual(['worker-2 cursor']);
+    expect(result.pushed).toEqual([{ seat: 'worker-2', ok: true, outcome: 'delivered' }]);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-1')).toBeUndefined();
+    expect(idleClaimOf(state, 'worker-2')).toBeDefined();
+  });
+
+  test('a typed-wake seat whose record has no shell anchors is held: no push and no attempt spent', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    const typed = PULL_CREW.replace(
+      `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: claude`,
+      'name: worker-2\n    cli: cursor\n    vendor: test\n    model: Grok\n    version: "4.7"\n    launch: cursor',
+    );
+    const cursorIdle = readFileSync(join(import.meta.dir, 'fixtures', 'cursor', '2026.10.22', 'idle.txt'), 'utf8');
+    await dispatchIdleWork(input({ push, team: teamOf(typed), live: live({ 'worker-2': { screen: cursorIdle } }) }));
+    expect(calls).toEqual([]);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
+  });
+
+  test('a between-turns seat whose record has no shell anchors is held too: its direct send would take the typed wake', async () => {
+    for (const anchored of [false, true]) {
+      queue([{ id: 't1', title: 'First' }]);
+      const calls: WorkPushRequest[] = [];
+      const push: WorkPush = async (request) => {
+        calls.push(request);
+        return { ok: true, outcome: 'delivered' };
+      };
+      const codex = PULL_CREW.replace(
+        `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: claude`,
+        'name: worker-2\n    cli: codex\n    vendor: test\n    model: GPT\n    version: "6.1"\n    launch: codex',
+      );
+      // A bound app-server endpoint and conversation: the seat reads as between-turns.
+      const state = stateAt(new Date(NOW - 10 * MIN).toISOString());
+      state.seats['worker-2'] = {
+        ...state.seats['worker-2']!, cli: 'codex', watcher: 'inbox', agent_session: 'ses_thread', presence_binding: 'prs_0123456789ab',
+        codex_endpoint: { url: `unix://${join(base, 'codex.sock')}`, binding: 'prs_0123456789ab', pid: 4321, started_at: '2026-10-01T00:00:00Z' },
+        ...(anchored ? { pane_shell: 111, pane_shell_start: 5 } : {}),
+      } as SessionState['seats'][string];
+      const codexIdle = readFileSync(join(import.meta.dir, 'fixtures', 'codex', '0.167.0', 'idle.txt'), 'utf8');
+      await dispatchIdleWork({ ...input({ push, state, team: teamOf(codex), live: live({ 'worker-2': { screen: codexIdle } }) }), home: undefined } as unknown as IdleDispatchInput);
+      expect(calls.map((one) => one.seat)).toEqual(anchored ? ['worker-2'] : []);
+      forgetIdleEpisodes();
+    }
+  });
+
   test('an accepted socket whose recorded address does not stand is no wake either', async () => {
     queue([{ id: 't1', title: 'First' }]);
     const calls: WorkPushRequest[] = [];
@@ -456,13 +534,13 @@ describe('a seat nothing can wake while it is idle', () => {
       });
       return socket;
     });
-    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    const result = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW) }));
     expect(calls).toEqual([]);
     expect(result.pushed).toEqual([]);
     expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
     // The same records with the sockets standing: both seats are push-class and pushed once.
     for (const socket of sockets) writeFileSync(socket, '');
-    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    const later = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW), now: new Date(NOW + MIN) }));
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
     expect(calls.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
@@ -512,7 +590,7 @@ describe('a seat nothing can wake while it is idle', () => {
     // but the walk through this read would not dial them, so the class is pull-on-turn and the
     // pass spends no attempt.
     const replaced = await dispatchIdleWork(input({
-      push, team: teamOf(PULL_CREW),
+      push, team: teamOf(SOCKET_CREW),
       live: { ...scene, processes: processesWith((seat) => [pidOf[seat]! + 9]) },
     }));
     expect(calls).toEqual([]);
@@ -523,7 +601,7 @@ describe('a seat nothing can wake while it is idle', () => {
     expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
     // The panes' own processes carry the recorded sockets: the same records are push-class again.
     const owned = await dispatchIdleWork(input({
-      push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN),
+      push, team: teamOf(SOCKET_CREW), now: new Date(NOW + MIN),
       live: { ...scene, processes: processesWith((seat) => [pidOf[seat]!]) },
     }));
     expect(owned.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
@@ -566,7 +644,7 @@ describe('a seat nothing can wake while it is idle', () => {
         new Date(NOW),
       );
     }
-    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    const result = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW) }));
     expect(calls).toEqual([]);
     expect(result.pushed).toEqual([]);
     expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
@@ -584,7 +662,7 @@ describe('a seat nothing can wake while it is idle', () => {
       const fresh = new Date(rewrote.getTime() + 1000);
       utimesSync(join(base, `${seat}.sock`), fresh, fresh);
     }
-    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    const later = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW), now: new Date(NOW + MIN) }));
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
 });
@@ -1061,7 +1139,7 @@ describe('the watch seam', () => {
       workspaces: [{ id: 'first', label: 'first' }, { id: 'second', label: 'second' }],
       screens: { 'first:pane': idle, 'second:pane': idle },
     };
-    return {
+    return withHostedLoop({
       live: () => scene,
       machine: () => fine,
       standing: () => ({ kind: 'none' }),
@@ -1079,7 +1157,7 @@ describe('the watch seam', () => {
       pid: 4242,
       home: dir,
       ...over,
-    };
+    });
   }
 
   beforeEach(() => {
@@ -1138,13 +1216,13 @@ describe('the watch seam', () => {
     expect(existsSync(join(dir, '.agents', 'send-drops', 'acme-web', 'deepseek-acme'))).toBe(false);
   });
 
-  test('with no route wired nothing is typed for the episode and the fallback record is left', async () => {
+  test('with no route wired a hosted watch types nothing and writes no fallback record', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
     expect(typed.filter((line) => line.includes('and do that.'))).toEqual([]);
     expect(existsSync(join(dir, '.agents', 'send-drops', 'acme-web', 'deepseek-acme'))).toBe(false);
-    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(2);
+    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(0);
   });
 
   test('an unread record does not ring a seat whose work episode the dispatcher owns', async () => {
@@ -1152,22 +1230,20 @@ describe('the watch seam', () => {
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
-    // The queue holds t1 and no route is wired: the seat's episode is the dispatcher's, and its
-    // undelivered outcome is announced there. The unread record waits for its seat; it never
-    // becomes a second typed path into the same episode.
+    // A hosted watch with no route holds the dispatch, so the unread record is not a typed path
+    // and no fallback record is written for it.
     expect(typed.filter((line) => line.includes('Team: run team drops --read'))).toEqual([]);
-    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(2);
+    expect(recordsIn(join(dir, '.agents', 'messages', 'claude-coordinator-acme'))).toHaveLength(0);
   });
 
-  test('a stamped idle seat outside any work episode is still rung', async () => {
+  test('a stamped idle seat outside any work episode is not rung by a hosted pass', async () => {
     rmSync(join(dir, '.agents', 'queue.yaml'));
     waitingMail('22222222-2222-4222-8222-222222222222', 'deepseek-acme-2');
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
-    // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
-    // one typed path left, and it types.
-    expect(typed.some((line) => line.includes('Read it with: team drops --read.'))).toBe(true);
+    // The mail is younger than the unread window, and a hosted pass types no ring.
+    expect(typed.some((line) => line.includes('Read it with: team drops --read.'))).toBe(false);
   });
 
   /** The same team file with its source moved to a tracker. Its records exist only in the

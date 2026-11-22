@@ -200,12 +200,11 @@ function upTrace(): { sources: UpSources; trace: UpTrace } {
 }
 
 /** The plan an admitted lead's run makes: the orchestrator and the operator in the project
- *  folder, the implementer in the lobby, and the watch in its own workspace last. */
+ *  folder, the implementer in the lobby. The daemon is the watch, so no watch workspace is opened. */
 const PLAN = [
   { label: 'lead', cwd: '' },
   { label: 'pilot', cwd: '' },
   { label: 'worker', cwd: '' },
-  { label: 'Watch · acme', cwd: '' },
 ];
 
 function agent(name: string, pane: string): HerdrAgent {
@@ -254,8 +253,9 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
 });
 
+// Authority and audit controls retain default-channel per-seat placement.
 function withCwd(plan: { label: string; cwd: string }[]): { label: string; cwd: string }[] {
-  return plan.map((one) => ({ ...one, cwd: one.label === 'worker' ? lobby : root }));
+  return plan.map((one) => ({ ...one, cwd: one.label === 'worker' ? join(lobby, 'worker') : root }));
 }
 
 describe('the up row (owner-or-leads)', () => {

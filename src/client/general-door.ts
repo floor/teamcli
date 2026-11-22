@@ -23,6 +23,7 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Io } from '../io.ts';
+import { ownerMachinePinned } from './owner-pin-path.ts';
 import { FLAG_OPS, GENERAL_REFUSED_COMMANDS, grantCoversOp, grantIsWildcard, grantKeyMatches, readGeneralGrant, VERB_OPS, type GeneralGrant, type GeneralOp } from './general-grant.ts';
 
 /** Commands that parse `--general` themselves. */
@@ -72,7 +73,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   agents: [],
   analyse: [],
   answer: ['file', 'session'],
-  approvals: ['approval', 'reason'],
+  approvals: ['answer', 'approval', 'assertion', 'from', 'out', 'reason', 'signer'],
   archive: ['file', 'older-than', 'out', 'seat', 'session'],
   'ask-show': ['ask', 'marker'],
   batch: ['approval', 'do'],
@@ -84,7 +85,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   client: ['approval', 'days', 'entities', 'ops', 'out', 'public-key', 'reason', 'to', 'via'],
   commits: ['file', 'since'],
   config: ['approval', 'reason'],
-  daemon: ['home', 'inherited', 'root', 'route', 'started-by'],
+  daemon: ['approval', 'home', 'inherited', 'reason', 'root', 'route', 'started-by'],
   delegate: ['commands'],
   'development-mode': ['approval', 'reason'],
   doctor: ['file', 'session'],
@@ -105,7 +106,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   migrate: ['approval', 'reason'],
   next: [],
   order: ['file', 'session'],
-  'owner-seat': ['days', 'entity', 'grant-emission', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
+  'owner-seat': ['account', 'days', 'entity', 'from', 'grant-emission', 'name', 'out', 'owner-signers', 'policy-entity', 'port', 'reason', 'signer', 'team'],
   pause: ['client', 'reason', 'seat', 'team'],
   peek: ['lines'],
   plan: [],
@@ -133,11 +134,11 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   setup: ['credential-id', 'grant-duration', 'public-key', 'request-expiry', 'roots', 'rule-lifetime', 'signature', 'signer', 'team'],
   show: [],
   status: ['client', 'file', 'project', 'session', 'team'],
-  swap: ['file', 'to'],
+  swap: ['effort', 'file', 'model', 'to', 'vendor', 'version'],
   tempo: [],
   trace: [],
   unlock: [],
-  up: ['approval', 'client', 'file', 'reason', 'session', 'team'],
+  up: ['approval', 'client', 'file', 'reason', 'rebind', 'session', 'team'],
   usage: [],
   waits: [],
   watch: ['file', 'session'],
@@ -312,13 +313,30 @@ function ownGeneral(name: string, rest: string[], io: Io, now: Date): Door | nul
   return { kind: 'pass', argv: rest, io };
 }
 
+/** The refusal on a machine whose owner seat is pinned: a grant is signed with this account's own
+ *  key, which any process of the account can read, so it never stands in for the owner there. */
+export const PINNED_GENERAL_REFUSAL = "this machine's owner signs on another machine, and a general grant does not stand in for the owner here; the command runs on the owner's signed answer (--request, then --approval)";
+
 /** The door's verdict for `team <name> <rest>`. Without `--general` it passes the line untouched. */
 export function generalDoor(name: string, rest: string[], io: Io, now: Date = new Date()): Door {
+  // Before anything else is read, for every command, its own door's commands included: on a
+  // pinned machine a line that carries a grant is refused.
+  if (take(rest, 'general').present && ownerMachinePinned(io.env.HOME ?? homedir())) {
+    const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));
+    return { kind: 'refused', why: PINNED_GENERAL_REFUSAL, json };
+  }
   if (OWN_GENERAL.has(name)) return ownGeneral(name, rest, io, now) ?? { kind: 'pass', argv: rest, io };
   const general = take(rest, 'general');
   if (!general.present) return { kind: 'pass', argv: rest, io };
   const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));
-  if (GENERAL_REFUSED_COMMANDS.has(name)) return { kind: 'refused', why: `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`, json };
+  if (GENERAL_REFUSED_COMMANDS.has(name)) {
+    const why = name === 'launchers'
+      ? 'the owner, or a placed lead of this team, runs team launchers through its ordinary admission; a general grant never admits it'
+      : name === 'queues' || name === 'ping'
+        ? `team ${name} declines general grants: run it without --general, under its ordinary admission`
+        : `only the owner runs team ${name}, from a terminal outside a team session; a general grant never admits it`;
+    return { kind: 'refused', why, json };
+  }
   if (issuesGrants(name, rest)) return { kind: 'usage', why: 'team client general-grant issues grants and takes no --general (a holder issues with --via <grant.json> --key <client.key>)', json };
   if (general.value === undefined) return { kind: 'usage', why: '--general takes <grant.json>', json };
   const key = take(general.rest, 'key');

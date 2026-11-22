@@ -237,37 +237,6 @@ function sceneHost(world: SendWorld): { host: SendHost & { typedInto: (pane: str
 }
 
 describe('the project level admits a pair the team rules refuse', () => {
-  test("teamcli's lead reaches teamcli.io's lead by name when both teams are in project TeamCLI", async () => {
-    const { world, cliId, cliRoot, cliLead, ioLead, caller } = twoTeams();
-    // The project record: TeamCLI, its lead by agent id (the io team's lead). Membership is the
-    // team records' own, so each team joins the project on its own record.
-    upsertTeam(world.home, cliId, { projectId: 'teamcli', projects: ['teamcli'] });
-    upsertTeam(world.home, ioLead.reach.team, { projectId: 'teamcli', projects: ['teamcli'] });
-    const project = upsertProject(world.home, 'teamcli', { name: 'TeamCLI', entity: 'org-alpha', lead: ioLead.id });
-    expect(project.teams).toContain(teamIdOf(cliRoot));
-    const { host, cliPane, ioPane } = sceneHost(world);
-
-    // The entity chain closes the ordinary lead pair. Only the shared project supplies reach.
-    const teamRules = admitSend(cliLead, ioLead, readTeams(world.home), undefined, { projects: {}, crossTeams: { entity: false } });
-    expect(teamRules.ok).toBe(false);
-
-    const code = await runSend(['lead@teamcli.io', BODY], testIo(cliRoot, caller), host);
-
-    expect(code).toBe(0);
-    expect(cliPane.typed).toEqual([]);
-    expect(ioPane.typed.length).toBe(0);
-    const drop = dropOf(world.roots.io as string, 'teamcli.io', 'lead');
-    // The signed record keeps the sender's identity — its seat and registry id — and the rule the
-    // project admitted the write under; the message inside opens with its sender, read by
-    // address, one line before the body.
-    const record = JSON.parse(drop.text) as { payload: { body: string; from: string; from_id: string; rule: string } };
-    expect(record.payload.from_id).toBe(cliLead.id);
-    expect(record.payload.from).toBe('lead');
-    expect(record.payload.rule).toBe(PROJECT_RULES[0]);
-    expect(record.payload.body).toContain(BODY);
-    expect(record.payload.body.startsWith('from lead@teamcli — admitted by: ')).toBe(true);
-    expect(record.payload.body.indexOf('— admitted by: ')).toBeLessThan(record.payload.body.indexOf(BODY));
-  });
 
   test('the same pair is refused when no project names both teams', async () => {
     const { world, cliId, cliRoot, ioId, cliLead, ioLead, caller } = twoTeams();

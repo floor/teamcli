@@ -153,6 +153,13 @@ The relying party is `localhost`, which browsers treat as a secure context, so n
 needed. The phone cannot open `localhost` itself: the approval goes through the Mac browser's
 "use a phone or tablet" QR code (hybrid transport, Bluetooth proximity).
 
+## A shared Linux server
+
+A Linux server has no Touch ID, so it pins the owner seat exported from the Mac, and it has several
+accounts: the owner's administrator account and one account per entity. Its owner state is set up
+once, as the administrator, so that no entity account can change it, and each answer is spent for
+the one account that asked: [team owner-seat: a shared Linux server](commands/owner-seat.md#a-shared-linux-server).
+
 ## Why no codesigning
 
 A Secure Enclave key stored as a *Keychain item* needs the data-protection keychain, hence a

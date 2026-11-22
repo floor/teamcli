@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from '../helpers/default-channel.ts';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -25,7 +26,7 @@ import { rulesText, seatRules, type RulesInput } from '../../src/launch/rules.ts
 import { defaultFs, findRepoRoot, lobbyDir, recheckLobby, verifyLobby, type FsReader } from '../../src/lobby/gate.ts';
 import { shippedStartupReads } from '../../src/profiles/index.ts';
 import { seatStart } from '../../src/worktree/place.ts';
-import { readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
+import { emptySession, readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
@@ -84,6 +85,7 @@ seats:
 `;
 }
 
+// Default-channel workers use their own folder; channel-off controls retain the common lobby.
 function migratedTeamYaml(): string {
   return `format: 1
 project: acme
@@ -522,7 +524,7 @@ describe('the lobby gate', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
     expect(existsSync(join(lobby, '.gitkeep'))).toBe(true);
   });
 
@@ -720,7 +722,7 @@ describe('the lobby gate', () => {
     const made = world();
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
   });
 
   test('findRepoRoot accepts .git as a file (worktree / submodule style)', () => {
@@ -749,10 +751,10 @@ describe('the lobby gate', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
     expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
     const state = readState(dir);
     expect(state.sessions['acme']?.seats.lead?.start_cwd).toBe(root);
-    expect(state.sessions['acme']?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(state.sessions['acme']?.seats.worker?.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
   });
 
   test('a running lead recorded in the lobby is left there', async () => {
@@ -841,14 +843,26 @@ describe('the lobby gate', () => {
     const dry = await runUpCmd(['--dry-run'], world());
     expect(dry.code).toBe(0);
     expect(dry.out).toContain(`workspace create --cwd ${root} --label lead`);
-    expect(dry.out).toContain(`workspace create --cwd ${lobby} --label worker`);
+    expect(dry.out).toContain(`workspace create --cwd ${join(lobby, 'worker')} --label worker`);
     expect(dry.out).toContain('<pane of lead>');
     expect(dry.out).toContain('<pane of worker>');
     expect(dry.out).not.toContain('mkdir -p');
   });
 
+  test('a channel-off worker still starts in the common lobby', async () => {
+    // Opting out preserves the common-lobby placement without changing the enabled default.
+    approveYaml(migratedTeamYaml().replace('    name: worker\n', '    name: worker\n    channel: off\n'));
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code, run.err + run.out).toBe(0);
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(readState(dir).sessions.acme?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+  });
+
   test('real run makes the machine lobby and leaves the old lobby untouched', async () => {
     approveYaml(migratedTeamYaml());
+    // Keep this default-channel placement positive fully registered, including the lead pair.
+    registerDefaultChannelFixture(root, home, 'lead');
     const oldLobby = join(base, 'worktrees', 'acme', '.lobby');
     mkdirSync(oldLobby, { recursive: true });
     const made = world();
@@ -856,8 +870,10 @@ describe('the lobby gate', () => {
     expect(run.code).toBe(0);
     expect(existsSync(lobby)).toBe(true);
     expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
     expect(readdirSync(oldLobby)).toEqual([]);
+    expect(statSync(join(lobby, 'worker')).mode & 0o7777).toBe(0o700);
+    expect(existsSync(join(lobby, 'worker', '.mcp.json'))).toBe(true);
   });
 });
 
@@ -1064,10 +1080,11 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
     expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
+    // Temporary minting opts out; the declared worker above still owns its channel folder.
     expect(made.workspaces).toContainEqual({ label: 'worker-tmp-01', cwd: lobby });
   });
 
@@ -1084,7 +1101,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
     expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
@@ -1309,7 +1326,7 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     const run = await runUpCmd([], made);
     expect(run.code).toBe(0);
     expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: lobby });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(lobby, 'worker') });
 
     const addRun = await runAddCmd(['--temporary', '--like', 'worker', '--until', 'merged:main'], made);
     expect(addRun.code).toBe(0);
@@ -1753,7 +1770,7 @@ seats:
     const worker = loaded.team.seats.find((seat) => seat.name === 'worker');
     if (!lead || !worker) throw new Error('fixture seats missing');
     expect(seatStart(loaded.team, lead, root, home)).toEqual({ cwd: root });
-    expect(seatStart(loaded.team, worker, root, home)).toEqual({ cwd: lobby, lobby: true });
+    expect(seatStart(loaded.team, worker, root, home)).toEqual({ cwd: join(lobby, 'worker'), lobby: true });
   });
 
   test('containment: worktrees never land in a protected checkout', () => {
@@ -2053,14 +2070,40 @@ describe('start_cwd and removal check', () => {
 
     const state = readState(dir);
     expect(state.sessions['acme']?.seats['lead']?.start_cwd).toBe(root);
-    expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
 
     const statusRes = await runStatusCmd(['--json']);
     expect(statusRes.code).not.toBe(2);
     const parsed = JSON.parse(statusRes.out);
     const workerRow = parsed.rows.find((r: { name: string }) => r.name === 'worker');
     expect(workerRow).toBeDefined();
-    expect(workerRow.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(workerRow.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
+  });
+
+  test('carried start folders that do not read stop up before anything is launched', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    updateState(dir, (st) => {
+      st.sessions['acme'] = { ...emptySession(), retained_start_cwd: null } as unknown as typeof st.sessions[string];
+    });
+    const upRes = await runUpCmd([], made);
+    expect(upRes.code).toBe(1);
+    expect(upRes.err).toContain('are not a map by seat name: nothing was launched');
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual([]);
+  });
+
+  test('a fresh launch that records a seat\'s folder retires the folder a relaunch carried for it', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    // A relaunch dropped the worker's record and carried where it ran; this up records it again.
+    updateState(dir, (st) => {
+      st.sessions['acme'] = { ...emptySession(), retained_start_cwd: { worker: '/elsewhere/where-it-ran' } } as typeof st.sessions[string];
+    });
+    const upRes = await runUpCmd([], made);
+    expect(upRes.code).toBe(0);
+    const session = readState(dir).sessions['acme'] as { seats: Record<string, { start_cwd?: string }>; retained_start_cwd?: unknown };
+    expect(session.seats['worker']?.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
+    expect(session.retained_start_cwd).toBeUndefined();
   });
 
   test('removal check in doctor: states, repairs, and ignoring stopped historical seats', async () => {
@@ -2498,7 +2541,7 @@ describe('the upgrade from 0.2.1', () => {
     const after = await runDoctorCmd([], live);
     expect(after.out).toContain('ok    the old lobby ../worktrees/acme/.lobby: may be removed\n');
     expect(after.out).not.toContain('seat worker started in it');
-    expect(readState(dir).sessions['acme']?.seats.worker?.start_cwd).toBe(canonicalLanding(lobby).landing);
+    expect(readState(dir).sessions['acme']?.seats.worker?.start_cwd).toBe(canonicalLanding(join(lobby, 'worker')).landing);
   });
 
   function downSourcesFor(
@@ -2830,7 +2873,7 @@ describe('the upgrade from 0.2.1', () => {
     expect(upOld.code).toBe(0);
     expect(upOld.out).toContain('lead: ready\n');
     expect(upOld.err).toContain(
-      '  already ready; left as it is; a relaunch moves it into the lobby: team down, then team up (to restart the whole team)\n',
+      '  already ready; left as it is; a relaunch moves it to its own folder: team down, then team up (to restart the whole team)\n',
     );
     expect(upOld.err).not.toContain('team remove lead --keep');
 
@@ -2956,9 +2999,10 @@ describe('rules text', () => {
 
 describe('a launch line that cannot run where the seat starts', () => {
   function workerLaunch(): string {
+    // Keep the relative launch-line guard independent of channel-owned placement.
     return migratedTeamYaml().replace(
       '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
-      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: zsh ../tools/x.sh\n',
+      '    name: worker\n    channel: off\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: zsh ../tools/x.sh\n',
     );
   }
 
@@ -3298,10 +3342,10 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     const run = await runUpCmd([], made, { home: homeLink });
     expect(run.code).toBe(0);
     expect(made.workspaces).toContainEqual({ label: 'lead', cwd: root });
-    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: canonical });
+    expect(made.workspaces).toContainEqual({ label: 'worker', cwd: join(canonical, 'worker') });
     const state = readState(dir);
     expect(state.sessions['acme']?.seats['lead']?.start_cwd).toBe(root);
-    expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(canonical);
+    expect(state.sessions['acme']?.seats['worker']?.start_cwd).toBe(join(canonical, 'worker'));
   });
 
   test('a temporary add launched through a linked home lands in the canonical lobby', async () => {
@@ -3377,7 +3421,7 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     for (const seat of loaded.team.seats) {
       const start = seatStart(loaded.team, seat, root, home);
       if (seat.name === 'lead') expect(start).toEqual({ cwd: root });
-      else expect(start).toEqual({ cwd: lobby, lobby: true });
+      else expect(start).toEqual({ cwd: join(lobby, seat.name), lobby: true });
     }
   });
 

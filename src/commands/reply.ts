@@ -34,10 +34,14 @@
 // (`landsWhereRead`), and a write that cannot be confirmed says where it wrote and that the
 // reader was not confirmed. The reply rules themselves — who may answer, the thread, and the
 // read an answer marks — are decided before the walk and are untouched by it.
+import { withSignedIdentity } from '../comms/identity.ts';
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
+import { relayIfConfined } from '../send/confined-outbox.ts';
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../client/inbox.ts';
@@ -65,6 +69,7 @@ import {
   closeFile,
   readClose,
   readRecord,
+  recordFile,
   recordAuthOfSealed,
   recordNameOk,
   isRecordSidecarName,
@@ -77,15 +82,17 @@ import {
   writeClose,
   writeReceipt,
   writeRecord,
+  stampedPayload,
   type ClosePayload,
   type RecordPayload,
   type SignedRecord,
 } from '../send/record.ts';
 import { messageKeyOf, messageKeyState } from '../store/keys.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { noteUnread } from '../send/unread-hint.ts';
 import { recordDir } from './messages.ts';
-import { admissionOf, labelNameOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
+import { reportedConversationProblem, admissionOf, realHost as realSendHost, sealDropTree, senderIdOf, walkReplyDelivery, type SendHost } from './send.ts';
+import { seatDropDir, seatListingDirs, sessionMailDir } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team reply <id> [<text>] [--close] [--json]
        team reply <id> --close
@@ -156,6 +163,28 @@ export function samePath(a: string, b: string): boolean {
   }
 }
 
+/** The live seat folder, or `archive/<YYYY-MM>` directly under it. A link that resolves outside
+ *  that seat, or any other subfolder, is not this mailbox. */
+function inOwnMailbox(seatDir: string, folder: string): boolean {
+  // E7b revision 3: either of the seat's two folders (src/queue/mail-tree.ts) is its mailbox.
+  return seatListingDirs(seatDir).some((dir) => inOneMailbox(dir, folder));
+}
+
+function inOneMailbox(seatDir: string, folder: string): boolean {
+  let live: string;
+  let held: string;
+  try {
+    live = realpathSync(seatDir);
+    held = realpathSync(folder);
+  } catch {
+    return false;
+  }
+  if (held === live) return true;
+  const tail = relative(live, held);
+  const parts = tail.split(sep);
+  return parts.length === 2 && parts[0] === 'archive' && /^\d{4}-\d{2}$/.test(parts[1] ?? '');
+}
+
 /**
  * Whether the record at `<folder>/<id>` is one the seat's own readers serve: the same checks
  * `team messages` and the seat's inbox server make before a record reaches the screen — the file
@@ -170,7 +199,7 @@ export function landsWhereRead(home: string, folder: string, id: string, root: s
   } catch {
     return false;
   }
-  const read = readRecord(join(folder, id), id);
+  const read = readRecord(liveRecordPath(folder, id), id);
   if (!read.ok || read.record === null) return false;
   const payload = read.record.payload;
   if (payload.to !== seat) return false;
@@ -191,29 +220,33 @@ export function landsWhereRead(home: string, folder: string, id: string, root: s
  * read, which is what a caller that does not know the pair asks for.
  */
 function candidatesOf(root: string, session: string, seats?: readonly string[]): { seat: string; path: string }[] {
-  const dir = join(root, '.agents', 'send-drops', session);
-  if (!isDir(dir)) return [];
-  let names: string[];
-  try {
-    names = seats === undefined ? readdirSync(dir).sort() : [...new Set(seats)].filter((seat) => NAME.test(seat)).sort();
-  } catch {
-    return [];
-  }
   const out: { seat: string; path: string }[] = [];
-  for (const seat of names) {
-    if (!NAME.test(seat)) continue;
-    const seatDir = join(dir, seat);
-    if (!isDir(seatDir)) continue;
-    let entries: string[];
+  // E7b revision 3: the session's two trees (src/queue/mail-tree.ts), legacy first.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    if (!isDir(dir)) continue;
+    let names: string[];
     try {
-      entries = readdirSync(seatDir).sort();
+      names = seats === undefined ? readdirSync(dir).sort() : [...new Set(seats)].filter((seat) => NAME.test(seat)).sort();
     } catch {
+      if (tree === 'legacy') return [];
       continue;
     }
-    for (const name of entries) {
-      if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
-      const path = join(seatDir, name);
-      if (isFile(path)) out.push({ seat, path });
+    for (const seat of names) {
+      if (!NAME.test(seat)) continue;
+      const seatDir = join(dir, seat);
+      if (!isDir(seatDir)) continue;
+      let entries: string[];
+      try {
+        entries = readdirSync(seatDir).sort();
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith('work-')) continue;
+        const path = join(seatDir, name);
+        if (isFile(path)) out.push({ seat, path });
+      }
     }
   }
   return out;
@@ -237,13 +270,18 @@ export const MIN_ID_PREFIX_LEN = 8;
 /** The seat folders this session names: a listing of the session's own folder, one entry per
  *  seat, never a listing of the records in them. */
 function seatNamesOf(root: string, session: string): string[] {
-  const dir = join(root, '.agents', 'send-drops', session);
-  if (!isDir(dir)) return [];
-  try {
-    return readdirSync(dir).filter((seat) => NAME.test(seat) && isDir(join(dir, seat))).sort();
-  } catch {
-    return [];
+  // E7b revision 3: a seat with only a stamped folder is a seat of the session too.
+  const seats = new Set<string>();
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    if (!isDir(dir)) continue;
+    try {
+      for (const seat of readdirSync(dir)) if (NAME.test(seat) && isDir(join(dir, seat))) seats.add(seat);
+    } catch {
+      // A tree that cannot be listed names no seat.
+    }
   }
+  return [...seats].sort();
 }
 
 /** The candidate files named exactly `id` in this session's tree: what a lookup has to weigh,
@@ -251,13 +289,27 @@ function seatNamesOf(root: string, session: string): string[] {
  *  `stat` per seat folder — the session's folder lists its seats, not its records — so an id
  *  costs a couple of dozen file tests whatever the tree holds, never a walk of it. */
 export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
-  if (!NAME.test(id) || isRecordSidecarName(id) || id.startsWith('work-')) return [];
+  // A channel handoff marker is not a record. Naming it points at the signed record beside it,
+  // which still has to verify; the marker itself is never read as one. Any other sidecar is
+  // not a lookup.
+  const emittedSuffix = '.channel-emitted';
+  const emitted = id.endsWith(emittedSuffix);
+  const looked = emitted ? id.slice(0, -emittedSuffix.length) : id;
+  if (!NAME.test(looked) || looked.startsWith('work-')) return [];
+  if (!emitted && isRecordSidecarName(id)) return [];
+  if (emitted && !NAME.test(id)) return [];
   const hits: { seat: string; path: string }[] = [];
   for (const seat of seatNamesOf(root, session)) {
-    const path = join(root, '.agents', 'send-drops', session, seat, id);
+    const seatDir = seatDropDir(root, session, seat);
+    const path = recordFile(seatDir, looked);
+    if (emitted) {
+      const marker = join(dirname(path), id);
+      if (isFile(marker) && isFile(path)) hits.push({ seat, path });
+      continue;
+    }
     if (isFile(path)) hits.push({ seat, path });
   }
-  if (hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return hits;
+  if (emitted || hits.length > 0 || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(looked)) return hits;
   return candidatesOf(root, session).filter((candidate) => basename(candidate.path).startsWith(id));
 }
 
@@ -297,7 +349,7 @@ export function findRecord(hits: { seat: string; path: string }[], root: string,
   if (mine.length === 0) {
     return { kind: 'refused', why: `record ${verified[0]?.record.payload.id ?? id} is addressed to ${verified[0]?.record.payload.to ?? 'nobody'}, not to ${me}` };
   }
-  const seated = mine.filter((found) => samePath(recordDir(root, session, me), dirname(found.path)));
+  const seated = mine.filter((found) => inOwnMailbox(recordDir(root, session, me), dirname(found.path)));
   if (seated.length === 0) {
     return { kind: 'refused', why: `record ${mine[0]?.record.payload.id ?? id} is addressed to ${me}, and it waits in another seat's folder` };
   }
@@ -451,6 +503,9 @@ export function raiseSecurityRefusal(
 }
 
 export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise<number> {
+  // A seat its sandbox confines cannot write the sender's drop: its outbox carries the reply.
+  const relayed = await relayIfConfined('reply', argv, io);
+  if (relayed !== null) return relayed;
   // Raw argv, before the parser: `--nope --json` must still answer with the structured document.
   const json = hasJsonFlag(argv);
   const args = readArgs(argv, [], ['close', 'json']);
@@ -800,6 +855,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
               why: `seat ${me} has no registered agent record in team ${freshBinding.teamId} naming ${freshBinding.recipientId}; a reply never claims an identity it does not have; nothing was written`,
             };
           }
+          const conversation = reportedConversationProblem(freshAgent, placed.pane, host.send);
+          if (conversation !== null) return { ok: false, why: `${conversation}; nothing was written` };
           const signed = signRecord(payload, host.home);
           const wrote = writeClientInboxFile(freshInbox.dir, replyId, `${JSON.stringify(signed, null, 2)}\n`);
           if (wrote === 'exists') return { ok: false, why: `client ${origin.grant.clientId}: a record already holds the id ${replyId}; nothing was written` };
@@ -956,7 +1013,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   // (§3.5). A send never carries the context.
   let admission = admissionOf(
     placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing,
-    senderIsMainOrchestrator ? undefined : 'open-thread',
+    senderIsMainOrchestrator ? undefined : 'open-thread', undefined, undefined, host.send,
   );
   if (!admission.ok && senderIsMainOrchestrator) {
     if (!state.open) {
@@ -982,7 +1039,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     }
     admission = admissionOf(
       placed, team, endpoint ?? seatSender, targetSeat, host.home, fileTeamId, () => host.now(), standing,
-      'main-orchestrator-thread',
+      'main-orchestrator-thread', undefined, undefined, host.send,
     );
   }
   if (!admission.ok) {
@@ -1009,7 +1066,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     ...(namingFile === null ? {} : { file: namingFile }),
   });
   const body = `${senderHeader(admission.sender, admission.rule, naming)}\n${text}`;
-  const payload: RecordPayload = {
+  // E7b: the delivery era is decided once, here; this exact payload is signed and carried.
+  const payload: RecordPayload = withSignedIdentity(stampedPayload({
     kind: 'message',
     id: replyId,
     to: targetSeat,
@@ -1023,17 +1081,14 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     rule: admission.rule,
     thread,
     in_reply_to: answered.id,
-  };
+  }, host.home), host.home);
 
   let landed = false;
   // A held seat is a queue, not a refusal, exactly as a send's own drop and typed legs say it:
-  // the record is a file, not a keystroke — its id names the file, the seal is idempotent, and
-  // the hint's write is atomic and lock-optional on its own — so it is written without the lock,
-  // and the seat's watcher delivers the answer when the seat is free. Only a live holder reaches
-  // this arm: a dead pid, or a live process the token's start does not name, is stale and is
-  // taken over by `acquireSeatLock`. The unread hint is the one piece that can race the holder,
-  // and its own write is atomic: the worst a race costs is one hint, which the sweep settles by
-  // verifying the folder.
+  // the record is a file, not a keystroke — its id names the file and the seal is idempotent —
+  // so it is written without the lock, and the seat's watcher delivers the answer when the seat
+  // is free. Only a live holder reaches this arm: a dead pid, or a live process the token's start
+  // does not name, is stale and is taken over by `acquireSeatLock`.
   const lock = acquireSeatLock(toDir, toSession, targetSeat);
   try {
     try {
@@ -1048,12 +1103,12 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
       return refused(io, json, 'no message key; nothing was written');
     }
     const folder = recordDir(toRoot, toSession, targetSeat);
-    const written = writeRecord(folder, signed);
+    // The receiver's queue (rfc-event-comms §1, E4, shadow) wraps the write; it never changes it.
+    const { value: written } = appendDeliverySync({ dropDir: folder, record: signed }, () => {
+      const result = writeRecord(folder, signed);
+      return { ok: result.ok, value: result };
+    }, { home: host.home, log: queueLog(folder) });
     if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
-    // The recipient's unread index names this record as its sender's newest. A caller that holds
-    // the lock writes the hint inside it; a queued write hands the hint its own best-effort lock,
-    // which the holder refuses without costing the entry.
-    noteUnread(folder, me, replyId, at, 'release' in lock ? { held: true } : {});
     // The word the report will use is decided here, by the reader's own checks: the record at the
     // path `team messages` and the seat's inbox server scan, its name the id, bound to that tree's
     // root and session, addressed to that seat, its signature verifying. Only a record that passes
@@ -1118,7 +1173,6 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
         sender: {
           teamId: fileTeamId,
           project: team.project,
-          label: placed.kind === 'seat' ? labelNameOf(team, placed.name) : null,
         },
         address: targetAgentReach?.address ?? null,
         who,

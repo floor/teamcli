@@ -27,7 +27,7 @@
 // A test hands the core a fake adapter through this same interface; a scene never runs these
 // commands.
 
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execProcessTool, execProcessToolSync, spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { readlinkSync } from 'node:fs';
 import { syncChildTimeout } from '../child.ts';
 
@@ -44,7 +44,7 @@ export const processWorkingFolderOf: WorkingFolderReader = (pid) => {
     }
   }
   try {
-    const line = execFileSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
+    const line = execProcessToolSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: syncChildTimeout(2_000),
@@ -104,7 +104,7 @@ export function parseCpuTime(text: string): number | null {
 export const processCpuTimeAsync: ProcessCpuTimeProbe = (pid) =>
   new Promise((resolve) => {
     try {
-      execFile(
+      execProcessTool(
         'ps',
         ['-o', 'time=', '-p', String(pid)],
         { encoding: 'utf8', timeout: CPU_PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' },
@@ -138,11 +138,16 @@ export function processFoldersOf(pids: readonly number[]): Map<number, string | 
     }
     return folders;
   }
-  const result = spawnSync('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  let result;
+  try {
+    result = spawnProcessToolSync('lsof', ['-a', '-d', 'cwd', '-p', pids.join(','), '-Fn'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
   if (result.error) return null;
   let at: number | null = null;
   for (const line of (result.stdout ?? '').split('\n')) {
@@ -169,17 +174,21 @@ export type ProcessEntry = { pid: number; comm: string; startedAtMs: number };
  *  not read whole is skipped, never guessed: the reading is only ever used to name processes a
  *  person may then stop, so a half-read row is no row. */
 const TABLE_LINE = /^\s*(\d+)\s+(.*?)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/;
+const WIDE_TABLE_LINE = /^\s*(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*?)\s*$/;
 
 /** Reads the query's text into rows. Exported for its own scene: the shapes are fixed by the
- *  query, so the parser needs no process behind it. */
-export function parseProcessTable(text: string): ProcessEntry[] {
+ *  query, so the parser needs no process behind it. Captured local columns keep their existing
+ *  interpretation and column order; the trusted system query explicitly supplies UTC and puts
+ *  comm last so its output width is unlimited. */
+export function parseProcessTable(text: string, timeZone?: 'UTC', columns: 'comm-first' | 'comm-last' = 'comm-first'): ProcessEntry[] {
   const rows: ProcessEntry[] = [];
   for (const line of text.split('\n')) {
-    const match = TABLE_LINE.exec(line);
+    const match = (columns === 'comm-last' ? WIDE_TABLE_LINE : TABLE_LINE).exec(line);
     if (match === null) continue;
-    const startedAtMs = Date.parse(match[3]!);
+    const started = columns === 'comm-last' ? match[2]! : match[3]!;
+    const startedAtMs = Date.parse(timeZone === 'UTC' ? `${started} UTC` : started);
     if (!Number.isFinite(startedAtMs)) continue;
-    rows.push({ pid: Number(match[1]), comm: match[2]!, startedAtMs });
+    rows.push({ pid: Number(match[1]), comm: columns === 'comm-last' ? match[3]! : match[2]!, startedAtMs });
   }
   return rows;
 }
@@ -189,17 +198,21 @@ export function parseProcessTable(text: string): ProcessEntry[] {
  *  names processes a person may then stop, and it must never name or probe a process another user
  *  owns. Measured here on 2026-11-04, `ps -axo pid=,comm=,lstart=` printed 1283 rows including
  *  uid 0's `/sbin/launchd`, while `ps -U 501 -o pid=,comm=,lstart=` printed 1060 rows starting at
- *  pid 643 — this user's own, in the same line shape the parser reads. */
+ *  pid 643 — this user's own. Measured on 2026-11-09 against an owned Python child, adding
+ *  `-ww` alone still cut a middle `comm` column to 16 characters. `ps -ww -U <uid>
+ *  -o pid=,lstart=,comm=` kept the full name, equal to the child's direct `comm` reading.
+ *  Both the unlimited width and the final column are required; captured rows keep their old
+ *  parser shape while this live query explicitly selects the comm-last shape. */
 export const processTable = (): ProcessEntry[] | null => {
   const uid = process.getuid?.();
   if (uid === undefined) return null;
   try {
-    const text = execFileSync('ps', ['-U', String(uid), '-o', 'pid=,comm=,lstart='], {
+    const text = execProcessToolSync('ps', ['-ww', '-U', String(uid), '-o', 'pid=,lstart=,comm='], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 16 * 1024 * 1024,
     });
-    return parseProcessTable(text);
+    return parseProcessTable(text, 'UTC', 'comm-last');
   } catch {
     return null;
   }
@@ -208,7 +221,7 @@ export const processTable = (): ProcessEntry[] | null => {
 /** The name the system holds for the process at `pid`, or null when it is gone or cannot be read. */
 export const processCommOf = (pid: number): string | null => {
   try {
-    const line = execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'comm=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -224,11 +237,11 @@ export const processCommOf = (pid: number): string | null => {
  *  that instant. */
 export const processStartOf = (pid: number): number | null => {
   try {
-    const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    const line = execProcessToolSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    const at = Date.parse(line);
+    const at = Date.parse(`${line} UTC`);
     return Number.isFinite(at) ? at : null;
   } catch {
     return null;

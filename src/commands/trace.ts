@@ -20,6 +20,7 @@ import { readArgs } from '../args.ts';
 import { EVENT_RECORD_ID, readEventsMatching, type EventPayload } from '../bus/log.ts';
 import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { readHistory, type HistoryEntry } from '../send/history.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { statusReaderReason } from '../status/reported-reason.ts';
@@ -29,7 +30,8 @@ export const USAGE = `Usage: team trace <id> [--json]
 Prints the signed steps the receiving team's event log holds for one message id, in the order
 they were written: when the record was staged, each leg the walk tried with its route and
 outcome, the sender's webhook post, the bus's arrival, the seat's delivered/read/replied
-receipts, and the watch's retries. DELTA is the quiet time from the step above it.
+receipts, and the watch's retries. A walk whose first leg delivered files no step: its staging
+and leg are read from its history line (seq 0). DELTA is the quiet time from the step above it.
 
 The steps are filed in the receiving team's store, so run it in that team's checkout. A full
 step id (\`<id>:staged\`) prints that one step; the bare message id prints the whole story.
@@ -88,7 +90,13 @@ export async function runTrace(argv: string[], io: Io, sources: TraceSources = r
   );
   if (!read.ok) return unreadable(io, read.reason, json);
 
-  const found = read.events.map((record) => record.payload).sort((a, b) => a.seq - b.seq);
+  const logged = read.events.map((record) => record.payload).sort((a, b) => a.seq - b.seq);
+  // A walk whose first leg delivered writes no step of its own: its history line is the one log
+  // line, read here as the staging and the leg that took it (seq 0: not in the event log).
+  const bare = id.split(':')[0] as string;
+  const history = logged.some((payload) => payload.record_id === `${bare}:staged`) ? null : readHistory(team.project, root, sources.home, new Set([bare]));
+  const derived = history?.ok === true ? history.entries.filter((entry) => entry.via !== undefined).flatMap((entry) => sentSteps(entry, team.session)) : [];
+  const found = [...derived.filter((payload) => payload.record_id === id || payload.record_id.startsWith(`${id}:`)), ...logged];
   const steps: TraceStep[] = found.map((payload, index) => {
     const previous = index === 0 ? null : found[index - 1] as EventPayload;
     return { payload, delta: previous === null ? null : deltaOf(previous, payload) };
@@ -120,6 +128,18 @@ export async function runTrace(argv: string[], io: Io, sources: TraceSources = r
     io.stdout(`${lines.join('\n')}\n${pluralCount(steps.length, 'step')}\n`);
   }
   return 0; // exit: trace.shown
+}
+
+/** The staging and the leg one history line records, in the event log's own words. */
+function sentSteps(entry: HistoryEntry, session: string): EventPayload[] {
+  const via = entry.via as string;
+  const base = { v: 1 as const, seq: 0, session, from: entry.from, to: entry.to, ...(entry.thread === undefined ? {} : { thread: entry.thread }) };
+  const end = Date.parse(entry.ts);
+  const start = entry.ms === undefined || !Number.isFinite(end) ? entry.ts : new Date(end - entry.ms).toISOString();
+  return [
+    { ...base, ts: start, kind: 'message.staged', record_id: `${entry.id}:staged`, ...(entry.rule === undefined ? {} : { rule: entry.rule }) },
+    { ...base, ts: entry.ts, kind: 'leg.tried', record_id: `${entry.id}:leg.tried:${via}`, via, outcome: entry.outcome, ...(entry.note === undefined ? {} : { reason: entry.note }), ...(entry.ms === undefined ? {} : { ms: entry.ms }) },
+  ];
 }
 
 /** The quiet time between two steps, in whole milliseconds: the log's own instants, never a

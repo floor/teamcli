@@ -5,12 +5,16 @@
 // ordinary name path. The state, the process table and the clock are synthetic; no live herdr is
 // read.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CallerSources } from '../src/caller.ts';
+import { setHerdrCapture, setHerdrRun } from '../src/herdr.ts';
 import type { Io } from '../src/io.ts';
 import { placementAtStart, placementOf, SERVE_PLACEMENT_WAIT_MS } from '../src/mcp/serve.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { LOG_FILE } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
 const SESSION = 'placement-scene';
@@ -20,10 +24,13 @@ const PANE = 'fixture-pane-one';
 const WORKSPACE = 'fixture-workspace';
 const SHELL = 7001;
 const CLI = 7002;
+const CONVERSATION = 'conversation-alpha';
 const START = 1_760_000_000_000;
 
 const owned: string[] = [];
 afterEach(() => {
+  setHerdrRun(null);
+  setHerdrCapture(null);
   for (const root of owned.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -218,6 +225,142 @@ test('K: a record from before create-time shells is placed at the named-pane str
     start: START + 5000,
   });
   expect(placementOf(made.io, made.stateDir, SESSION, SEAT)).toEqual({ ok: true });
+});
+
+const OTHER_PANE = 'fixture-pane-two';
+
+/** A seat record holds the pane, herdr lists that pane with no name, and the shell anchor
+ *  would place the caller. `cli` is the seat's own process. `shell` is the pane back at its
+ *  shell. `other-cli` is a different program. `other-pane` is a pane the record does not hold. */
+function dropped(kind: 'cli' | 'shell' | 'other-cli' | 'other-pane'): {
+  io: Io;
+  stateDir: string;
+  log: string;
+  captured: string[];
+} {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-placement-dropped-')));
+  owned.push(base);
+  const home = join(base, 'home');
+  const project = join(base, 'project');
+  const stateDir = join(project, '.agents');
+  mkdirSync(stateDir, { recursive: true });
+  const livePane = kind === 'other-pane' ? OTHER_PANE : PANE;
+  const bare = kind === 'shell';
+  const ownCli = kind === 'cli';
+  writeFileSync(stateDir + '/team.state.json', `${JSON.stringify({
+    format: 1,
+    sessions: {
+      [SESSION]: {
+        seats: {
+          [SEAT]: {
+            stage: 'ready',
+            pane: PANE,
+            workspace: WORKSPACE,
+            pane_shell: SHELL,
+            pane_shell_start: START,
+          },
+        },
+        worktrees: {},
+      },
+    },
+  })}\n`);
+  upsertTeam(home, teamIdOf(project), {
+    project: 'placement',
+    entity: null,
+    session: SESSION,
+    root: project,
+    roster: [],
+    at: '2026-11-08T00:00:00.000Z',
+  });
+  registerAgent(home, {
+    name: SEAT,
+    signing: { model: 'Claude', version: '5', role: 'operator' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    // The positive unnamed-pane scene proves its recorded conversation as well as its CLI.
+    reach: { team: teamIdOf(project), seat: SEAT, session: SESSION, pane: PANE, address: null,
+      ...(ownCli ? { agent_session: CONVERSATION } : {}) },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  });
+  const captured: string[] = [];
+  let named: string | null = null;
+  setHerdrRun(() => ({
+    agents: [{
+      pane_id: livePane,
+      name: named,
+      agent: ownCli ? 'claude' : 'other',
+      workspace_id: WORKSPACE,
+      agent_status: 'idle',
+      ...(ownCli ? { agent_session: CONVERSATION } : {}),
+    }],
+  }));
+  setHerdrCapture((args) => {
+    captured.push(args.join(' '));
+    named = SEAT;
+    return '{"id":1,"result":{}}\n';
+  });
+  const io = testIo(project);
+  io.env = { HERDR_PANE_ID: livePane };
+  io.callerSources = (): CallerSources => ({
+    ancestors: () => DEFAULT_ANCESTORS,
+    agents: () => [{
+      name: null,
+      agent: ownCli ? 'claude' : 'other',
+      pane: livePane,
+      workspace: WORKSPACE,
+      status: 'idle',
+      cwd: null,
+      ...(ownCli ? { session: CONVERSATION } : {}),
+    }],
+    paneRootPid: (pane) => (pane === livePane ? SHELL : null),
+    env: io.env,
+    stdinIsTTY: false,
+    home,
+    paneProcesses: (pane) => (pane === livePane
+      ? { shell: SHELL, foreground: bare ? [SHELL] : [CLI] }
+      : null),
+    foreground: (pane) => (pane === livePane ? [ownCli ? 'claude' : 'codex'] : null),
+    processStartOf: () => START,
+  });
+  return { io, stateDir, log: join(stateDir, LOG_FILE), captured };
+}
+
+test('a recorded pane with no herdr name and the seat\'s CLI is placed, and the name is restored', async () => {
+  const made = dropped('cli');
+  const placed = await placementAtStart(made.io, made.stateDir, SESSION, SEAT);
+  expect(placed).toEqual({ ok: true });
+  expect(made.captured).toEqual([`agent rename ${PANE} ${SEAT}`]);
+  expect(readFileSync(made.log, 'utf8')).toContain(`re-applied the herdr name on pane ${PANE}`);
+});
+
+test('a recorded pane back at its shell, or running another CLI, is unplaced', async () => {
+  for (const kind of ['shell', 'other-cli'] as const) {
+    const made = dropped(kind);
+    let clock = 0;
+    const placed = await placementAtStart(made.io, made.stateDir, SESSION, SEAT, {
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    expect(placed.ok, kind).toBe(false);
+    if (!placed.ok) expect(placed.why, kind).toContain(UNNAMED);
+    expect(made.captured, kind).toEqual([]);
+    expect(clock, kind).toBe(SERVE_PLACEMENT_WAIT_MS);
+  }
+});
+
+test('a pane the seat\'s record does not hold stays unplaced when herdr has no name', async () => {
+  const made = dropped('other-pane');
+  const placed = await placementAtStart(made.io, made.stateDir, SESSION, SEAT);
+  expect(placed.ok).toBe(false);
+  if (!placed.ok) expect(placed.why).toContain(UNNAMED);
+  expect(made.captured).toEqual([]);
 });
 
 test('K: a record the pane is named for still takes the ordinary name path', () => {

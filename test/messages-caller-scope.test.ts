@@ -188,7 +188,7 @@ describe('team messages reads only the caller\'s mailbox', () => {
     const result = await run([], LEAD);
     expect(result.code).toBe(0);
     expect(result.err).toBe('');
-    expect(result.out).toContain('lead/a1:\nfrom harness (team lead):\n\nfor the lead');
+    expect(result.out).toContain('lead/a1:\nharness · 2026-10-04 09:00Z · admitted: team lead\n\nfor the lead');
     expect(result.out).not.toContain('for the worker');
     expect(result.out).toContain('b1');
     expect(result.out).toContain('waiting');
@@ -255,7 +255,7 @@ describe('team messages reads only the caller\'s mailbox', () => {
     // body for the altered record, and the note that says no receipt was written.
     const text = await run([], { kind: 'owner' });
     expect(text.code).toBe(0);
-    expect(text.out).toContain(`worker/${workerId}:\nfrom harness (team lead):\n\nfor the worker`);
+    expect(text.out).toContain(`worker/${workerId}:\nharness · 2026-10-04 09:00Z · admitted: team lead\n\nfor the worker`);
     expect(text.out).not.toContain('for the lead, altered');
     expect(text.out).toContain('note: 2 messages addressed to another mailbox are waiting; they are shown read-only, and no receipts are written for them.');
     expect(text.out.endsWith('2 messages\n')).toBe(true);

@@ -18,7 +18,8 @@
 //
 // `webhookRouteOf` is the one reader both halves of a send share: the dry run names the route it
 // would take and the delivery class reads it as push evidence, so the two can never disagree.
-import { closeSync, constants, fstatSync, openSync, readFileSync, type Stats } from 'node:fs';
+import { closeSync, constants, fstatSync, readFileSync, type Stats } from 'node:fs';
+import { openSync } from '../host/guarded-fs.ts';
 import type { SeatWebhook, WebhookBodyShape } from '../file/types.ts';
 
 /** The most a URL or secret file may hold; both are one line of text, not documents. */
@@ -43,7 +44,40 @@ export type WebhookFileRead = { ok: true; value: string } | { ok: false; reason:
  *  that names neither, which keeps the form every earlier row had. */
 export type WebhookRoute =
   | { ok: true; url: string; secret: string; header?: string; body?: WebhookBodyShape }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; stray?: { target: string; cli: string } };
+
+/** Vendor hosts whose webhooks run one CLI, by host suffix. A routine behind one of these runs as
+ *  that CLI, whatever seat its row is written on. A host not listed names no CLI. */
+const TARGET_HOSTS: ReadonlyArray<{ suffix: string; cli: string }> = [
+  { suffix: 'cursor.sh', cli: 'cursor' },
+  { suffix: 'cursor.com', cli: 'cursor' },
+  { suffix: 'anthropic.com', cli: 'claude-code' },
+  { suffix: 'claude.ai', cli: 'claude-code' },
+];
+
+/** The CLI a routine's URL host names, or null when the host names none. */
+export function webhookHostTarget(url: string): string | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  for (const one of TARGET_HOSTS) {
+    if (host === one.suffix || host.endsWith(`.${one.suffix}`)) return one.cli;
+  }
+  return null;
+}
+
+/** The CLI the routine runs the seat as: the row's own `target`, else the URL host's, else null. */
+export function webhookTargetOf(webhook: SeatWebhook, url: string): string | null {
+  return webhook.target ?? webhookHostTarget(url);
+}
+
+/** The sentence a stray webhook gets: one whose routine runs another CLI than the seat's own. */
+export function strayWebhookWords(target: string, cli: string): string {
+  return `the webhook runs as ${target}, not as this seat's ${cli}; the seat's own route takes the message`;
+}
 
 /** The plain words for what an opened path is, when it is not a regular file: the desk can say
  *  why it refused, and the owner can tell a mistyped path from a deliberately rare shape. */
@@ -163,11 +197,19 @@ function readUrlFile(path: string): WebhookFileRead {
  * `null` when the seat configures no adapter. Never throws: a refusal is a sentence, not an
  * exception, because both a dry run and a delivery pass read this.
  */
-export function webhookRouteOf(webhook: SeatWebhook | undefined): WebhookRoute | null {
+export function webhookRouteOf(webhook: SeatWebhook | undefined, cli?: string): WebhookRoute | null {
   if (webhook === undefined) return null;
   try {
     const url = readUrlFile(webhook.urlFile);
     if (!url.ok) return url;
+    // A seat's CLI, when the caller names it, must be the routine's: a webhook that runs as
+    // another CLI never reaches the process in the seat's pane, so it is not this seat's route.
+    if (cli !== undefined && cli !== '') {
+      const target = webhookTargetOf(webhook, url.value);
+      if (target !== null && target !== cli) {
+        return { ok: false, reason: strayWebhookWords(target, cli), stray: { target, cli } };
+      }
+    }
     const secret = readSecretFile(webhook.secretFile);
     if (!secret.ok) return secret;
     return {
@@ -183,7 +225,14 @@ export function webhookRouteOf(webhook: SeatWebhook | undefined): WebhookRoute |
 }
 
 /** The reason a configured adapter cannot deliver, or `null` when it can (or none is set). */
-export function webhookRefusal(webhook: SeatWebhook | undefined): string | null {
-  const route = webhookRouteOf(webhook);
+export function webhookRefusal(webhook: SeatWebhook | undefined, cli?: string): string | null {
+  const route = webhookRouteOf(webhook, cli);
   return route !== null && !route.ok ? route.reason : null;
+}
+
+/** The stray webhook on a seat, when its routine runs another CLI than the seat's own: the
+ *  target and the seat's CLI, or null when the row is the seat's or names no target. */
+export function strayWebhookOf(webhook: SeatWebhook | undefined, cli: string): { target: string; cli: string } | null {
+  const route = webhookRouteOf(webhook, cli);
+  return route !== null && !route.ok && route.stray !== undefined ? route.stray : null;
 }

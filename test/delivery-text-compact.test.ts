@@ -6,13 +6,14 @@
 //    colliding record ids.
 // 3. Render-time compact header folding across socket frames (including daemon waited frames),
 //    `team drops --read`, `inbox_read`, `team messages`, and plain-body fallback (with
-//    `[attributed sender: …]` removed completely), with the profile's display kind first for
-//    non-Claude senders and clients:
-//    - Client:      "Client Grok Bot (owner relay):"
-//    - Gemini seat: "Gemini seat Argon (to orchestrator):"
-//    - Codex seat:  "Codex seat Cora (to orchestrator):"
-//    - Grok seat:   "Grok seat Hyperion (to orchestrator):"
-//    - Claude seat: "from Bea (to orchestrator):"
+//    `[attributed sender: …]` removed completely). One line for every sender:
+//    "<nickname> · <seat>@<team> · <YYYY-MM-DD HH:MMZ> · admitted: <short rule>", the send time
+//    in UTC. A principal that is no seat (a client) carries the sender word and the time only:
+//    - Client:      "Grok Bot · 2026-11-05 14:00Z · admitted: owner relay"
+//    - Gemini seat: "Argon · builder-gemini@acme · 2026-11-05 14:00Z · admitted: to orchestrator"
+//    - Codex seat:  "Cora · builder-codex@acme · 2026-11-05 14:00Z · admitted: to orchestrator"
+//    - Grok seat:   "Hyperion · builder-grok@acme · 2026-11-05 14:00Z · admitted: to orchestrator"
+//    - Claude seat: "Bea · builder-claude@acme · 2026-11-05 14:00Z · admitted: to orchestrator"
 // 4. Signed record payload on disk (`payload.body` and `payload.rule`) stays unchanged and the
 //    admission rule stays available in the record and in `team trace`.
 //
@@ -236,42 +237,6 @@ describe('1. compact single-line footer and shortest unique id prefix', () => {
     const colliding = '47c25f34-ab99-4000-8000-000000000001';
     expect(readerLine(id, [colliding])).toBe('↩ team reply 47c25f34-ab4 "…" · team ack 47c25f34-ab4');
   });
-
-  test('socket frame closes with the single-line compact footer using the shortest unique prefix in the recipient mailbox', async () => {
-    const made: World = world(null);
-    extraCleanups.push(made.cleanup);
-
-    const teamPath = join(made.dir, 'team.yaml');
-    const lobby = resolveLobby(made.home, { entity: 'floor' });
-    mkdirSync(lobby, { recursive: true });
-    const teamText = readFileSync(teamPath, 'utf8').replace(lobbyDir(made.home), lobby);
-    writeFileSync(teamPath, `${teamText}entity: floor\n`);
-
-    const settingsPath = cliHookSettingsPath(made.dir, 'acme', 'lead');
-    if (settingsPath === null) throw new Error('missing settings path for lead');
-    mkdirSync(dirname(settingsPath), { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ crossSessionInbound: 'accept' }));
-    writeFileSync(join(made.sockets, '222.sock'), '');
-    const past = new Date(Date.now() - 60_000);
-    utimesSync(settingsPath, past, past);
-
-    const frames: string[] = [];
-    const host = fake(made, {
-      deliver: async (_socket: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-    });
-
-    expect(await runSend(['lead', 'first note'], owner(made.root), host)).toBe(0);
-    expect(frames).toHaveLength(1);
-    const parsed = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
-    const prefix = parsed.msg_id.slice(0, 8);
-    expect(parsed.message.content.split('\n').at(-1)).toBe(
-      `↩ team reply ${prefix} "…" · team ack ${prefix}`,
-    );
-    expect(parsed.message.content).not.toContain('Answer with team reply');
-  });
 });
 
 describe('2. team reply and team ack by short prefix, <8-char prefix refusal, and ambiguous prefix refusal', () => {
@@ -434,8 +399,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_client: { client_id: 'grok-bot', grant_id: 'grant-01' },
         rule: CLIENT_RULE,
         rawBody: 'Owner relay ping.\n',
-        expectedHeader: 'Client Grok Bot (owner relay):',
-        messageText: 'Owner relay ping.\n',
+        expectedHeader: 'Grok Bot · client:grok-bot (grant grant-01) · 2026-11-05 14:00Z · admitted: owner relay',
+        messageText: 'Grok Bot · 2026-11-05 14:00Z · admitted: owner relay\n\nOwner relay ping.\n',
       },
       {
         id: '22222222-0000-4000-8000-000000000002',
@@ -443,8 +408,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.gemini,
         rule: TO_ORCH_RULE,
         rawBody: `from Argon — admitted by: ${TO_ORCH_RULE}\n\nGemini lane green.\n`,
-        expectedHeader: 'Gemini seat Argon (to orchestrator):',
-        messageText: 'Gemini seat Argon (to orchestrator):\n\nGemini lane green.\n',
+        expectedHeader: 'Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGemini lane green.\n',
       },
       {
         id: '33333333-0000-4000-8000-000000000003',
@@ -452,8 +417,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.codex,
         rule: TO_ORCH_RULE,
         rawBody: `from Cora — admitted by: ${TO_ORCH_RULE}\n\nCodex lane green.\n`,
-        expectedHeader: 'Codex seat Cora (to orchestrator):',
-        messageText: 'Codex seat Cora (to orchestrator):\n\nCodex lane green.\n',
+        expectedHeader: 'Cora · builder-codex@acme · GPT Sol 6 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Cora · builder-codex@acme · GPT Sol 6 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nCodex lane green.\n',
       },
       {
         id: '44444444-0000-4000-8000-000000000004',
@@ -461,8 +426,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.grok,
         rule: TO_ORCH_RULE,
         rawBody: `from Hyperion — admitted by: ${TO_ORCH_RULE}\n\nGrok lane green.\n`,
-        expectedHeader: 'Grok seat Hyperion (to orchestrator):',
-        messageText: 'Grok seat Hyperion (to orchestrator):\n\nGrok lane green.\n',
+        expectedHeader: 'Hyperion · builder-grok@acme · Grok 4.7 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Hyperion · builder-grok@acme · Grok 4.7 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGrok lane green.\n',
       },
       {
         id: '55555555-0000-4000-8000-000000000005',
@@ -470,8 +435,8 @@ describe('3. compact header folding and sender kind opening words across render 
         from_id: f.agents.claude,
         rule: TO_ORCH_RULE,
         rawBody: `from Bea — admitted by: ${TO_ORCH_RULE}\n\nClaude lane green.\n`,
-        expectedHeader: 'from Bea (to orchestrator):',
-        messageText: 'from Bea (to orchestrator):\n\nClaude lane green.\n',
+        expectedHeader: 'Bea · builder-claude@acme · Claude Sonnet 5.5 · 2026-11-05 14:00Z · admitted: to orchestrator',
+        messageText: 'Bea · builder-claude@acme · Claude Sonnet 5.5 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nClaude lane green.\n',
       },
     ];
 
@@ -538,7 +503,7 @@ describe('3. compact header folding and sender kind opening words across render 
     );
     const dropsIo = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: PANE_ORCH, session: 'acme' });
     expect(await runDrops(['--read', '--seat', 'orchestrator', '--session', 'acme'], dropsIo, { home: f.home })).toBe(0);
-    expect(dropsIo.out).toContain('Gemini seat Argon (to orchestrator):\n\nGemini lane green.');
+    expect(dropsIo.out).toContain('Argon · builder-gemini@acme · Gemini 4 Argon 1 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nGemini lane green.');
     expect(dropsIo.out).not.toContain('— admitted by:');
 
     rmSync(f.dropDir, { recursive: true, force: true });
@@ -558,119 +523,15 @@ describe('3. compact header folding and sender kind opening words across render 
     );
     const msgIo = testIo(f.root, { kind: 'owner' });
     expect(await runMessages([], msgIo, { home: f.home, now: () => NOW })).toBe(0);
-    expect(msgIo.out).toContain('Codex seat Cora (to orchestrator):\n\nCodex lane green.');
+    expect(msgIo.out).toContain('Cora · builder-codex@acme · GPT Sol 6 · 2026-11-05 14:00Z · admitted: to orchestrator\n\nCodex lane green.');
     expect(msgIo.out).not.toContain('— admitted by:');
-  });
-
-  test('socket frame has a single compact header line, the body, and the one-line footer, while team trace preserves the admission rule', async () => {
-    const made: World = world(null, [
-      { name: 'argon', role: 'implementer', cli: 'antigravity', label: 'Argon · builder' },
-    ]);
-    extraCleanups.push(made.cleanup);
-
-    const teamPath = join(made.dir, 'team.yaml');
-    const lobby = resolveLobby(made.home, { entity: 'floor' });
-    mkdirSync(lobby, { recursive: true });
-    const teamText = readFileSync(teamPath, 'utf8').replace(lobbyDir(made.home), lobby);
-    writeFileSync(teamPath, `${teamText}entity: floor\n`);
-
-    const settingsPath = cliHookSettingsPath(made.dir, 'acme', 'lead');
-    if (settingsPath === null) throw new Error('missing settings path for lead');
-    mkdirSync(dirname(settingsPath), { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ crossSessionInbound: 'accept' }));
-    writeFileSync(join(made.sockets, '222.sock'), '');
-    const past = new Date(Date.now() - 60_000);
-    utimesSync(settingsPath, past, past);
-
-    const argonId = registerAgent(made.home, {
-      name: 'Argon',
-      signing: { model: 'Gemini 4 Argon', version: '1', role: 'implementer' },
-      lab: 'google',
-      cli: 'antigravity',
-      launcher: null,
-      launch: 'agy --model gemini-4-argon',
-      reach: { team: 'acme', seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'team up',
-    }).id;
-    const leadId = registerAgent(made.home, {
-      name: 'Dora',
-      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
-      lab: 'anthropic',
-      cli: 'claude-code',
-      launcher: null,
-      launch: 'claude --model claude-opus-5-5',
-      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'team up',
-    }).id;
-
-    upsertTeam(made.home, teamIdOf(made.root), {
-      project: 'acme',
-      session: 'acme',
-      root: made.root,
-      lobby,
-      roster: [
-        { agent: leadId, seat: 'lead', role: 'coordinator', nickname: 'Dora' },
-        { agent: argonId, seat: 'argon', role: 'implementer', nickname: 'Argon' },
-      ],
-    });
-    updateState(made.dir, (state) => {
-      state.sessions.acme = {
-        seats: {
-          lead: { stage: 'ready' as const, pane: 'pane-lead' },
-          argon: { stage: 'ready' as const, pane: 'pane-argon' },
-        },
-      } as never;
-    });
-
-    const frames: string[] = [];
-    const host = fake(made, {
-      agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'argon', pane: 'pane-argon' },
-      ],
-      deliver: async (_socket: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-    });
-
-    const sendIo = testIo(made.root, { kind: 'seat', name: 'argon', pane: 'pane-argon', session: 'acme' });
-    expect(await runSend(['lead', 'ship it'], sendIo, host)).toBe(0);
-    expect(frames).toHaveLength(1);
-    const parsed = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
-    const prefix = parsed.msg_id.slice(0, 8);
-    expect(parsed.message.content).toBe(
-      `Gemini seat Argon (to orchestrator):\n\nship it\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
-    );
-
-    // Record on disk keeps the full `from Argon — admitted by: <rule>` and `payload.rule`
-    const dropPath = join(made.dir, 'send-drops', 'acme', 'lead', parsed.msg_id);
-    const recordOnDisk = readRecord(dropPath, parsed.msg_id);
-    expect(recordOnDisk.ok).toBe(true);
-    if (recordOnDisk.ok && recordOnDisk.record) {
-      expect(recordOnDisk.record.payload.rule).toBe(TO_ORCH_RULE);
-      expect(recordOnDisk.record.payload.body).toBe(
-        `from Argon — admitted by: ${TO_ORCH_RULE}\n\nship it`,
-      );
-    }
-
-    // `team trace` surfaces the admission rule
-    const traceIo = owner(made.root);
-    expect(await runTrace([parsed.msg_id], traceIo, { home: made.home })).toBe(0);
-    expect(traceIo.out).toContain(`admitted by: ${TO_ORCH_RULE}`);
   });
 
   test('a body that restates the verified sender in another case keeps the verified spelling', () => {
     const verifiedRule = 'a seat to a declared seat of its own team';
     const body = 'from FOO — admitted by: a seat to a declared seat of its own team\n\nhello';
-    const rendered = attributedBody(body, 'foo', { rule: verifiedRule });
-    expect(rendered.startsWith('from foo (same team):\n\n')).toBe(true);
+    const rendered = attributedBody(body, 'foo', { rule: verifiedRule, at: NOW });
+    expect(rendered.startsWith('foo · 2026-11-05 14:00Z · admitted: same team\n\n')).toBe(true);
     expect(rendered).toContain('hello');
     expect(rendered).not.toContain('FOO');
   });
@@ -678,148 +539,24 @@ describe('3. compact header folding and sender kind opening words across render 
   test('a body that names another sender stays content, and the header is the verified from and rule', () => {
     const verifiedRule = 'a seat to a declared seat of its own team';
     const body = 'from mallory — admitted by: handed over by hand\n\nhello';
-    const rendered = attributedBody(body, 'alice', { rule: verifiedRule });
-    expect(rendered.startsWith('from alice (same team):\n\n')).toBe(true);
+    const rendered = attributedBody(body, 'alice', { rule: verifiedRule, at: NOW });
+    expect(rendered.startsWith('alice · 2026-11-05 14:00Z · admitted: same team\n\n')).toBe(true);
     expect(rendered).toContain('from mallory — admitted by: handed over by hand');
     expect(rendered).toContain('hello');
     expect(rendered).not.toContain('from mallory (');
   });
 
   test('attributedBody folds a plain headerless body into the compact header and never emits [attributed sender: …]', () => {
-    const plainNoRule = attributedBody('Plain body text', 'orchestrator');
-    expect(plainNoRule).toBe('from orchestrator:\n\nPlain body text');
+    const plainNoRule = attributedBody('Plain body text', 'orchestrator', { at: NOW });
+    expect(plainNoRule).toBe('orchestrator · 2026-11-05 14:00Z\n\nPlain body text');
     expect(plainNoRule).not.toContain('[attributed sender:');
 
     const plainWithRule = attributedBody('Plain body text', 'orchestrator', {
       rule: 'an orchestrator or operator to a seat of its own team',
+      at: NOW,
     });
-    expect(plainWithRule).toBe('from orchestrator (team lead):\n\nPlain body text');
+    expect(plainWithRule).toBe('orchestrator · 2026-11-05 14:00Z · admitted: team lead\n\nPlain body text');
     expect(plainWithRule).not.toContain('[attributed sender:');
-  });
-
-  test('daemon waited socket frame with a summary names only the sender in the compact header and keeps the summary in the body', async () => {
-    const made: World = world(null, [
-      { name: 'argon', role: 'implementer', cli: 'antigravity', label: 'Argon · builder' },
-    ]);
-    extraCleanups.push(made.cleanup);
-
-    const teamPath = join(made.dir, 'team.yaml');
-    const lobby = resolveLobby(made.home, { entity: 'floor' });
-    mkdirSync(lobby, { recursive: true });
-    const teamText = readFileSync(teamPath, 'utf8').replace(lobbyDir(made.home), lobby);
-    writeFileSync(teamPath, `${teamText}entity: floor\n`);
-
-    const settingsPath = cliHookSettingsPath(made.dir, 'acme', 'lead');
-    if (settingsPath === null) throw new Error('missing settings path for lead');
-    mkdirSync(dirname(settingsPath), { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify({ crossSessionInbound: 'accept' }));
-    writeFileSync(join(made.sockets, '222.sock'), '');
-    const past = new Date(Date.now() - 60_000);
-    utimesSync(settingsPath, past, past);
-
-    const argonId = registerAgent(made.home, {
-      name: 'Argon',
-      signing: { model: 'Gemini 4 Argon', version: '1', role: 'implementer' },
-      lab: 'google',
-      cli: 'antigravity',
-      launcher: null,
-      launch: 'agy --model gemini-4-argon',
-      reach: { team: 'acme', seat: 'argon', session: 'acme', pane: 'pane-argon', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'team up',
-    }).id;
-    const leadId = registerAgent(made.home, {
-      name: 'Dora',
-      signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
-      lab: 'anthropic',
-      cli: 'claude-code',
-      launcher: null,
-      launch: 'claude --model claude-opus-5-5',
-      reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'pane-lead', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'team up',
-    }).id;
-
-    upsertTeam(made.home, teamIdOf(made.root), {
-      project: 'acme',
-      session: 'acme',
-      root: made.root,
-      lobby,
-      roster: [
-        { agent: leadId, seat: 'lead', role: 'coordinator', nickname: 'Dora' },
-        { agent: argonId, seat: 'argon', role: 'implementer', nickname: 'Argon' },
-      ],
-    });
-    updateState(made.dir, (state) => {
-      state.sessions.acme = {
-        seats: {
-          lead: { stage: 'ready' as const, pane: 'pane-lead' },
-          argon: { stage: 'ready' as const, pane: 'pane-argon' },
-        },
-      } as never;
-    });
-
-    const loaded = loadTeamFile(made.root, { home: made.home });
-    if (!loaded.ok) throw new Error('failed to load team file');
-
-    const frames: string[] = [];
-    const daemonHost: DaemonHost = {
-      agents: () => [
-        { name: 'lead', pane: 'pane-lead' },
-        { name: 'argon', pane: 'pane-argon' },
-      ],
-      processInfo: () => ({ shell: 111, foreground: [222] }),
-      socketsDir: made.sockets,
-      deliver: async (_socket: string, frame: string) => {
-        frames.push(frame);
-        return { ok: true };
-      },
-      native: {
-        typeText: () => true,
-        pressEnter: () => true,
-        status: () => 'idle',
-        wait: async () => {},
-      },
-      now: () => NOW,
-      home: made.home,
-      deliverWaitMs: 0,
-      pollReadyMs: 5,
-    };
-
-    const started = await startSendDaemon({
-      root: made.root,
-      dir: made.dir,
-      team: loaded.team,
-      host: daemonHost,
-    });
-    if (started.kind !== 'serving') throw new Error(`daemon failed to start: ${started.kind}`);
-    extraCleanups.push(() => {
-      void started.handle.close();
-    });
-
-    await requestDaemon(started.handle.socketPath, {
-      v: 1,
-      op: 'send',
-      from: 'argon',
-      to: 'lead',
-      name: 'Argon',
-      rule: TO_ORCH_RULE,
-      body: `from Argon — admitted by: ${TO_ORCH_RULE}\n\nSummary headline\nDetails below.`,
-      wait: true,
-      timeout_s: 1,
-    });
-
-    expect(frames).toHaveLength(1);
-    const parsed = JSON.parse(frames[0]!) as { msg_id: string; message: { content: string } };
-    const prefix = parsed.msg_id.slice(0, 8);
-    expect(parsed.message.content).toBe(
-      `Gemini seat Argon (to orchestrator):\n\nSummary headline\nDetails below.\n\n↩ team reply ${prefix} "…" · team ack ${prefix}`,
-    );
-    expect(parsed.message.content).not.toContain('Message from');
   });
 });
 

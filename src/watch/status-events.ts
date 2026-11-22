@@ -1,5 +1,5 @@
 // Seat status from herdr as events (workspace-adapters §6):
-// One `herdr wait agent-status` waiter per eligible seat turns herdr's status transitions into
+// One `herdr agent wait` waiter per eligible seat turns herdr's status transitions into
 // signed events in `.agents/events.jsonl`, replacing periodic screen polling where herdr's
 // status is reliable:
 // - `blocked` -> `seat.at-prompt` (reads the screen once via `promptKind` to classify the prompt;
@@ -17,7 +17,7 @@
 // Safety invariants:
 // 1. `human: true` seats are NEVER waited on and NEVER typed into.
 // 2. Profiles with `herdr_status: unreliable` (`jules`) keep the screen module as their status
-//    source and are never handed to `herdr wait agent-status`.
+//    source and are never handed to `herdr agent wait`.
 // 3. Status waiters are strictly read-only and never send text or keys into any pane.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -48,6 +48,7 @@ import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
 import { questionText, readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
+import { seatListingDirs, seatMailDirIn } from '../queue/mail-tree.ts';
 
 export {
   HERDR_AGENT_STATUSES,
@@ -196,7 +197,7 @@ export function reconcileStatusWithScreen(
   return status;
 }
 
-/** Whether a seat is eligible for a `herdr wait agent-status` waiter:
+/** Whether a seat is eligible for a `herdr agent wait` waiter:
  *  - `human: true` seats are NEVER waited on and NEVER typed into;
  *  - `stopped: true` seats are not running;
  *  - `herdrUnreliable(cli)` seats (`jules`) keep the screen module as their status source. */
@@ -242,10 +243,9 @@ export type HerdrStatusSourceOptions = {
   screenOptions?: ScreenOptions;
 };
 
-/** Ordered candidate target states for `{ not: current }` single-client transition waiting.
- *  `herdr wait agent-status <pane> --status <s>` accepts a single status token per client and
- *  returns immediately (`exit 0`) when the pane is already at `<s>`, so cycling one waiter process
- *  per seat through likely target states keeps fleet process count at strictly 1 client per seat. */
+/** The target states for `{ not: current }`: one `herdr agent wait <pane> --until <s>...` client
+ *  per seat waits for all of them at once and returns immediately (`exit 0`) when the pane is
+ *  already at one, so a long timeout costs no latency and the fleet keeps 1 client per seat. */
 const WAIT_CANDIDATE_ORDER: Record<HerdrAgentStatus, readonly HerdrAgentStatus[]> = {
   working: ['blocked', 'done', 'idle'],
   idle: ['working', 'blocked', 'done'],
@@ -254,7 +254,7 @@ const WAIT_CANDIDATE_ORDER: Record<HerdrAgentStatus, readonly HerdrAgentStatus[]
   unknown: ['blocked', 'done', 'idle', 'working'],
 };
 
-/** Default `StatusSource` backed by `herdr wait agent-status` and `herdr pane read`. */
+/** Default `StatusSource` backed by `herdr agent wait` and `herdr pane read`. */
 export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): StatusSource {
   const now = options.now ?? (() => Date.now());
   const readPane = options.readPane ?? paneRead;
@@ -304,29 +304,16 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
         return { outcome: 'error', error: res.message, at };
       }
 
-      // `{ not: current }`: keep strictly ONE `herdr wait agent-status` client process per seat
-      // by cycling sequentially through the candidate target statuses across `timeoutMs`.
+      // `{ not: current }`: strictly ONE herdr client per seat, waiting for every other state.
       const candidates =
         WAIT_CANDIDATE_ORDER[target.not]
         ?? (['blocked', 'done', 'idle', 'working'] as const).filter((candidate) => candidate !== target.not);
-      const totalTimeoutMs = Math.max(1, Math.round(timeoutMs));
-      const sliceTimeoutMs = Math.max(1, Math.floor(totalTimeoutMs / candidates.length));
-
-      for (const candidate of candidates) {
-        if (signal?.aborted) {
-          return { outcome: 'timeout', at: now() };
-        }
-        const res = await waitFn(seat.pane, candidate, sliceTimeoutMs, session, signal);
-        const at = now();
-        if (res.outcome === 'changed') {
-          return { outcome: 'changed', status: res.status, at };
-        }
-        if (res.outcome === 'error') {
-          if (signal?.aborted) return { outcome: 'timeout', at };
-          return { outcome: 'error', error: res.message, at };
-        }
-      }
-      return { outcome: 'timeout', at: now() };
+      if (signal?.aborted) return { outcome: 'timeout', at: now() };
+      const res = await waitFn(seat.pane, candidates, Math.max(1, Math.round(timeoutMs)), session, signal);
+      const at = now();
+      if (res.outcome === 'changed') return { outcome: 'changed', status: res.status, at };
+      if (res.outcome === 'timeout' || signal?.aborted) return { outcome: 'timeout', at };
+      return { outcome: 'error', error: res.message, at };
     },
 
     promptKind(seat): PromptKind {
@@ -402,8 +389,18 @@ type PromptSpell = {
   prompt: PromptKind;
   since: number;
   escalated: boolean;
+  /** Set once the long-stretch reminder went out: one per spell, never repeated. */
+  reminded?: boolean;
   clearedAt?: number;
 };
+
+/** How long a seat may stay at one prompt before its lead is reminded once (the escalation at
+ *  `prompt_escalation_seconds` is the first climb; this is the one reminder after it). */
+export const PROMPT_REMINDER_MS = 60 * 60 * 1000;
+
+/** One climb the engine would write into the entity lead's mailbox. A caller that delivers it
+ *  another way answers true, and the engine then writes no runtime record for it. */
+export type StatusClimb = { seat: string; id: string; text: string; at?: string; target: { seat: string; root: string; session: string } };
 
 type IdleStretch = {
   since: number;
@@ -438,6 +435,12 @@ export type SeatStatusEngineInput = {
   publish?: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>;
   /** Optional log callback for `unknown` statuses or waiter errors. */
   onLog?: (seat: string, message: string) => void;
+  /** A hosted watch delivers the climb as the daemon's own notice when the entity's lead is this
+   *  team's lead: the runtime mailbox record is a store that seat's turn read does not serve.
+   *  Answers true when it took the climb. */
+  deliverClimb?: (climb: StatusClimb) => boolean;
+  /** Overrides `PROMPT_REMINDER_MS` (tests). */
+  promptReminderMs?: number;
   /** Optional callback invoked when a worker seat's idle window elapses and a nudge is due. */
   onNudge?: (seatName: string, pane: string) => void;
   /** The watch's current native hold by seat. A held seat must not publish the legacy,
@@ -554,57 +557,59 @@ export function seatHasAssignedWorkOnDisk(
   const keyState = messageKeyState(options?.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
   const context: StatusContext = { to: seatName, root, session, ...(options?.lead === undefined ? {} : { lead: options.lead }) };
-  const dropDir = join(agentsDir, 'send-drops', session, seatName);
-  if (existsSync(dropDir)) {
-    try {
-      for (const name of readdirSync(dropDir)) {
-        if (
-          name.startsWith('.')
-          || name.startsWith('work-')
-          || name.endsWith('.pending')
-          || name.endsWith('.delivered')
-          || name.endsWith('.closed.json')
-          // The mark a send leaves beside a record it posted to the seat's webhook adapter: the
-          // wake already happened, and the name is no unacked message. Its claim, while the post
-          // is in flight, is the same kind of note.
-          || name.endsWith('.posted')
-          || name.endsWith('.posting')
-          || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
-          || (briefId !== undefined && name === briefId)
-          || supersededBriefs.has(name)
-        ) {
-          continue;
-        }
-        if (key !== undefined) {
-          // The seat took this message: a signed read or reply receipt verifies for its id, this
-          // seat, this checkout and this session — or a lead's clearance settles it for a seat
-          // that is not coming back. A tampered, foreign-key or other-session receipt is not a
-          // read, and the name stays work.
-          if (isReadOrCleared(dropDir, name, context, key)) continue;
-          // Every delivery of this build's brief is the launch's, not assigned work: the current
-          // id is skipped above from the claim, and a superseded id the state no longer lists is
-          // recognized from the record itself — same key, same sender, same checkout, same
-          // delivered body. The key is the home's, shared by every checkout it serves, so the
-          // record's root must name this checkout too; another checkout's brief is not work this
-          // seat has taken.
-          const held = readRecord(join(dropDir, name), name);
+  // E7b revision 3: the seat's stamped folder holds work too (src/queue/mail-tree.ts).
+  for (const dropDir of seatListingDirs(seatMailDirIn(agentsDir, session, seatName))) {
+    if (existsSync(dropDir)) {
+      try {
+        for (const name of readdirSync(dropDir)) {
           if (
-            held.ok
-            && held.record !== null
-            && held.record.payload.to === seatName
-            && held.record.payload.session === session
-            && sameFolder(held.record.payload.root, root)
-            && held.record.payload.from === GENERAL_BRIEF_FROM
-            && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
-            && verifyRecord(held.record, key)
+            name.startsWith('.')
+            || name.startsWith('work-')
+            || name.endsWith('.pending')
+            || name.endsWith('.delivered')
+            || name.endsWith('.closed.json')
+            // The mark a send leaves beside a record it posted to the seat's webhook adapter: the
+            // wake already happened, and the name is no unacked message. Its claim, while the post
+            // is in flight, is the same kind of note.
+            || name.endsWith('.posted')
+            || name.endsWith('.posting')
+            || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
+            || (briefId !== undefined && name === briefId)
+            || supersededBriefs.has(name)
           ) {
             continue;
           }
+          if (key !== undefined) {
+            // The seat took this message: a signed read or reply receipt verifies for its id, this
+            // seat, this checkout and this session — or a lead's clearance settles it for a seat
+            // that is not coming back. A tampered, foreign-key or other-session receipt is not a
+            // read, and the name stays work.
+            if (isReadOrCleared(dropDir, name, context, key)) continue;
+            // Every delivery of this build's brief is the launch's, not assigned work: the current
+            // id is skipped above from the claim, and a superseded id the state no longer lists is
+            // recognized from the record itself — same key, same sender, same checkout, same
+            // delivered body. The key is the home's, shared by every checkout it serves, so the
+            // record's root must name this checkout too; another checkout's brief is not work this
+            // seat has taken.
+            const held = readRecord(join(dropDir, name), name);
+            if (
+              held.ok
+              && held.record !== null
+              && held.record.payload.to === seatName
+              && held.record.payload.session === session
+              && sameFolder(held.record.payload.root, root)
+              && held.record.payload.from === GENERAL_BRIEF_FROM
+              && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
+              && verifyRecord(held.record, key)
+            ) {
+              continue;
+            }
+          }
+          return true;
         }
-        return true;
+      } catch {
+        // Ignore unreadable directory.
       }
-    } catch {
-      // Ignore unreadable directory.
     }
   }
 
@@ -651,6 +656,38 @@ export function seatHasAssignedWorkOnDisk(
   return false;
 }
 
+/** The lead climb the blocked-seat branch writes (`evt-prompt-lead-` through
+ *  `writeRuntimeMailboxRecord`): one record to the entity's orchestrator, once per episode.
+ *  The unread wake calls it when a lead's drop still has no read receipt five minutes after
+ *  the first wake. The same seat is not told about itself. */
+export function climbUnreadLead(input: {
+  home: string;
+  root: string;
+  project: string;
+  seat: string;
+  episode: string;
+  why: string;
+  at: string;
+  /** A hosted watch's sink: the climb goes out as the daemon's notice to the target's real
+   *  inbox. True when it took the climb; absent or false keeps the runtime record. */
+  deliver?: (climb: StatusClimb) => boolean;
+}): void {
+  const target = readEntityOrchestrator(input.home, teamIdOf(input.root));
+  if (target === null || target.seat === input.seat) return;
+  const id = `evt-prompt-lead-${input.seat}-${input.episode}`;
+  const text = `${input.project}: ${input.why}`;
+  if (input.deliver?.({ seat: input.seat, id, text, at: input.at, target: { seat: target.seat, root: target.root, session: target.session } }) === true) return;
+  writeRuntimeMailboxRecord({
+    root: target.root,
+    home: input.home,
+    to: target.seat,
+    id: `evt-prompt-lead-${input.seat}-${input.episode}`,
+    text: `${input.project}: ${input.why}`,
+    session: target.session,
+    at: input.at,
+  });
+}
+
 export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatusEngine {
   const { team } = input;
   const session = input.session ?? team.session;
@@ -662,6 +699,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     ? Math.max(0, Math.min(input.promptEscalationSeconds, EVENT_THRESHOLDS.prompt_escalation_seconds))
     : EVENT_THRESHOLDS.prompt_escalation_seconds;
   const escalationWindowMs = promptEscalationSeconds * 1000;
+  const reminderWindowMs = Math.max(escalationWindowMs, input.promptReminderMs ?? PROMPT_REMINDER_MS);
 
   const states = new Map<string, SeatTrackerState>();
   const pendingNudges = new Set<string>();
@@ -779,16 +817,30 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       if (target !== null && target.seat !== eventInput.seat) {
         const stamp = (eventInput.ts ?? new Date(now()).toISOString()).replace(/[^0-9A-Za-z]/g, '');
         const climbed = eventInput.kind === 'seat.prompt-escalated';
-        const outcome = writeRuntimeMailboxRecord({
-          root: target.root,
-          home: input.home,
-          to: target.seat,
-          id: `evt-prompt-${climbed ? 'climb' : 'lead'}-${eventInput.seat}-${stamp}`,
-          text: `${team.project}: ${options.climbMailboxWhy}`,
-          session: target.session,
-          at: eventInput.ts,
-        });
-        if (outcome.ok) escalatedMailboxPaths.push(outcome.path);
+        // The reminder is its own record: an overdue tick can raise it in the same instant as the
+        // escalation, and the two must not share one mailbox identity.
+        const rung = eventInput.record_id.startsWith('status:prompt-reminder:') ? 'remind' : climbed ? 'climb' : 'lead';
+        const id = `evt-prompt-${rung}-${eventInput.seat}-${stamp}`;
+        const text = `${team.project}: ${options.climbMailboxWhy}`;
+        const taken = input.deliverClimb?.({
+          seat: eventInput.seat,
+          id,
+          text,
+          ...(eventInput.ts !== undefined ? { at: eventInput.ts } : {}),
+          target,
+        }) === true;
+        if (!taken) {
+          const outcome = writeRuntimeMailboxRecord({
+            root: target.root,
+            home: input.home,
+            to: target.seat,
+            id,
+            text,
+            session: target.session,
+            at: eventInput.ts,
+          });
+          if (outcome.ok) escalatedMailboxPaths.push(outcome.path);
+        }
       }
     }
 
@@ -1167,6 +1219,36 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       }
 
       if (
+        state.status === 'blocked'
+        && state.promptSpell !== undefined
+        && state.promptSpell.clearedAt === undefined
+        && state.promptSpell.escalated
+        && state.promptSpell.reminded !== true
+        && !isLead
+        && atMs - state.promptSpell.since >= reminderWindowMs
+      ) {
+        state.promptSpell.reminded = true;
+        const promptLabel = state.promptSpell.prompt === 'unknown' ? 'blocked' : state.promptSpell.prompt;
+        const reason = `${seatName} is still at a ${promptLabel} prompt after ${minutes(atMs - state.promptSpell.since)} minutes: a reminder, the only one for this prompt`;
+        emitted.push(
+          recordEvent(
+            {
+              ts,
+              kind: 'seat.prompt-escalated',
+              session,
+              record_id: `status:prompt-reminder:${seatName}:${new Date(state.promptSpell.since).toISOString()}`,
+              seat: seatName,
+              subject: seatName,
+              ...(state.promptSpell.prompt !== 'unknown' ? { prompt: state.promptSpell.prompt } : {}),
+              to: 'owner',
+              reason,
+            },
+            { notifyOwner: true, climbMailboxWhy: reason },
+          ),
+        );
+      }
+
+      if (
         !nativeHeld
         && (state.status === 'idle' || state.status === 'done')
         && state.idleStretch !== undefined
@@ -1367,7 +1449,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         waited = await source.waitStatus(target, waitTarget, timeoutMs, signal);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        input.onLog?.(seatName, `herdr wait agent-status failed: ${message}`);
+        input.onLog?.(seatName, `herdr agent wait failed: ${message}`);
         return {
           seat: seatName,
           outcome: 'error',
@@ -1404,7 +1486,7 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         };
       }
 
-      input.onLog?.(seatName, `herdr wait agent-status error: ${waited.error}`);
+      input.onLog?.(seatName, `herdr agent wait error: ${waited.error}`);
       return {
         seat: seatName,
         outcome: 'error',

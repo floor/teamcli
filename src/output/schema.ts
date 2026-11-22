@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
 import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
@@ -314,13 +315,14 @@ const SEAT_WAKE_SCHEMA: JsonSchema = {
   additionalProperties: false,
   required: ['class', 'wakeable', 'conversation', 'endpoint', 'listener', 'unread', 'oldest_unread_seconds'],
   properties: {
-    class: { type: 'string', enum: ['push', 'between-turns', 'pull-on-turn', 'none'] },
+    class: { type: 'string', enum: ['push', 'between-turns', 'typed-wake', 'pull-on-turn', 'none'] },
     wakeable: { type: 'boolean' },
     conversation: { type: 'boolean' },
     endpoint: { type: 'boolean' },
     listener: { type: 'boolean' },
     unread: { type: ['integer', 'null'], minimum: 0 },
     oldest_unread_seconds: { type: ['integer', 'null'] },
+    legacy_unsigned: { type: 'integer', minimum: 1 },
   },
 };
 
@@ -971,11 +973,33 @@ export const SWAP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.swap',
   fileName: 'swap.schema.json',
   title: 'team swap --json output',
-  statuses: ['listed', 'rule', 'queued', 'forced', 'ran', 'run-failed', 'cancelled'],
+  statuses: ['listed', 'rule', 'queued', 'forced', 'ran', 'run-failed', 'cancelled', 'planned', 'swapped'],
   required: ['project', 'session'],
   properties: {
     entity: { type: ['string', 'null'] },
     seat: { type: 'string', minLength: 1 },
+    preset: { type: 'string', minLength: 1 },
+    fresh: { type: 'boolean' },
+    pane: { type: 'string', minLength: 1 },
+    notes: { type: 'array', items: { type: 'string' } },
+    changes: {
+      type: 'object', additionalProperties: false,
+      properties: Object.fromEntries(['cli', 'vendor', 'model', 'version', 'display', 'launch', 'cwd', 'mode', 'launcher', 'account', 'effort', 'modelFrom'].map(key => [key, {
+        type: 'object', additionalProperties: false, required: ['from', 'to'],
+        properties: { from: { type: ['string', 'null'] }, to: { type: ['string', 'null'] } },
+      }])),
+    },
+    worktree: {
+      type: ['object', 'null'], additionalProperties: false, required: ['task', 'base', 'record'],
+      properties: {
+        task: { type: 'string' }, base: { type: 'string' },
+        record: {
+          type: 'object', additionalProperties: false, required: ['path', 'branch', 'seat', 'setup'],
+          properties: { path: { type: 'string' }, branch: { type: 'string' }, seat: { type: 'string' },
+            own_commits: { type: 'boolean' }, setup: { type: 'string', enum: ['ok', 'failed'] } },
+        },
+      },
+    },
     rule: { type: 'string' },
     entries: {
       type: 'array',
@@ -2308,7 +2332,7 @@ export const ROUTE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     cli: { type: 'string', minLength: 1 },
     pane: { type: 'string', minLength: 1 },
     address: { type: ['string', 'null'] },
-    socket_state: { type: 'string', enum: ['live', 'stale', 'pane', 'none', 'unread'] },
+    socket_state: { type: 'string', enum: ['live', 'stale', 'pane', 'none', 'unread', 'ineligible'] },
     native: { type: 'boolean' },
     rule: { type: 'string', minLength: 1 },
   },
@@ -2408,6 +2432,33 @@ export const ANSWER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     folder: { type: 'string', minLength: 1 },
   },
 });
+
+/** The three scoped changes a hand-started Claude seat setup reports. */
+export const MCP_SETUP_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.mcp-setup', fileName: 'mcp-setup.schema.json', title: 'team mcp setup --json output',
+  required: ['format', 'seat', 'session', 'cwd', 'dry_run', 'status', 'changes'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    seat: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    cwd: { type: 'string', minLength: 1 },
+    dry_run: { type: 'boolean' },
+    status: { type: 'string', enum: ['setup', 'off', 'unchanged'] },
+    changes: {
+      type: 'array', maxItems: 3,
+      items: {
+        type: 'object', additionalProperties: false, required: ['kind', 'action'],
+        properties: {
+          kind: { type: 'string', enum: ['project-config', 'launch', 'placement'] },
+          action: { type: 'string', enum: ['prepare', 'restore', 'enable', 'keep', 'record'] },
+          paths: { type: 'array', items: { type: 'string' } },
+          path: { type: 'string' },
+          pane: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+};
 
 /** Published `--json` output schema for `team mcp` (`schema/mcp.schema.json`): the status
  *  report (the helper rows, each bridge, each guard, the front and the state they add up to)
@@ -3550,6 +3601,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SHOW_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
+  MCP_SETUP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,
   PROC_OUTPUT_SCHEMA,
   WORKTREE_OUTPUT_SCHEMA,
@@ -3563,5 +3615,4 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   WORKFLOW_OUTPUT_SCHEMA,
   AGENTS_OUTPUT_SCHEMA,
 ];
-
 

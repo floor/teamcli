@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { syncChildTimeout } from '../child.ts';
 import { branchProblem } from './until.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 // Whether a temporary seat's `merged:` end holds. "Merged" is provable only when the branch had
 // commits of its own on an earlier pass and, after a fetch that succeeded, it no longer does.
@@ -41,6 +42,7 @@ export function judgeMerge(input: {
 type Run = { code: number; stdout: string; stderr: string };
 
 function git(cwd: string, args: string[]): Run {
+  hostedCommit('node:child_process.spawnSync');
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',

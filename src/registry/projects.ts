@@ -9,14 +9,8 @@
 // read-modify-write under a lock ending in an atomic replace, exactly like teams.ts, so a reader
 // never sees half a file and two writers never lose each other's update.
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { editedRecordText, withValue } from '../config/team-record.ts';
 import type { RulesEditPlan } from '../entities.ts';
@@ -34,7 +28,7 @@ import {
 } from '../settings/inherit.ts';
 import { writeAtomic } from '../state.ts';
 import { leadWordProblem } from '../lead.ts';
-import { currentRunMemo } from '../run-memo.ts';
+import { cloneRulesMap, currentRunMemo } from '../run-memo.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 
 export type ProjectProvenance = { registered_by: string; registered_at: string; updated_at: string };
@@ -382,6 +376,7 @@ function locked<T>(home: string, work: () => T): T {
       if (memo !== null) {
         memo.projects.delete(home);
         memo.projectsRaw.delete(home);
+        memo.projectRules.delete(home);
       }
       return work();
     },
@@ -396,7 +391,9 @@ function write(home: string, projects: Record<string, ProjectRecord>): void {
   const memo = currentRunMemo();
   if (memo !== null) {
     memo.projects.clear();
+    memo.teamLoads.clear();
     memo.projectsRaw.clear();
+    memo.projectRules.clear();
   }
 }
 
@@ -603,8 +600,20 @@ function isMap(value: YamlValue | undefined): value is { [key: string]: YamlValu
 /**
  * Each project's declared standing rules (`projects.<id>.rules`), read directly from
  * `<home>/.config/team/projects.yaml` (including minimal test fixtures without provenance).
+ * Read once per run: the per-run memo holds the file's words for the life of the run, and a
+ * writer under this home drops them.
  */
 export function declaredProjectRules(home: string): Map<string, string[]> {
+  const memo = currentRunMemo();
+  const held = memo?.projectRules.get(home);
+  if (held !== undefined) return cloneRulesMap(held);
+  const out = readDeclaredProjectRules(home);
+  memo?.projectRules.set(home, cloneRulesMap(out));
+  return out;
+}
+
+/** The file read itself: one parse, every project's list. */
+function readDeclaredProjectRules(home: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const path = projectsFile(home);
   if (!existsSync(path)) return out;
@@ -647,23 +656,35 @@ export function projectRules(home: string | undefined, projectId: string | null)
 
 /**
  * Resolve a team's **home** project ID only (a served project's rules never apply).
- * Checks `team.inProject` first, then `teams.yaml` `project_id`, and only falls back to a single
- * non-served entry in `projects.yaml` when neither `in_project` nor `teams.yaml` is present.
+ * Keys on `team.inProject` first, and falls back only to `teams.yaml` `project_id` (the team
+ * registry record's home project pointer, never `projects.yaml` `teams[]` or `teams.yaml`
+ * `projects[]` served entries).
  */
 export function homeProjectIdOf(
   home: string,
   root: string,
-  team?: { inProject?: string | null; alsoIn?: string[] } | null,
+  team?: { inProject?: string | null } | null,
 ): string | null {
-  const projPath = projectsFile(home);
+  const memo = currentRunMemo();
   let rawProjects: Record<string, YamlValue> | null = null;
-  if (existsSync(projPath)) {
-    try {
-      const parsed = toValue(parseYaml(readFileSync(projPath, 'utf8')));
-      if (isMap(parsed) && isMap(parsed.projects)) {
-        rawProjects = parsed.projects;
-      }
-    } catch {}
+  if (memo !== null && memo.projectsRaw.has(home)) {
+    const cached = memo.projectsRaw.get(home) ?? null;
+    if (isMap(cached) && isMap(cached.projects)) {
+      rawProjects = cached.projects;
+    }
+  } else {
+    const projPath = projectsFile(home);
+    if (existsSync(projPath)) {
+      try {
+        const parsed = toValue(parseYaml(readFileSync(projPath, 'utf8')));
+        memo?.projectsRaw.set(home, parsed);
+        if (isMap(parsed) && isMap(parsed.projects)) {
+          rawProjects = parsed.projects;
+        }
+      } catch {}
+    } else {
+      memo?.projectsRaw.set(home, null);
+    }
   }
 
   if (team?.inProject !== undefined && team.inProject !== null && team.inProject.trim() !== '') {
@@ -697,26 +718,6 @@ export function homeProjectIdOf(
     } catch {}
   }
 
-  // If `team` explicitly says `inProject: null`, do not guess a project when `teams.yaml` exists or
-  // when multiple projects or `also_in` name this team. When no `teams.yaml` exists and a synthetic
-  // test placed `tId` in a single project in `projects.yaml` without `also_in`, return that project.
-  if (rawProjects !== null) {
-    const servedSet = new Set((team?.alsoIn ?? []).map((n) => n.toLowerCase()));
-    const matches: string[] = [];
-    for (const [id, raw] of Object.entries(rawProjects)) {
-      if (!isMap(raw) || !Array.isArray(raw.teams)) continue;
-      if (!raw.teams.includes(tId)) continue;
-      const nameLower = typeof raw.name === 'string' ? raw.name.toLowerCase() : '';
-      if (servedSet.has(id.toLowerCase()) || (nameLower !== '' && servedSet.has(nameLower))) continue;
-      matches.push(id);
-    }
-    if (matches.length === 1 && team?.inProject === undefined) {
-      return matches[0] ?? null;
-    }
-    if (matches.length === 1 && !existsSync(teamsPath) && team?.inProject === null) {
-      return matches[0] ?? null;
-    }
-  }
   return null;
 }
 
@@ -847,14 +848,17 @@ export function setProjectRules(
   home: string,
   projectId: string,
   rules: string[],
-  opts: { dryRun?: boolean; allowDisplayName?: boolean } = {},
-): RulesEditPlan & { written: boolean } {
+  opts: { dryRun?: boolean; allowDisplayName?: boolean; claim?: () => boolean } = {},
+): RulesEditPlan & { written: boolean; claimRefused?: true } {
   if (opts.dryRun) {
     const plan = planProjectRulesSet(home, projectId, rules, opts);
     return { ...plan, written: false };
   }
   return locked(home, () => {
     const plan = planProjectRulesSet(home, projectId, rules, opts);
+    // A caller that spends an approval on this write claims it here, under the lock, after the
+    // plan stands and before anything is written; a claim refused writes nothing.
+    if (opts.claim !== undefined && !opts.claim()) return { ...plan, written: false, claimRefused: true as const };
     if (!plan.changed) {
       return { ...plan, written: false };
     }
@@ -869,7 +873,10 @@ export function setProjectRules(
     const memo = currentRunMemo();
     if (memo !== null) {
       memo.projects.clear();
+      memo.teamLoads.clear();
+    memo.teamLoads.clear();
       memo.projectsRaw.clear();
+      memo.projectRules.clear();
     }
     return { ...plan, written: true };
   });

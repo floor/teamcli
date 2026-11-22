@@ -209,7 +209,7 @@ reply tool writes the reply record. Nothing is typed into the pane.
 `DELIVERY_LEGS` at the tip: `socket`, `native`, `typed`, `drop`, `headless-resume`,
 `session`; `channel` is the seat's own server push, implied by its launch rather than named by an
 order. The fallback order (`src/settings/inherit.ts`): `typed`, then `drop`. The walk that uses the
-order is the owner's cascade (ADR `zeus-message-path`, D1): channel-class legs first — a serving
+order is the owner's cascade (ADR `architect-message-path`, D1): channel-class legs first — a serving
 `channel` ahead of them, then the ones the chain names, in its own order — then the sender-posted
 webhook where the seat declares an adapter row, then the typed leg, then the mailbox.
 

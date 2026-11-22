@@ -1,11 +1,12 @@
 // The `lead-gates` policy: the file's own `operator:` place is
-// admitted to five of the dev-mode lead gates — `check --repair`, `remove --abandon`,
-// `down --abandon`, `policy set` and `policy unset`, `daemon restart` — and to `team answer`,
+// admitted to the ordinary dev-mode lead gates — `check --repair`,
+// `policy set`, `policy unset`, `daemon restart` — and to `team answer`,
 // while dev mode is on and the effective value reads `lead+operator` for the caller's chain.
 // The default `lead`, an unplaced operator, and every gate the policy does not name keep the
-// refusal exactly as before; grants, delegation and the owner-only actions stay the lead's or
-// the owner's. Every admitted run warns on stderr and writes the same audit line the lead's
-// admission writes, with `admitted as operator` naming the role. Every seat, file, pane, home
+// refusal exactly as before; 1364 keeps abandoning a seat or team owner-reserved.
+// Grants, delegation and the other owner-only actions stay the lead's or the owner's.
+// Every admitted run warns on stderr and writes the same audit line the lead's admission
+// writes, with `admitted as operator` naming the role. Every seat, file, pane, home
 // and policy record below is synthetic; no command here touches the live machine.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -108,6 +109,12 @@ ${seat('ops')}${seat('helper')}`);
   return { root, home, file };
 }
 
+/** These scenes pin `lead-gates`. `owner-asks` keeps that pin; the default admits the operator on its own. */
+function ownerAsks(home: string, root: string): void {
+  const asked = writePolicySet(home, { level: 'team', target: root, teamRoot: root, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+  if (!asked.ok) throw new Error(asked.why);
+}
+
 function logOf(root: string): string {
   const path = join(root, '.agents', 'team.log');
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -177,6 +184,7 @@ describe('the five gates', () => {
   test('the default admits no operator: policy set and grant both refuse, and nothing is logged', async () => {
     const { root, home, file } = repo();
     devModeOn(home, root);
+    ownerAsks(home, root);
     const before = readFileSync(file, 'utf8');
     const policyIo = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], policyIo, { home })).toBe(1);
@@ -193,6 +201,7 @@ describe('the five gates', () => {
     const { root, home, file } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const io = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], io, { home })).toBe(0);
     expect(io.err).toContain(`warning: ${OWNER_GRANT}; this call is ops; dev mode continues (dev-mode on at team level)`);
@@ -208,6 +217,7 @@ describe('the five gates', () => {
     const { root, home } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const io = testIo(root, OPS);
     expect(await runPolicy(['unset', 'team', 'lead-gates'], io, { home })).toBe(0);
     expect(io.err).toContain('dev mode continues (dev-mode on at team level)');
@@ -251,16 +261,18 @@ describe('the five gates', () => {
     const { root, home } = repo();
     machineFast(home);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const io = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], io, { home })).toBe(0);
     expect(io.err).toContain('dev mode continues (dev-mode on at machine level)');
     expect(logOf(root)).toContain('admitted as operator');
   });
 
-  test('remove --abandon: the operator continues past the gate and the seat leaves the file', async () => {
+  test('remove --abandon: the caller gate lifts but abandon refuses and keeps the seat', async () => {
     const { root, home, file } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
     const loaded = loadTeamFile(root, { home });
     if (!loaded.ok) throw new Error(loaded.errors.map((error) => error.message).join('; '));
     writeApproval(
@@ -299,12 +311,17 @@ describe('the five gates', () => {
       foreground: () => [],
     };
     const io = testIo(root, OPS);
-    expect(await runRemove(['helper', '--abandon'], io, sources)).toBe(0);
-    expect(io.err).toContain('only the owner abandons a seat, from a terminal outside herdr');
-    expect(io.err).toContain('dev mode continues (dev-mode on at team level)');
-    expect(logOf(root)).toContain('remove [ops]');
-    expect(logOf(root)).toContain('admitted as operator');
-    expect(readFileSync(file, 'utf8')).not.toContain('name: helper');
+    // 1364: remove --abandon stays the owner's. Dev mode does not lift it.
+    expect(await runRemove(['helper', '--abandon'], io, sources)).toBe(1);
+    // Only the abandon refusal excludes the dev clause; the ordinary caller gate still lifts and audits.
+    expect(io.err.split('\n').filter((line) => line.includes('only the owner abandons a seat'))).toEqual([
+      'team remove: only the owner abandons a seat, from a terminal outside herdr',
+    ]);
+    expect(io.err).toContain('warning: only the owner or `leads` removes a seat; this call is ops; dev mode continues (dev-mode on at team level)');
+    // This caller warning is logged without a role suffix; abandon itself was never admitted.
+    expect(logOf(root)).toContain('remove [ops] warning: only the owner or `leads` removes a seat; this call is ops; dev mode continues (dev-mode on at team level)\n');
+    expect(logOf(root)).not.toContain('admitted as operator');
+    expect(readFileSync(file, 'utf8')).toContain('name: helper');
   });
 });
 
@@ -449,10 +466,11 @@ describe('independent adversarial checks: five command gates, tighten-only chain
     job: () => null,
   };
 
-  test('check --repair, down --abandon, and daemon restart admit the placed operator end-to-end with warning and audit line', async () => {
+  test('check repair and daemon restart lift for the operator, while down abandon refuses', async () => {
     const { root, home } = repo();
     devModeOn(home, root);
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
 
     // 1. `team check --repair`
     const checkSources: CheckSources = {
@@ -482,10 +500,14 @@ describe('independent adversarial checks: five command gates, tighten-only chain
       standing: (r: string) => approvalStanding(r, home),
     };
     const downIo = testIo(root, OPS);
-    expect(await runDown(['--abandon', '--dry-run'], downIo, downSources)).toBe(0);
-    expect(downIo.err).toContain('warning: only the owner abandons a team, from a terminal outside herdr; dev mode continues (dev-mode on at team level)');
-    expect(logOf(root)).toContain('down [ops]');
-    expect(logOf(root)).toContain('admitted as operator');
+    // 1364: down --abandon stays the owner's. Dev mode does not lift it.
+    expect(await runDown(['--abandon', '--dry-run'], downIo, downSources)).toBe(1);
+    // A refused dry run prints its refusal in the plan on stdout, with no dev clause on that line.
+    expect(downIo.out.split('\n').filter((line) => line.includes('only the owner abandons a team'))).toEqual([
+      '! down would refuse: only the owner abandons a team, from a terminal outside herdr',
+    ]);
+    expect(downIo.err).toBe('');
+    expect(logOf(root)).not.toContain('down [ops]');
 
     // 3. `team daemon restart --dry-run`
     const restartIo = testIo(root, OPS);
@@ -542,6 +564,7 @@ describe('independent adversarial checks: five command gates, tighten-only chain
     const { root, home } = repo();
     // `lead-gates: lead+operator` is set, but `dev-mode` is off.
     leadGates(home, root, 'lead+operator');
+    ownerAsks(home, root);
 
     const policyIo = testIo(root, OPS);
     expect(await runPolicy(['set', 'team', 'lead-gates', 'lead'], policyIo, { home })).toBe(1);

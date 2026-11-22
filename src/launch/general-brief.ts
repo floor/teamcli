@@ -14,6 +14,8 @@
 // back; only a verified record finalizes the claim. Nothing here increments the attempt: a name
 // held by a foreign file or a link is reported, and only `team brief rollout --apply` recovers it
 // at the next attempt, leaving the foreign file byte for byte as it was.
+import { appendDeliverySync } from '../queue/append.ts';
+import { queueLog } from '../queue/log.ts';
 import { join } from 'node:path';
 import type { Io } from '../io.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
@@ -33,6 +35,7 @@ import {
 } from './brief-id.ts';
 import { heldAt } from './rules-file.ts';
 import { GENERAL_BRIEF, GENERAL_BRIEF_SHA256 } from './general-brief-text.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 export { GENERAL_BRIEF, GENERAL_BRIEF_SHA256 };
 
@@ -269,7 +272,7 @@ export function deliverGeneralBrief(input: {
   if (payload.id !== claim.id) {
     return { seat, ok: false, reason: 'the claim and the record disagree on the expected id' };
   }
-  const dropDir = join(input.root, '.agents', 'send-drops', input.session, seat);
+  const dropDir = seatDropDir(input.root, input.session, seat);
   const path = recordFile(dropDir, payload.id);
   const held = heldAt(path);
   const refusal = heldReason(held.kind);
@@ -289,7 +292,11 @@ export function deliverGeneralBrief(input: {
     } catch {
       return { seat, ok: false, reason: 'no message key; the general brief was not delivered' };
     }
-    const written = writeRecord(dropDir, signed);
+    const brief = signed;
+    const { value: written } = appendDeliverySync({ dropDir, record: brief }, () => {
+      const result = writeRecord(dropDir, brief);
+      return { ok: result.ok, value: result };
+    }, { home: input.home, log: queueLog(dropDir) });
     if (!written.ok) return { seat, ok: false, reason: written.reason };
   }
   // Read back: the state records what the seat will read, never what this process meant to write.

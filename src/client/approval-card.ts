@@ -9,9 +9,14 @@
 // folder, and the details functions below render them for `team approvals details` and the owner
 // page's folded details. Nothing here decides what is signed or what is admitted.
 
+import { createHash } from 'node:crypto';
 import { msg, type MessageId } from './grant-messages.ts';
 import type { OwnerActionParams } from './owner-action.ts';
 import type { TeamCreateParams } from './team-create.ts';
+
+/** The longest signing prompt: the grant prompt's budget (`GRANT_PROMPT_MAX` in
+ *  src/client/grant-prompt.ts), kept here so this module reads no grant code. */
+export const PROMPT_MAX = 210;
 
 /** A card never carries more than this many lines. */
 export const CARD_MAX_LINES = 3;
@@ -38,6 +43,16 @@ export type ApprovalCard = {
   title: string;
   question: string;
   scope?: string;
+  /**
+   * The exact change, for a request whose words are the change itself (an entity's record, the
+   * machine daemon): the operation, the key or verb, the value in full and the file or folders it
+   * acts on. The owner signs what this line says, so it is never cut: the owner page and the
+   * terminal show it whole, and a signing prompt it does not fit carries `changeShort` instead.
+   */
+  change?: string;
+  /** The change as the signing prompt carries it when `change` does not fit: the operation, the
+   *  target, the value's length and a digest of the exact value the owner was shown in full. */
+  changeShort?: string;
 };
 
 /** The card's lines, top to bottom: at most CARD_MAX_LINES. */
@@ -45,9 +60,100 @@ export function cardLines(card: ApprovalCard): string[] {
   return [card.title, card.question, ...(card.scope === undefined ? [] : [card.scope])];
 }
 
-/** The card as one line, for a prompt that shows one (the signing reason). */
+/** The card as one line, for a prompt that shows one (the signing reason). A card that carries
+ *  its exact change carries it whole when it fits the prompt, and its short form otherwise. */
 export function cardPrompt(card: ApprovalCard): string {
-  return cardLines(card).join(' — ');
+  if (card.change === undefined) return cardLines(card).join(' — ');
+  // A card with an exact change gives the prompt's room to the change: the title and the scope
+  // name what and where, and the question (who asked, and why) stays on the screen's whole card.
+  const base = [card.title, ...(card.scope === undefined ? [] : [card.scope])].join(' — ');
+  const whole = `${base} — ${card.change}`;
+  if (whole.length <= PROMPT_MAX) return whole;
+  return `${base} — ${card.changeShort ?? card.change}`;
+}
+
+/** The first twelve hex digits of the SHA-256 of `text`: the digest a short form names. */
+export function shortDigest(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 12);
+}
+
+/** Display text with no control character: a value is shown as a JSON string, so nothing in it
+ *  can start a line of its own or hide a character. */
+function quoted(value: string): string {
+  return JSON.stringify(value).replace(/[\u007f-\u009f\u2028\u2029]/g, (one) => `\\u${one.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** One line as a terminal shows it: every control character written as an escape. */
+export function displayLine(line: string): string {
+  return line.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (one) => `\\u${one.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/** The card with its exact change, whole, as the owner reads it before a prompt. */
+export function cardWhole(card: ApprovalCard): string {
+  return displayLine([...cardLines(card), ...(card.change === undefined ? [] : [card.change])].join(' — '));
+}
+
+/** Whether the signing prompt itself carries the card's exact change whole. */
+export function promptCarriesChange(card: ApprovalCard): boolean {
+  return card.change === undefined || cardPrompt(card).includes(card.change);
+}
+
+/** A bound word `key=value`, read back. */
+function boundValue(words: readonly string[], key: string): string | undefined {
+  const word = words.find((one) => one.startsWith(`${key}=`));
+  return word === undefined ? undefined : word.slice(key.length + 1);
+}
+
+/**
+ * The exact change an entity-record or daemon request makes, read from its bound words, in full
+ * and short. Null for every other kind, whose card stays three plain lines.
+ */
+export function ownerActionChange(action: string, words: readonly string[] | undefined): { change: string; changeShort: string } | null {
+  if (words === undefined || words.length === 0) return null;
+  if (action === 'team-entity-config') {
+    const [verb, path] = words;
+    const file = boundValue(words, 'file');
+    const value = words.length >= 4 ? words[2]! : undefined;
+    const key = keyOfPath(path ?? '');
+    const where = file === undefined ? 'the entities file' : quoted(file);
+    if (verb === 'unset' || value === undefined) {
+      return { change: `${verb} ${quoted(path ?? '')} in ${where}`, changeShort: `${verb} ${key}, the file shown in full on screen` };
+    }
+    return {
+      change: `${verb} ${quoted(path ?? '')} to ${quoted(value)} in ${where}`,
+      changeShort: `${verb} ${key} to a value of ${value.length} characters, digest ${shortDigest(JSON.stringify({ path, value, file: file ?? null }))}, shown in full on screen`,
+    };
+  }
+  if (action === 'team-daemon') {
+    const verb = words[0] ?? '';
+    const home = boundValue(words, 'home');
+    const registered = words.filter((word) => word.startsWith('registered=')).map((word) => word.slice('registered='.length));
+    // The opt-ins the unit will run with: the effective words an install plan binds (its own
+    // flags over the installed unit's), or, on a plan written before those, the flags it names.
+    const effective = (flag: string): boolean | null =>
+      words.includes(`effective-${flag}=on`) ? true : words.includes(`effective-${flag}=off`) ? false : null;
+    const flags = ['presence', 'watch'].filter((flag) => effective(flag) ?? words.includes(flag));
+    const with_ = flags.length > 0 ? `, with ${flags.join(' and ')}` : '';
+    const forHome = `for home ${home === undefined ? 'this home' : quoted(home)}`;
+    if (verb !== 'install') {
+      const digest = shortDigest(JSON.stringify({ verb, home: home ?? null }));
+      return { change: `${verb} ${forHome}`, changeShort: `${verb}, digest ${digest}, shown in full on screen` };
+    }
+    // The unit hosts whatever this account registers, at each start: the list is the one now.
+    const now = registered.length === 0 ? 'none registered now' : `now ${registered.map(quoted).join(', ')}`;
+    const change = `install ${forHome}, hosting the teams registered for this account (${now})${with_}`;
+    const digest = shortDigest(JSON.stringify({ verb, home: home ?? null, registered, flags }));
+    const changeShort = `install, hosting the teams registered for this account (${registered.length} now)${with_}, digest ${digest}, shown in full on screen`;
+    return { change, changeShort };
+  }
+  return null;
+}
+
+/** The last key of an entity path, as a short form names it: `root`, `names.unique`, `rules`. */
+function keyOfPath(path: string): string {
+  if (path.endsWith('.names.unique')) return 'names.unique';
+  const last = path.split('.').pop() ?? '';
+  return /^[a-z][a-z.]{0,31}$/.test(last) ? last : 'the key';
 }
 
 /** The three answers, as the signing prompt names the one being signed. */
@@ -179,32 +285,80 @@ function questionOf(action: string, who: readonly string[], what: string, reason
 
 /** The scope line: the team plus what changes, or that no permission changes. A bundled request
  *  names every change it carries; the machine-wide development-mode switch names the machine. */
-function scopeOf(actions: readonly string[], team: string): string {
-  if (actions.length === 1 && actions[0] === 'development-mode') return msg('card.scope.development-mode');
+function scopeOf(actions: readonly string[], team: string, machine?: string): string {
+  if (actions.length === 1 && actions[0] === 'development-mode') {
+    return machine === undefined ? msg('card.scope.development-mode') : msg('card.scope.development-mode.machine', { machine });
+  }
+  if (actions.length === 1 && actions[0] === 'team-daemon') {
+    return machine === undefined ? msg('card.scope.daemon') : msg('card.scope.daemon.machine', { machine });
+  }
+  if (actions.length === 1 && actions[0] === 'team-entity-config') {
+    return machine === undefined ? msg('card.scope.entity', { team }) : msg('card.scope.entity.machine', { team, machine });
+  }
   const changes = [...new Set(actions.filter((action) => CHANGED.has(action)).map((action) => msg(`card.change.${action}` as MessageId)))];
-  if (changes.length === 0) return msg('card.scope.team', { team });
-  return msg('card.scope.changes.many', { team, changes: changes.join('; ') });
+  if (changes.length === 0) return machine === undefined ? msg('card.scope.team', { team }) : msg('card.scope.team.machine', { team, machine });
+  return machine === undefined
+    ? msg('card.scope.changes.many', { team, changes: changes.join('; ') })
+    : msg('card.scope.changes.many.machine', { team, machine, changes: changes.join('; ') });
+}
+
+/** The machine a carried request names, as the card shows it: its display name, cleaned of
+ *  anything that is not a plain name, and, on a machine whose accounts share one owner, the
+ *  account that asked (`server (account floor)`). A request made where it is answered names none. */
+function machineOf(params: Pick<OwnerActionParams, 'machine' | 'account'>): string | undefined {
+  const name = params.machine?.name;
+  if (typeof name !== 'string') return undefined;
+  const plain = name.replace(ESCAPE_SEQUENCE, '').replace(/[^A-Za-z0-9.-]/g, '').slice(0, 63);
+  const shown = plain === '' ? 'another machine' : plain;
+  if (typeof params.account !== 'string') return shown;
+  const account = params.account.replace(ESCAPE_SEQUENCE, '').replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+  return account === '' ? shown : `${shown} (account ${account})`;
+}
+
+/** The thing one action changes, in plain words. An entity's record and the machine daemon name
+ *  the key or the verb their bound words carry; a word this build does not know names the kind. */
+function whatOf(action: string, words: readonly string[] | undefined): string {
+  if (action === 'team-daemon') {
+    const verb = words?.[0];
+    return verb === 'install' || verb === 'restart' || verb === 'uninstall' || verb === 'fault-watch'
+      ? msg(`card.what.team-daemon.${verb}` as MessageId)
+      : msg('card.what.team-daemon');
+  }
+  if (action === 'team-entity-config') {
+    const path = words?.[1] ?? '';
+    const key = path.endsWith('.names.unique') ? 'names'
+      : path.endsWith('.worktrees') ? 'worktrees'
+        : path.endsWith('.root') ? 'root'
+          : path.endsWith('.reminders') ? 'reminders'
+            : path.endsWith('.rules') ? (/^projects?\./.test(path) ? 'project-rules' : 'rules')
+              : null;
+    return msg((key === null ? 'card.what.team-entity-config' : `card.what.team-entity-config.${key}`) as MessageId);
+  }
+  return msg(`card.what.${action}` as MessageId);
 }
 
 /** The kinds whose answer changes something beyond the team's own running state. */
 const CHANGED: ReadonlySet<string> = new Set(['team-create', 'team-import', 'team-migrate', 'team-config', 'team-revoke-approval', 'team-general-grant']);
 
 /** One owner-action request, as the owner reads it before answering. */
-export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words'>): ApprovalCard {
-  const what = params.actions.map((action) => msg(`card.what.${action}` as MessageId));
+export function ownerActionCard(params: Pick<OwnerActionParams, 'actions' | 'team' | 'requested_by' | 'requesters' | 'reason' | 'words' | 'machine' | 'account'>): ApprovalCard {
+  const what = params.actions.map((action) => whatOf(action, params.words?.[action]));
   const who = askers(params);
+  const machine = machineOf(params);
   if (params.actions.length === 1) {
     const action = params.actions[0]!;
+    const change = ownerActionChange(action, params.words?.[action]);
     return {
       title: titleOf(action, what[0]!, params.words?.[action]),
       question: questionOf(action, who, what[0]!, params.reason, params.words?.[action]),
-      scope: scopeOf(params.actions, params.team),
+      scope: scopeOf(params.actions, params.team, machine),
+      ...(change === null ? {} : change),
     };
   }
   return {
     title: msg('card.title.several', { actions: sentence(inOrder(what)) }),
     question: questionOf('several', who, inOrder(what), params.reason, undefined),
-    scope: scopeOf(params.actions, params.team),
+    scope: scopeOf(params.actions, params.team, machine),
   };
 }
 

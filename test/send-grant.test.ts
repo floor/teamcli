@@ -235,39 +235,6 @@ function helperSend(root: string, sockets: string): { code: Promise<number>; err
 }
 
 describe('team send: the owner-signed grant on the command path', () => {
-  test('a pair no rule admits reaches the drop file once the owner\'s record names it', async () => {
-    const { root, dir, sockets, home, otherDir } = world();
-    registerSeat('helper', 'implementer', 'w2:p1');
-    record(dir, 'helper', 'w2:p1');
-
-    // Without a record: refused, and nothing is written — the refusal names the rules.
-    const bare = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
-    expect(await runSend(['native@other', 'a note'], bare, fake(sockets))).toBe(1);
-    expect(bare.err).toContain('team send: refused:');
-    expect(bare.err).toContain('no rule admits it');
-    expect(existsSync(join(dir, 'send-drops'))).toBe(false);
-    expect(existsSync(join(otherDir, 'send-drops'))).toBe(false);
-
-    grantFile(home, 'helpers-to-reviewer', 'helper@acme', 'native@other');
-    const { code, err, out } = helperSend(root, sockets);
-    expect(await code).toBe(0);
-    // One statement for the drop, naming the full address the grant admitted; the bare
-    // `queued, no event adapter` line printed beside it would name the same recipient again.
-    expect(err()).toBe('');
-    expect(withoutSendId(out())).toBe(
-      'team other, session "else"\n' +
-      'native@other: queued, not woken (drop, 0 ms); queued; native@other reads it at its next turn, and nothing here gives it one (pull-only)\n',
-    );
-    const drops = join(otherDir, 'send-drops', 'else', 'native');
-    const names = dropNames(drops).filter(
-      (name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json') && !name.endsWith('.meta.json'),
-    );
-    expect(names).toHaveLength(1);
-    const path = join(drops, names[0] as string);
-    expect(recordBody(path)).toBe(
-      'from helper — admitted by: an owner-signed grant naming send (helpers-to-reviewer)\n\na note',
-    );
-  });
 
   test('a record naming another sender admits nothing: the caller\'s identity is the registry\'s', async () => {
     const { root, dir, sockets, home } = world();

@@ -31,12 +31,17 @@
 // call could substitute. It lives beside `messages.jsonl` in the project's state folder, at mode
 // 0600, one file per id, written whole by rename; a file that cannot be written refuses the
 // handoff, so an unrecorded native send is never the easy path.
-import { chmodSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { hostedCommit } from '../host/request-scope.ts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { storePath } from '../store/store.ts';
 import { ensureStoreLadder, readNoFollow, createDir0700 } from './history.ts';
 import { dropMessage } from './native.ts';
+import { seatFolderOf } from './drop-folder.ts';
+import { nativePendingDir, stampedListing } from '../queue/mail-tree.ts';
+import { ensureFolder } from '../queue/durable.ts';
 
 /** How many typed retries one held send is given, after the send's own attempt. */
 export const PENDING_MAX_TRIES = 3;
@@ -75,14 +80,15 @@ export type PendingDrop = {
 
 /** The marker's path: the drop's own name with `.pending` after it. */
 export function pendingDropPath(dropDir: string, id: string): string {
-  return join(dropDir, `${id}.pending`);
+  // E7b revision 3: a marker carries the body, so it sits in the seat folder of its record's tree.
+  return join(seatFolderOf(dropDir, id), `${id}.pending`);
 }
 
 /** Writes the record whole, mode 0600 by rename of a temporary file in the drop's directory —
  *  the write shape and modes the drop itself gets (`dropMessage`). */
 function writePendingDrop(dropDir: string, drop: PendingDrop): void {
   try {
-    dropMessage(dropDir, `${drop.id}.pending`, JSON.stringify(drop));
+    dropMessage(seatFolderOf(dropDir, drop.id), `${drop.id}.pending`, JSON.stringify(drop));
   } catch {
     // The drop is the message; this record only saves a retry.
   }
@@ -95,6 +101,7 @@ export function markPending(dropDir: string, drop: Omit<PendingDrop, 'tries'>): 
 
 /** Writes a failed retry back, so the next pass knows how many tries are left. */
 export function recordPendingTry(dropDir: string, drop: PendingDrop): void {
+  hostedCommit('recordPendingTry');
   writePendingDrop(dropDir, { ...drop, tries: drop.tries + 1 });
 }
 
@@ -128,15 +135,18 @@ export function clearPending(dropDir: string, id: string): void {
   }
 }
 
-function readPendingDrops(dropDir: string): PendingDrop[] {
-  let names: string[];
+function readPendingDrops(seatDir: string): PendingDrop[] {
+  let legacyNames: string[];
   try {
-    names = readdirSync(dropDir);
+    legacyNames = readdirSync(seatDir);
   } catch {
     return [];
   }
+  // E7b revision 3: the seat's stamped folder holds the markers of its stamped records.
+  const stamped = stampedListing(seatDir);
+  const folders = [{ folder: seatDir, names: legacyNames }, ...(stamped === null || stamped === 'unreadable' ? [] : [stamped])];
   const drops: PendingDrop[] = [];
-  for (const name of names) {
+  for (const { folder: dropDir, names } of folders) for (const name of names) {
     if (!name.endsWith('.pending')) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(dropDir, name), 'utf8')) as Partial<PendingDrop>;
@@ -246,6 +256,9 @@ export function pendingDir(project: string, root: string, home: string): string 
 
 /** The one file a pending id names. */
 export function pendingPath(project: string, root: string, home: string, id: string): string {
+  // E7b revision 3: a stamped send's handoff waits under the stamped tree (nativePendingDir).
+  const stamped = join(nativePendingDir(root), `${id}.json`);
+  if (heldAt(stamped).kind !== 'missing') return stamped;
   return join(pendingDir(project, root, home), `${id}.json`);
 }
 
@@ -289,8 +302,9 @@ export function sweepPendingNative(
   isPidAlive: (pid: number) => boolean = defaultPidAlive,
 ): void {
   const dir = pendingDir(project, root, home);
-  if (folderProblem(dir) !== null) return;
-  sweepPendingDir(dir, now.getTime(), isPidAlive);
+  if (folderProblem(dir) === null) sweepPendingDir(dir, now.getTime(), isPidAlive);
+  const stamped = nativePendingDir(root);
+  if (heldAt(stamped).kind === 'folder' && folderProblem(stamped) === null) sweepPendingDir(stamped, now.getTime(), isPidAlive);
 }
 
 function sweepPendingDir(
@@ -376,23 +390,34 @@ function sweepPendingDir(
 /** Writes one pending record whole: the project ladder, then the pending folder at 0700, then a
  *  temporary file at 0600 renamed to the id's own name. An existing file at that path is never
  *  replaced — ids are never reused, so a file there is not this handoff's. */
-export function writePending(project: string, root: string, home: string, record: PendingNative): PendingWrite {
-  const store = storePath(project, root, home);
-  const ladder = ensureStoreLadder(store, home);
-  if (ladder !== null) return { ok: false, reason: ladder };
-  const dir = pendingDir(project, root, home);
-  const problem = folderProblem(dir);
-  if (problem !== null) return { ok: false, reason: problem };
-  // Two handoffs beginning in a brand-new home race the same `mkdir`: one wins, and the loser
-  // accepts the winner's folder through the store ladder's own verified-EEXIST rule instead of
-  // refusing a write its folder is ready for.
-  if (heldAt(dir).kind === 'missing') {
-    const made = createDir0700(dir, 'the pending folder');
-    if (made !== null) return { ok: false, reason: made };
+export function writePending(project: string, root: string, home: string, record: PendingNative, stamped = false): PendingWrite {
+  hostedCommit('writePending');
+  let dir: string;
+  if (stamped) {
+    // E7b revision 3 (carrier 1): a stamped send's handoff carries a stamped body, so it is
+    // written only under the stamped tree, which no older watch lists, reads or expires.
+    dir = nativePendingDir(root);
+    if (!ensureFolder(dir)) return { ok: false, reason: 'the stamped pending folder could not be made' };
+    const problem = folderProblem(dir);
+    if (problem !== null) return { ok: false, reason: problem };
+  } else {
+    const store = storePath(project, root, home);
+    const ladder = ensureStoreLadder(store, home);
+    if (ladder !== null) return { ok: false, reason: ladder };
+    dir = pendingDir(project, root, home);
+    const problem = folderProblem(dir);
+    if (problem !== null) return { ok: false, reason: problem };
+    // Two handoffs beginning in a brand-new home race the same `mkdir`: one wins, and the loser
+    // accepts the winner's folder through the store ladder's own verified-EEXIST rule instead of
+    // refusing a write its folder is ready for.
+    if (heldAt(dir).kind === 'missing') {
+      const made = createDir0700(dir, 'the pending folder');
+      if (made !== null) return { ok: false, reason: made };
+    }
   }
   sweepPendingDir(dir, Date.parse(record.ts));
-  const path = pendingPath(project, root, home, record.id);
-  if (heldAt(path).kind !== 'missing') return { ok: false, reason: 'a pending record already holds that id' };
+  const path = join(dir, `${record.id}.json`);
+  if (heldAt(pendingPath(project, root, home, record.id)).kind !== 'missing') return { ok: false, reason: 'a pending record already holds that id' };
   const temporary = join(dir, `.${record.id}.${String(process.pid)}.tmp`);
   try {
     writeFileSync(temporary, `${JSON.stringify(record)}\n`, { flag: 'wx', mode: 0o600 });
@@ -459,17 +484,19 @@ export function takePending(
   root: string,
   home: string,
   id: string,
-): { ok: true; taken: string } | { ok: false; reason: string } {
+): { ok: true; taken: string; stamped: boolean } | { ok: false; reason: string } {
   const path = pendingPath(project, root, home, id);
   const held = heldAt(path);
   if (held.kind === 'missing') return { ok: false, reason: 'no pending record holds that id; nothing was recorded' };
   if (held.kind === 'link') return { ok: false, reason: 'a symbolic link was found and not followed' };
   if (held.kind !== 'file') return { ok: false, reason: 'the pending record is not a regular file' };
   if (process.getuid !== undefined && held.uid !== process.getuid()) return { ok: false, reason: "another user's file" };
-  const taken = join(pendingDir(project, root, home), `.${id}.${String(process.pid)}.taken`);
+  const taken = join(dirname(path), `.${id}.${String(process.pid)}.taken`);
   try {
     renameSync(path, taken);
-    return { ok: true, taken };
+    // E7b revision 3: the era of a handoff is the folder it was taken from, carried explicitly to
+    // every history line and record its completion writes; never looked up afterwards.
+    return { ok: true, taken, stamped: dirname(path) === nativePendingDir(root) };
   } catch {
     return { ok: false, reason: 'the pending record could not be taken; nothing was recorded' };
   }
@@ -489,7 +516,8 @@ export function dropTaken(taken: string): void {
  *  the confirm. A restore that fails leaves the taken file behind and the id unconfirmed. */
 export function restoreTaken(taken: string, project: string, root: string, home: string, id: string): void {
   try {
-    renameSync(taken, pendingPath(project, root, home, id));
+    // Back where it was taken from: the project state's folder, or the stamped tree's.
+    renameSync(taken, join(dirname(taken), `${id}.json`));
   } catch {
     // the refusal names the history write; this only best-effort restores the record
   }
@@ -497,15 +525,16 @@ export function restoreTaken(taken: string, project: string, root: string, home:
 
 /** Every pending native record currently held in `<project state folder>/pending`, oldest first. */
 export function listPendingNative(project: string, root: string, home: string): PendingNative[] {
-  const dir = pendingDir(project, root, home);
-  if (folderProblem(dir) !== null) return [];
+  // E7b revision 3: the project state's handoffs and the stamped tree's, as one list.
+  const records: PendingNative[] = [];
+  for (const dir of [pendingDir(project, root, home), nativePendingDir(root)]) {
+  if (folderProblem(dir) !== null) continue;
   let names: string[];
   try {
     names = readdirSync(dir);
   } catch {
-    return [];
+    continue;
   }
-  const records: PendingNative[] = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
     const id = name.slice(0, -'.json'.length);
@@ -522,6 +551,7 @@ export function listPendingNative(project: string, root: string, home: string): 
     } catch {
       continue;
     }
+  }
   }
   return records.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
 }

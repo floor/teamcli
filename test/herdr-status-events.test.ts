@@ -7,6 +7,7 @@ import { verifiedOf } from '../src/approve/approval.ts';
 import { isEventKind, EVENT_KINDS, OWNER_PROMPT_KINDS } from '../src/bus/kinds.ts';
 import { appendEvent, readEvents, verifySignedEvent, type SignedEventRecord } from '../src/bus/log.ts';
 import { realWatchSources, runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { EVENT_ROUTING_DEFAULTS } from '../src/policy/events.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -127,7 +128,7 @@ const GUARD_SCREEN = `team guard hook blocked command: forbidden flags\nAllow gu
 const LOGIN_SCREEN = `Session expired. Please sign in to authenticate your account.\n`;
 const IDLE_SCREEN = `● Done.\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
 
-describe('herdr wait agent-status CLI integration and output parser', () => {
+describe('herdr agent wait CLI integration and output parser', () => {
   test('parses matched status change, timeout, and error outputs from herdr wait agent-status', () => {
     const matched = parseWaitAgentStatusOutput(
       0,
@@ -163,7 +164,24 @@ describe('herdr wait agent-status CLI integration and output parser', () => {
     expect(invalidPane.outcome).toBe('error');
   });
 
-  test('waitAgentStatus passes session, pane, status, and timeout to herdr and herdrStatusSource cycles one client at a time', async () => {
+  test('parses the herdr 0.9.5 `agent wait` match and timeout shapes', () => {
+    expect(parseWaitAgentStatusOutput(
+      0,
+      '{"id":"cli:agent:wait","result":{"agent":{"agent":"claude","agent_status":"done","pane_id":"w2:p1","workspace_id":"w2"},"type":"agent_info"}}\n',
+      '',
+      'w2:p1',
+      'working',
+    )).toEqual({ outcome: 'changed', status: 'done', pane: 'w2:p1', workspace: 'w2', agent: 'claude' });
+    expect(parseWaitAgentStatusOutput(
+      1,
+      '{"error":{"code":"timeout","message":"timed out waiting for agent status"},"id":"cli:agent:wait"}\n',
+      '',
+      'w2:p1',
+      'done',
+    )).toEqual({ outcome: 'timeout' });
+  });
+
+  test('waitAgentStatus passes session, pane, states, and timeout to herdr and herdrStatusSource waits with one client', async () => {
     const seenArgs: string[][] = [];
     let inFlight = 0;
     let maxInFlight = 0;
@@ -173,25 +191,15 @@ describe('herdr wait agent-status CLI integration and output parser', () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await Promise.resolve();
-      const statusIdx = args.indexOf('--status');
-      const requested = statusIdx >= 0 ? args[statusIdx + 1] : '';
+      const requested = args[args.indexOf('--until') + 1];
       try {
-        if (seenArgs.length === 1 || requested === 'done') {
-          return {
-            code: 0,
-            stdout: JSON.stringify({
-              event: 'pane.agent_status_changed',
-              data: {
-                pane_id: 'w1:p1',
-                workspace_id: 'w1',
-                agent_status: requested,
-                agent: 'claude',
-              },
-            }),
-            stderr: '',
-          };
-        }
-        return { code: 1, stdout: '', stderr: 'timed out waiting for agent status change' };
+        return {
+          code: 0,
+          stdout: JSON.stringify({ id: 'cli:agent:wait', result: { agent: {
+            pane_id: 'w1:p1', workspace_id: 'w1', agent_status: seenArgs.length === 1 ? requested : 'done', agent: 'claude',
+          } } }),
+          stderr: '',
+        };
       } finally {
         inFlight -= 1;
       }
@@ -208,33 +216,32 @@ describe('herdr wait agent-status CLI integration and output parser', () => {
     expect(seenArgs[0]).toEqual([
       '--session',
       'acme-dev',
+      'agent',
       'wait',
-      'agent-status',
       'w1:p1',
-      '--status',
+      '--until',
       'blocked',
       '--timeout',
       '5000',
     ]);
 
     const source = herdrStatusSource({ session: 'acme-dev', now: () => 1_700_000_000_000 });
-    const cycled = await source.waitStatus(
+    const waited = await source.waitStatus(
       { name: 'worker-1', pane: 'w1:p1', cli: 'claude-code' },
       { not: 'working' },
-      9000,
+      60_000,
     );
-    expect(cycled).toEqual({
+    expect(waited).toEqual({
       outcome: 'changed',
       status: 'done',
       at: 1_700_000_000_000,
     });
-    // Strictly ONE herdr client process is active at any point in time (never 4 parallel clients).
+    // Strictly ONE herdr client process per seat, waiting for every other state for the whole timeout.
     expect(maxInFlight).toBe(1);
-    // Candidate 1 (`blocked`, 3000ms) timed out, then Candidate 2 (`done`, 3000ms) matched and stopped the cycle.
-    expect(seenArgs.slice(1).map((a) => [a[a.indexOf('--status') + 1], a[a.indexOf('--timeout') + 1]])).toEqual([
-      ['blocked', '3000'],
-      ['done', '3000'],
-    ]);
+    expect(seenArgs.slice(1)).toEqual([[
+      '--session', 'acme-dev', 'agent', 'wait', 'w1:p1',
+      '--until', 'blocked', '--until', 'done', '--until', 'idle', '--timeout', '60000',
+    ]]);
   });
 });
 
@@ -904,7 +911,8 @@ describe('production watch wiring, assigned-work gate, and screen verification',
     };
 
     const io = testIo(root, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
+    // Daemon-only watch: the hosted loop is the pass that still starts the status waiters.
+    expect(await runWatch(['--file', file], io, withHostedLoop(sources)), io.err).toBe(0);
 
     // Waiters were started for eligible running seats (crew-lead, worker-1) and aborted cleanly on stop;
     // jules-1 (unreliable) and owner-pane (human: true) were never waited on.
@@ -1122,7 +1130,8 @@ describe('production watch wiring, assigned-work gate, and screen verification',
     };
 
     const io = testIo(root, { kind: 'owner' });
-    expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
+    // Daemon-only watch: the hosted loop is the pass that still dispatches the idle worker.
+    expect(await runWatch(['--file', file], io, withHostedLoop(sources)), io.err).toBe(0);
 
     // The status engine's nudge is drained, not typed: the dispatcher's direct route is the one
     // automatic work request, made exactly once for the idle worker.

@@ -1,12 +1,14 @@
 // Remembering the team file waits until the caller gate has allowed the run. A refusal leaves
 // the state file byte for byte as it was; an allowed run still stores the file it loaded, at the
 // clock reading taken after the gate.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
+import * as permissions from '../../src/permissions/who.ts';
+import { hostedLoop } from '../helpers/hosted-watch.ts';
 import type { Caller } from '../../src/caller.ts';
 import { runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
@@ -51,11 +53,12 @@ beforeEach(() => {
 
 afterEach(() => rmSync(base, { recursive: true, force: true }));
 
-/** A clock that moves a second per read, so the reading before the gate and the one after it differ. */
-function clock(): { now: () => Date; at: (nth: number) => string } {
+/** Advance at the gate itself: extra admission reads must not choose the remembered instant. */
+function clock(): { now: () => Date; at: (nth: number) => string; advanceTo: (nth: number) => void } {
   let n = 0;
   return {
-    now: () => new Date(T0 + n++ * 1000),
+    now: () => new Date(T0 + n * 1000),
+    advanceTo: (nth) => { n = nth; },
     at: (nth) => new Date(T0 + nth * 1000).toISOString(),
   };
 }
@@ -101,6 +104,8 @@ function launch(now: () => Date): DownLaunch {
 
 function watchSources(now: () => Date): WatchSources {
   return {
+    // Hand-run watch reports status; the hosted loop reaches the flag and remembering gates.
+    hosted: hostedLoop(),
     live: () => null,
     machine: () => ({ loadPerCore: 0, memoryFree: 50, diskFree: 1, swapTotal: 2, swapFree: 1, swapUsed: 0 }),
     standing: () => ({ kind: 'none' }),
@@ -142,7 +147,19 @@ describe('down remembers only after the caller gate', () => {
     seed({ 'deepseek-acme': 'w3:p1' });
     const ticks = clock();
     const io = testIo(root, { kind: 'owner' });
-    const code = await runDown([], io, downSources(ticks.now, false));
+    const gateVerdict = permissions.gateVerdict;
+    const gate = spyOn(permissions, 'gateVerdict').mockImplementation((...args) => {
+      const verdict = gateVerdict(...args);
+      if (verdict.kind === 'ok') ticks.advanceTo(1);
+      return verdict;
+    });
+    let code: number;
+    try {
+      code = await runDown([], io, downSources(ticks.now, false));
+      expect(gate).toHaveBeenCalled();
+    } finally {
+      gate.mockRestore();
+    }
     expect(code).toBe(0);
     expect(io.out).toContain('is not running');
     const remembered = readState(dir).last_valid;
@@ -196,12 +213,14 @@ describe('watch remembers only after the flag gate', () => {
   test('an allowed run still remembers the file, at the reading taken after the gate', async () => {
     const ticks = clock();
     const io = testIo(root, { kind: 'owner' });
-    const code = await runWatch([], io, watchSources(ticks.now));
+    const code = await runWatch([], io, {
+      ...watchSources(ticks.now),
+      // Standing is read after the owner flags have passed and before remembering the file.
+      standing: () => { ticks.advanceTo(2); return { kind: 'none' }; },
+    });
     expect(code).toBe(0);
     const remembered = readState(dir).last_valid;
     expect(remembered?.file).toBe(EXAMPLE);
-    // The watch takes its process-start instant before it loads the file for the gate, so the
-    // reading taken after the gate, and stored, is the third.
     expect(remembered?.read_at).toBe(ticks.at(2));
   });
 
@@ -212,9 +231,15 @@ describe('watch remembers only after the flag gate', () => {
     });
     const before = readFileSync(join(dir, STATE_FILE), 'utf8');
     const io = testIo(root, { kind: 'owner' });
-    const code = await runWatch([], io, { ...watchSources(() => new Date(T0)), alive: (pid) => pid === 99 });
-    expect(code).toBe(1);
-    expect(io.err).toContain('a watch already runs');
+    const standby: string[] = [];
+    const code = await runWatch([], io, {
+      ...watchSources(() => new Date(T0)),
+      hosted: hostedLoop({ standby: (why) => { standby.push(why); } }),
+      alive: (pid) => pid === 99,
+    });
+    // The daemon stands by for a live pane watch without taking its record or remembering.
+    expect(code).toBe(0);
+    expect(standby.join('\n')).toContain('a watch already runs');
     expect(readFileSync(join(dir, STATE_FILE), 'utf8')).toBe(before);
   });
 });

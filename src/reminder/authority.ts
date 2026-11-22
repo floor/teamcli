@@ -16,6 +16,7 @@
 // before each transport the walk could take (`DaemonSendPrincipal.recheck`). `captured` carries
 // the identity the principal was established with, so a record rewritten by a replaced daemon —
 // even one that can take the same lock — never inherits the earlier send's authority.
+import { HOSTED_NO_AUTHORITY, hostedRequest } from '../host/request-scope.ts';
 import { readFileSync } from 'node:fs';
 import { daemonLockPath } from '../daemon/paths.ts';
 import { readDaemonState, type DaemonState } from '../daemon/state.ts';
@@ -40,6 +41,9 @@ export type DaemonActorVerdict =
  * is the clock the heartbeat is judged against; tests inject it, the entry passes the beat's.
  */
 export function verifyDaemonAuthority(input: { home: string; captured?: DaemonIdentity; now?: Date }): DaemonActorVerdict {
+  // The warm send host is a process the daemon started; a line it runs for a client is that
+  // client's, never the daemon's (src/host/request-scope.ts).
+  if (hostedRequest() !== null) return { ok: false, why: HOSTED_NO_AUTHORITY };
   const read = readDaemonState(input.home);
   if (read.kind === 'missing') return { ok: false, why: 'the daemon state record is missing: no process can prove it is the daemon' };
   if (read.kind === 'unreadable') return { ok: false, why: read.why };

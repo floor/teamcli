@@ -14,6 +14,7 @@ import {
 } from '../caller.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
@@ -51,15 +52,16 @@ import {
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan, launchKind } from '../launch/execute.ts';
-import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { codexEndpointPreflight, launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, refreshCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { registryLaunches, upPlan } from '../launch/plan.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
+import { inheritedRulesProblem, rulesOf, rulesOriginOf, withRulesProblem } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
@@ -67,7 +69,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { parseVersion, profileFor, versionVerdict } from '../profiles/profile.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { seatSessionName, senderNameModeFor } from '../send/names.ts';
-import { emptySession, readState, updateState, worktreeOf, type SeatState } from '../state.ts';
+import { emptySession, readState, recordedStartFolder, updateState, worktreeOf, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { ensureSeatLine, registerEnd, registerLaunch } from '../registry/sync.ts';
@@ -132,6 +134,7 @@ const realLaunch: Launch = {
     registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
+    preflight: (endpoint) => codexEndpointPreflight(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text, ttlMs = SIDEBAR_TTL_CAP_MS) =>
@@ -216,30 +219,42 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const who = clientRun === null ? describeCaller(caller) : `client:${clientRun.grant.clientId}`;
   const flagged = args.values.file;
   const foreign = flagged !== undefined && resolve(io.cwd, flagged) !== resolve(io.cwd, TEAM_FILE);
-  // Dev mode, from this folder's own file: the caller's place, never a file the caller names.
-  // A `dev-mode` value anywhere in its chain governs, and `TEAMCLI_DEV_MODE` is then ignored;
-  // before any such value, the variable set to exactly `1` keeps its behaviour. The gate below
-  // is the caller gate dev mode folds: a grant the file omits and one naming another seat are
-  // that gate, while its placement (`no-pane`, `another-pane`), the approval, the scope, a file
-  // that will not load and the owner's `--file` stay refusals in every mode.
-  const policyLoad = readTeamConfig(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
+  // The team this reload will change, before dev mode and the grant door. A pane that records
+  // this caller is that team. A `--file` names its file and does not ask the pane.
+  const binding = flagged !== undefined ? { kind: 'unbound' as const } : addressedTeam(sources.home ?? homedir(), io.cwd, name, io);
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : readTeamConfig(binding.kind === 'bound' ? binding.team.root : io.cwd, {
+        ...(owner && flagged ? { file: flagged } : {}),
+        ...(sources.home ? { home: sources.home } : {}),
+      });
+  if (!loaded.ok) {
+    const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
+    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });
+    else for (const line of said) out.stderr(`team reload: ${line}\n`);
+    // exit: reload.file
+    return 2;
+  }
+  const team = loaded.team;
+  const dir = dirname(loaded.path);
+  const root = loaded.root;
+  // Dev mode, from the target team's file. A `dev-mode` value anywhere in its chain governs,
+  // and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable set to exactly
+  // `1` keeps its behaviour. The gate below is the caller gate dev mode folds.
   const dev = resolveDevMode('reload', io, {
     ...(sources.home ? { home: sources.home } : {}),
-    team: policyLoad.ok ? policyLoad.team : null,
-    root: policyLoad.ok ? policyLoad.root : null,
+    team,
+    root,
     now: sources.now ? sources.now() : new Date(),
   });
-  // The configuration lines the run owes once, written where the caller's place is known and
-  // before the grant gate — a gate that refuses must not swallow them: the variable ignored
-  // under a governing policy, an expiry, a source that could not be read. Nothing is written
-  // when the chain had nothing to say.
-  const placeDir = policyLoad.ok ? dirname(policyLoad.path) : dirname(join(io.cwd, TEAM_FILE));
-  logDevModeState(placeDir, 'reload', who, dev, sources.now ? sources.now() : new Date());
+  // The configuration lines the run owes once, written where the target team is known and
+  // before the grant gate — a gate that refuses must not swallow them.
+  logDevModeState(dir, 'reload', who, dev, sources.now ? sources.now() : new Date());
   let devWarning: string | null = null;
   let grantSeat: string | null = null;
   let said: GrantVerdict | null = null;
   if (!owner && clientRun === null) {
-    said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home, dev });
+    said = (sources.grantGate ?? grantGate)({ act: 'reload', io: { ...io, cwd: root }, home: sources.home, dev });
     // A grant that cannot be read is the refusal it was, before any other reading: the rest is
     // judged with the team file in hand, where the map's `reload` row admits a lead.
     if (said.kind === 'refused' && said.id === 'grant.file') {
@@ -262,21 +277,6 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     }
   }
 
-  const loaded = readTeamConfig(io.cwd, {
-    ...(owner && flagged ? { file: flagged } : {}),
-    ...(sources.home ? { home: sources.home } : {}),
-  });
-  if (!loaded.ok) {
-    const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
-    if (json) refuse(io, json, 'reload', { id: 'reload.file', message: said.join('; '), repair: null });
-    else for (const line of said) out.stderr(`team reload: ${line}\n`);
-    // exit: reload.file
-    return 2;
-  }
-
-  const team = loaded.team;
-  const dir = dirname(loaded.path);
-  const root = loaded.root;
   const home = sources.home;
   const standing = (sources.standing ?? approvalStanding)(root, home);
   const session = team.session;
@@ -440,6 +440,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       name: seat.name,
       cli: seat.cli,
       launch: seat.launch,
+      desktopControl: seatDesktopControl({ team, seat: seat.name, home: home ?? null, root }),
       ...(seat.inbound === undefined ? {} : { inbound: seat.inbound }),
     }], home === undefined ? undefined : { project: team.project, root, home });
     if (refresh.refused !== undefined) {
@@ -490,10 +491,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const refreshStartProblem = (): string | null => {
     const cli = recorded.cli ?? seat.cli;
     if (cli !== 'grok' && cli !== 'cursor') return null;
-    if (recorded.start_cwd === undefined) {
+    const startFolder = recordedStartFolder(recorded);
+    if (startFolder === undefined) {
       return `${seat.name}: its pane has no recorded start folder; set the seat cwd to its own worktree or clone and restart it in a new workspace`;
     }
-    return ownStartFolderProblem({ cli, seat: seat.name, cwd: recorded.start_cwd, root,
+    return ownStartFolderProblem({ cli, seat: seat.name, cwd: startFolder, root,
       home: home ?? homedir(), lobby: lobbyOf(home ?? homedir(), root, { ...team, session }),
       peers: placedStartFolders(team.seats, readState(dir).sessions[session]) });
   };
@@ -507,8 +509,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     if (refuseRefreshStart()) return false;
     const inboxCli = recorded.cli ?? seat.cli;
     const register = sources.launch.registerInbox;
-    if (recorded.start_cwd !== undefined && register !== undefined) {
-      const inbox = register(inboxCli, seat.name, recorded.start_cwd, session, launchTeamFile(loaded));
+    const startFolder = recordedStartFolder(recorded);
+    if (startFolder !== undefined && register !== undefined) {
+      const inbox = register(inboxCli, seat.name, startFolder, session, launchTeamFile(loaded));
       if (inbox && !inbox.ok) {
         const said = `${seat.name}: its team inbox was not registered: ${inbox.reason}; team restart ${seat.name} retries it`;
         if (json) jsonNotes.push(said);
@@ -697,6 +700,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
       rules: rulesOf(team, seat, root, undefined, rulesOriginOf(loaded.source), home),
+      ...withRulesProblem(inheritedRulesProblem(team, root, home)),
       // The same session display name a fresh `up` gives the seat: a relaunched claude session
       // reads its sender like every other surface, and a reload is how most seats get relaunched.
       sessionName: seatSessionName(seat, {
@@ -722,6 +726,12 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         reload: { detail: driftDetail },
       },
     };
+    // Rules that name a folder this machine cannot fill refuse the reload before the brief, the
+    // hook or the close: the seat keeps running on the rules it has, and its binding is untouched.
+    if (planned.rulesProblem !== undefined) {
+      refuse(io, json, 'reload', { id: 'reload.rules', message: `${seat.name}: ${planned.rulesProblem}; nothing closed`, repair: null });
+      return 1; // exit: reload.rules
+    }
     // The general seat brief goes first, before the state hook and the plan's rules line: the
     // claim is written before the hook that resolves it and the signed drop before the launch.
     await deliverBrief(true);
@@ -731,7 +741,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, desktopControl: seatDesktopControl({ team, seat: planned.name, home: home ?? null, root }), ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', who, `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
@@ -755,6 +765,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(home === undefined ? {} : { home }),
       team,
       ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }),
+      ...(sources.launch.secretStore === undefined ? {} : { secretStore: sources.launch.secretStore }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this
     // run starts.
@@ -773,6 +784,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       classify(current, pane, cli) {
         return launchKind(readScreen(cli, launch.paneText(current, pane) ?? undefined).kind);
       },
+      // The one dialog a launch answers itself (src/launch/channel-dialog.ts).
+      channelDialogKey: (current, pane) => launch.pressEnter?.(current, pane) ?? false,
       foreground: (current, pane) => launch.foreground(current, pane),
       shellBack: (current, pane) => launch.shellBack?.(current, pane) ?? null,
       agentStatus: (current, pane) => launch.agentStatus?.(current, pane) ?? null,
@@ -784,6 +797,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         : {
             managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }) => launch.codexEndpoint!.managed(endpoint),
             stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
+            ...(launch.codexEndpoint!.preflight === undefined ? {} : { codexEndpointProblem: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.preflight!(endpoint) }),
           }),
       ...(launch.registerInbox
         ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
@@ -842,6 +856,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
             report: (why) => {
               stopped.why = why;
             },
+            leadPane: (team.orchestrator !== '' && file.seat === team.orchestrator)
+              || (team.operator !== '' && file.seat === team.operator),
             now: () => now().getTime(),
             sleep: launch.sleep,
           });
@@ -964,7 +980,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       }
     }
     const report = await executePlan(steps, session, host);
-    if (!report.dropped.includes(seat.name)) {
+    // Reloaded only when this run typed the line and the seat reached ready: a seat the plan
+    // refused keeps its old ready record, which is no reload.
+    if (outcome.launched && !report.dropped.includes(seat.name)) {
       const after = readState(dir).sessions[session]?.seats[seat.name];
       if (after?.stage === 'ready') {
         const summary = `team reload: ${seat.name} reloaded`;

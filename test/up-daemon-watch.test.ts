@@ -1,8 +1,8 @@
-// S0a acceptance: once the machine daemon's hosted watch owns a route, `up` closes every legacy
-// `Watch · <team>` workspace whose panes hold no live process, and leaves alone a workspace a
-// process still holds, a workspace that cannot be read, and every workspace when no hosted watch
-// owns the route. A dry run says what it would close and closes nothing. The fake Launch records
-// workspace creates, closes and kills; no pane, owner home or live service is touched.
+// Once the machine daemon's hosted watch owns a route, `up` closes every legacy watch workspace
+// whose panes hold no live process, and leaves alone a workspace a process still holds, a
+// workspace that cannot be read, and every workspace when no hosted watch owns the route. `up`
+// itself opens no watch pane. A dry run says what it would close and closes nothing. The fake
+// Launch records workspace creates, closes and kills; no pane, owner home or live service is touched.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -173,15 +173,16 @@ const alive = () => [
   agent('deepseek-acme-2', 'fixture3:p1'),
 ];
 
-/** An approved first run, which plans and starts the pane watch in its own workspace. */
+/** An approved first run. The daemon is the watch: this run opens no watch pane. */
 async function baseline(): Promise<World> {
   await approve();
   const made = world();
   expect(await runUp(FILE, testIo(root, { kind: 'owner' }), sources({}, made))).toBe(0);
+  expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
   return made;
 }
 
-/** Drops the pane watch's record, as a watch that exited leaves it. */
+/** Drops a pane-watch record, as a watch that exited leaves it. */
 function forgetPaneWatch(): void {
   const seeded = JSON.parse(readFileSync(statePath(), 'utf8')) as {
     sessions: Record<string, { watch?: unknown }>;
@@ -190,11 +191,14 @@ function forgetPaneWatch(): void {
   writeFileSync(statePath(), JSON.stringify(seeded));
 }
 
-/** The pane that runs the watch (or held it before it exited). */
-function watchPane(made: World): string {
-  const place = made.place(WATCH_LABEL);
-  if (place === null) throw new Error('the baseline started no watch workspace');
-  return place.pane;
+/** A legacy watch workspace left from before the daemon carried the watch. */
+function plantLegacy(made: World): { workspace: string; pane: string } {
+  const create = made.launch.createWorkspace;
+  if (create === undefined) throw new Error('the fixture launch cannot make a workspace');
+  const place = create(SESSION, root, WATCH_LABEL);
+  if (place === null) throw new Error('the fixture launch made no workspace');
+  made.creates.length = 0;
+  return place;
 }
 
 /** A second run with every seat already standing, as the two-run scenes run it. */
@@ -270,57 +274,82 @@ const teamLog = () => readFileSync(join(root, '.agents/team.log'), 'utf8');
 describe('a hosted watch closes the legacy watch workspace it replaced', () => {
   test('a workspace whose process is gone is closed once, and the log says so', async () => {
     const made = await baseline();
-    const place = made.place(WATCH_LABEL);
-    if (place === null) throw new Error('the baseline started no watch workspace');
+    const place = plantLegacy(made);
+    const reading = health({ roots: [route({ watch: hosted() })] });
+    expect(reading.roots[0]?.watch).toMatchObject({ session: SESSION, phase: 'running' });
     // The pane watch exited and its shell came back: the pane holds no process of its own.
     made.processes.set(place.pane, { shell: 900, foreground: [900] });
-    const { code, io } = await second(made, { daemonHealth: hostedDaemon() });
+    const { code, io } = await second(made, { daemonHealth: daemon(reading) });
     expect(code).toBe(0);
     expect(made.closes).toEqual([place.workspace]);
     expect(`${io.out}${io.err}`).toContain('team up: closed 1 legacy watch workspace with no live process');
     expect(teamLog()).toContain('closed 1 legacy watch workspace with no live process');
-    expect(made.creates).toEqual([]);
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
   });
 
   test('a workspace a process still holds is left for the hand-over', async () => {
     const made = await baseline();
-    const pane = watchPane(made);
-    made.processes.set(pane, { shell: 900, foreground: [900, 7777] });
+    const place = plantLegacy(made);
+    made.processes.set(place.pane, { shell: 900, foreground: [900, 7777] });
     const { code, io } = await second(made, { daemonHealth: hostedDaemon() });
     expect(code).toBe(0);
     expect(made.closes).toEqual([]);
     expect(`${io.out}${io.err}`).not.toContain('legacy watch workspace');
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
   });
 
   test('a workspace whose panes cannot be read is left alone', async () => {
     const made = await baseline();
-    const place = made.place(WATCH_LABEL);
-    if (place === null) throw new Error('no watch workspace');
+    const place = plantLegacy(made);
     made.unreadable.add(place.workspace);
     const { code } = await second(made, { daemonHealth: hostedDaemon() });
     expect(code).toBe(0);
     expect(made.closes).toEqual([]);
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
   });
 
   test('no hosted watch owns the route: a pane sitting closes nothing', async () => {
     const made = await baseline();
+    const place = plantLegacy(made);
     forgetPaneWatch();
-    made.processes.set(watchPane(made), { shell: 900, foreground: [900] });
+    made.processes.set(place.pane, { shell: 900, foreground: [900] });
     const { code } = await second(made, {});
     expect(code).toBe(0);
     expect(made.closes).toEqual([]);
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
   });
 
   test('a dry run says what it would close and closes nothing', async () => {
     const made = await baseline();
+    const place = plantLegacy(made);
     forgetPaneWatch();
-    made.processes.set(watchPane(made), { shell: 900, foreground: [900] });
+    made.processes.set(place.pane, { shell: 900, foreground: [900] });
+    const reading = health({ roots: [route({ watch: hosted() })] });
+    expect(reading.roots[0]?.watch).toMatchObject({ session: SESSION, phase: 'running' });
     const io = testIo(root, { kind: 'owner' });
-    const code = await runUp([...FILE, '--dry-run'], io, sources({ daemonHealth: hostedDaemon() }, made));
+    const code = await runUp([...FILE, '--dry-run'], io, sources({ daemonHealth: daemon(reading) }, made));
     expect(code).toBe(0);
     expect(made.closes).toEqual([]);
+    expect(made.creates.some((label) => label.startsWith('Watch · '))).toBe(false);
     expect(io.out).toContain(
       "watch: the machine daemon hosts this route's watch; 1 legacy watch workspace with no live process would be closed",
     );
+  });
+});
+
+// `team up --retie` starts and closes nothing, legacy watch workspaces included.
+describe('--retie closes no legacy watch workspace', () => {
+  test('a closable legacy workspace under a hosted watch is left, on a dry and a real run', async () => {
+    const made = await baseline();
+    const place = plantLegacy(made);
+    made.processes.set(place.pane, { shell: 900, foreground: [900] });
+    const dry = await second(made, { daemonHealth: hostedDaemon() }, [...FILE, '--retie', '--dry-run']);
+    expect(made.closes).toEqual([]);
+    expect(`${dry.io.out}${dry.io.err}`).not.toContain('legacy watch workspace');
+    const real = await second(made, { daemonHealth: hostedDaemon() }, [...FILE, '--retie']);
+    expect(made.closes).toEqual([]);
+    expect(made.kills).toEqual([]);
+    expect(made.creates).toEqual([]);
+    expect(`${real.io.out}${real.io.err}`).not.toContain('legacy watch workspace');
   });
 });

@@ -22,6 +22,10 @@ export interface PretrustSeat {
   launchProblem?: string;
   unidentifiedHold?: string;
   stopped?: boolean;
+  /** The file said `channel: off`. A default Claude seat leaves this unset. */
+  channelOff?: boolean;
+  /** The pane is a person's. A channel is not opened there. */
+  human?: boolean;
   grantKeep?: string;
   waiting?: unknown;
   stage?: 'launched' | 'named' | 'ready';
@@ -43,6 +47,7 @@ export function lobbyPretrustLine(
   // own dialog is handled the way it was before.
   if (opts.mode === 'off') return null;
   // A channel opens a child of an already-trusted lobby; no CLI-home trust read or write.
+  // The launch line gains that flag when the plan is built, after this read.
   if (seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch)) return null;
   if (!launchesIntoLobby(seat)) return null;
   const writer = WRITERS[seat.cli];
@@ -57,11 +62,28 @@ export function lobbyPretrustLine(
   let lobby = seat.cwd;
   try {
     lobby = realpathSync(seat.cwd);
+  } catch (error) {
+    // The channel folder is created when the channel is prepared. It is not there yet at this
+    // read, and a missing folder is not a CLI-home trust refusal: that refusal ran before the
+    // launch and skipped the one terminal question the launch still asks.
+    if (channelFolderPending(seat) && (error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    return repair(seat.cli, lobby);
+  }
+  try {
     writer(lobby, home, opts.now);
     return null;
   } catch {
     return repair(seat.cli, lobby);
   }
+}
+
+/** A Claude seat the plan will give the channel, whose launch line does not carry it yet. */
+function channelFolderPending(seat: PretrustSeat): boolean {
+  return seat.cli === 'claude-code'
+    && seat.channelOff !== true
+    && seat.human !== true
+    && seat.stopped !== true
+    && !channelLaunchEnabled(seat.launch);
 }
 
 /** The same seats `up` is about to launch into the lobby. A seat already refused, or

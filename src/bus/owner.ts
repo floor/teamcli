@@ -5,16 +5,8 @@
 // connector reads the same records. Nothing here waits on a seat, and a held or unreachable seat
 // silences neither the notification nor the record.
 import { createHash, randomBytes } from 'node:crypto';
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, existsSync, fsyncSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import { messageFile, type MessagePayload } from '../commands/messages.ts';
@@ -32,6 +24,7 @@ import type { EventPayload } from './log.ts';
 import type { RoutingChain } from './routing.ts';
 import { readSeatResolver } from './seats.ts';
 import { statusLeadReason } from '../status/reported-reason.ts';
+import { legacyArchivedRecordExists } from '../send/legacy-inbox-retention.ts';
 
 /** The mailbox the owner's own `team messages` run reads. `owner` is the seat-equivalent name the
  *  bus already knows (Amendment 01 §4.4). */
@@ -216,7 +209,10 @@ export function writeRuntimeMailboxRecord(
     return { ok: false, error: `the message key could not be read: ${String(error)}` };
   }
   const path = messageFile(input.root, input.to, input.id);
-  if (input.once === true && existsSync(path)) return { ok: true, path, existing: true };
+  // An archived copy counts too: the daily archive moves settled notices out of the live folder.
+  if (input.once === true && (existsSync(path) || legacyArchivedRecordExists(input.root, input.to, input.id))) {
+    return { ok: true, path, existing: true };
+  }
   try {
     writePrivateAtomic(path, `${JSON.stringify({ payload, signature }, null, 2)}\n`);
   } catch (error) {

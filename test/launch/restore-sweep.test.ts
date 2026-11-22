@@ -11,13 +11,14 @@ import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
 import { saveReadings, type Seen } from '../../src/budgets/readings.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
-import type { Launch, UpSources } from '../../src/commands/up.ts';
+import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { setHerdrRun, type HerdrAgent, type HerdrWorkspace, type PaneProcesses } from '../../src/herdr.ts';
 import { runRestoreSweepForRoute } from '../../src/launch/restore-sweep.ts';
 import { acquireRunLock, runLockText } from '../../src/launch/run-lock.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 import { intoRegistry, underRegistry } from '../helpers/registry-team.ts';
+import { updateState } from '../../src/state.ts';
 
 const NOW = new Date('2026-10-21T15:00:00Z');
 const AMPLE: Machine = {
@@ -257,7 +258,8 @@ describe('the daemon restore sweep for one route', () => {
     const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: listener });
     expect(result.kind).toBe('ran');
     if (result.kind !== 'ran') return;
-    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    // The summary includes the route's daemon watch and bus availability.
+    expect(result.summary.line).toBe("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root");
     expect(result.failed).toBe(false);
     expect(made.lockDuring).not.toBeNull();
     expect(made.lockDuring !== null && 'held' in made.lockDuring ? made.lockDuring.held : null).toBe(process.pid);
@@ -284,7 +286,8 @@ describe('the daemon restore sweep for one route', () => {
     const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: sources(made) });
     expect(result.kind).toBe('ran');
     if (result.kind !== 'ran') return;
-    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    // The summary includes the route's daemon watch and bus availability.
+    expect(result.summary.line).toBe("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root");
     expect(readFileSync(settings, 'utf8')).toBe('{"hooks":{},"crossSessionInbound":"accept"}\n');
     expect(statSync(settings).mtimeMs).toBe(before);
   });
@@ -319,8 +322,8 @@ describe('the daemon restore sweep for one route', () => {
       { seat: 'worker', reason: expect.stringContaining('left 5%') },
     ]);
     expect(result.failed).toBe(true);
-    // Only the watch workspace is made: the refused seat starts nowhere.
-    expect(made.creates).toEqual(['Watch · sweep']);
+    // The daemon hosts watch; a refused seat creates no workspace.
+    expect(made.creates).toEqual([]);
     expect(made.closes).toEqual([]);
     // The refusal is the run's, not the record's: the state is left exactly as it was found.
     const state = JSON.parse(readFileSync(join(stateDir, 'team.state.json'), 'utf8')) as {
@@ -374,9 +377,79 @@ describe('the daemon restore sweep for one route', () => {
     // The daemon's log line carries the run's own last line, so it names the refusal rather
     // than only its exit code.
     expect(result.detail).toContain('disk');
+    expect(result.retry).toBeUndefined();
     expect(made.starts).toBe(0);
     expect(made.runs).toEqual([]);
     expect(made.creates).toEqual([]);
+  });
+
+  test('a load-only refusal is retryable for restore, with the same interactive refusal unchanged', async () => {
+    recordSeat(); await approve();
+    const made = world();
+    const ports = sources(made, { machine: () => ({ ...AMPLE, loadPerCore: 3.4 }) });
+    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: ports });
+    expect(result).toMatchObject({ kind: 'refused', exit: 1, retry: 'load', detail: expect.stringContaining('load') });
+    expect(made.creates).toEqual([]);
+    const io = testIo(root, { kind: 'owner' });
+    expect(await runUp(['--file', teamFile], io, ports)).toBe(1);
+    expect(io.err).toContain('load');
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a login refusal beside high load is not changed into a wait', async () => {
+    recordSeat(); await approve();
+    const made = world(); const checks = doctor(); checks.loggedIn = () => false;
+    const result = await runRestoreSweepForRoute({ home, root, teamFile,
+      sources: sources(made, { doctor: checks, machine: () => ({ ...AMPLE, loadPerCore: 3.4 }) }) });
+    expect(result.kind).toBe('refused');
+    if (result.kind !== 'refused') throw new Error('expected the unchanged login refusal');
+    expect(result.exit).toBe(1);
+    expect(result.retry).toBeUndefined();
+    expect(made.creates).toEqual([]);
+  });
+
+  test('missing seats restore in the existing serial launch window', async () => {
+    recordSeat();
+    // All were previously launched. An unrecorded new seat is deliberately not a restore
+    // candidate: the existing original-pane guard must remain in force.
+    updateState(stateDir, (state) => {
+      for (const name of ['extra-a', 'extra-b']) state.sessions.sweep!.seats[name] = {
+        stage: 'ready', pane: `old-${name}-pane`, workspace: `old-${name}-space`, launched: { shell: 600, cli: [601] },
+      };
+    });
+    writeFileSync(teamFile, teamText() + ['extra-a', 'extra-b'].map((name) => `  - role: implementer
+    name: ${name}
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+`).join(''));
+    await approve();
+    const made = world();
+    const panes: { pane: string; workspace: string; name: string | null }[] = [];
+    const active = new Set<string>(); let maximum = 0;
+    made.launch.createWorkspace = (_session, _cwd, label) => {
+      const index = panes.length;
+      const pane = { pane: `fixture-pane-${index}`, workspace: `fixture-space-${index}`, name: null as string | null };
+      panes.push(pane); made.creates.push(label); return pane;
+    };
+    made.launch.paneRun = (_session, pane, command) => {
+      active.add(pane); maximum = Math.max(maximum, active.size); made.runs.push({ pane, command }); return true;
+    };
+    made.launch.renameAgent = (_session, pane, name) => {
+      panes.find((one) => one.pane === pane)!.name = name; active.delete(pane); return true;
+    };
+    made.launch.agents = () => panes.map((one) => ({ ...one, agent: 'claude', status: 'idle', cwd: root }));
+    made.launch.agentPanes = () => panes.map((one) => one.pane);
+    made.launch.workspacePanes = (_session, workspace) => panes.filter((one) => one.workspace === workspace).map((one) => one.pane);
+    made.launch.processInfo = (_session, pane) => panes.some((one) => one.pane === pane) ? { shell: 800, foreground: [801] } : null;
+    const result = await runRestoreSweepForRoute({ home, root, teamFile,
+      sources: sources(made, { workspaces: () => panes.map((one) => ({ id: one.workspace, label: one.name ?? '' })) }) });
+    expect(result.kind).toBe('ran');
+    expect(made.runs, JSON.stringify({ result, creates: made.creates, closes: made.closes })).toHaveLength(3);
+    expect(maximum).toBe(1);
+    expect(active.size).toBe(0);
   });
 
   test('a team file that cannot be read is reported, never launched', async () => {
@@ -457,7 +530,8 @@ describe('a route whose team lives in the registry', () => {
     });
     expect(result.kind).toBe('ran');
     if (result.kind !== 'ran') return;
-    expect(result.summary.line).toBe('0 seats repaired, 0 skipped (working), 0 refused');
+    // The summary includes the route's daemon watch and bus availability.
+    expect(result.summary.line).toBe("0 seats repaired, 0 skipped (working), 0 refused; watch: the daemon does not host this session's watch; bus: the daemon does not host this session's bus root");
     expect(result.failed).toBe(false);
     expect(made.starts).toBe(0);
     expect(made.closes).toEqual([]);

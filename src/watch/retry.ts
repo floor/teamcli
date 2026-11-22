@@ -19,11 +19,13 @@
 // sees idle offers nothing. A receipt from the seat's own watcher — the turn-start hook's read
 // (`team drops --read`), or its inbox client's `inbox_read` — promotes it the same way. A drop no
 // watcher read is given up on with the file's path once the age bound ends, and is never called lost.
+import type { StatusClimb } from './status-events.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ChildOptions } from '../child.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
+import type { TypedPaneSources } from '../launch/identity.ts';
 import { READ_LIMITS_DEFAULT_MS } from './read-limits.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
@@ -53,7 +55,7 @@ import { wakeStep } from '../send/steps.ts';
 import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/deliver.ts';
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
-import { leadAckReceiptAt } from '../send/record.ts';
+import { leadAckReceiptAt, recordStampAt, stampedSettled } from '../send/record.ts';
 import type { TypedWakeResult } from '../send/typed-wake.ts';
 import { markTaken } from '../send/taken.ts';
 import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
@@ -61,6 +63,8 @@ import type { Live } from '../status/compare.ts';
 import type { MailPass } from './mail-pass.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readScreen } from './screen.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
+import { liveRecordPath } from '../send/drop-folder.ts';
 
 /** What a retry reads and types through: the watch's own sources, narrowed to the pane calls. */
 export type RetrySources = {
@@ -76,14 +80,21 @@ export type RetrySources = {
   /** The pane's process identity, as the send's typed leg reads it; null when herdr can't tell.
    *  A pane whose foreground is its own shell is not the seat, and no retry is typed there. */
   processes?(pane: string, session: string): PaneProcesses | null;
+  /** The fresh readings the shared typed path proves a pane's owner with, immediately before
+   *  every key (src/watch/unread.ts `paneStillSeats`): the terminal host's agent list, and a
+   *  process's start time. Absent (a test host), the path keeps its earlier checks. */
+  keyOwner?: TypedPaneSources;
   /** The profile-gated typed wake (src/send/typed-wake.ts), bound to one session: the one seam
    *  through which the watch's unread pass types, and only for a seat whose profile declares
    *  `typed_wake` and whose retry is on. Absent, the pass keeps its drop-file typed leg, whose
    *  own writer refuses in every real binding. */
-  typedWake?(pane: string, line: string, cli: string, session: string): Promise<TypedWakeResult>;
+  typedWake?(pane: string, line: string, cli: string, session: string, options?: { beforeFirstKey?: () => boolean; beforeEachKey?: () => boolean; reportLine?: true }): Promise<TypedWakeResult>;
 };
 
 export type RetryScene = {
+  /** A hosted watch's climb sink: a climb it takes goes out as the daemon's notice to the
+   *  target's real inbox (src/commands/watch.ts `sendHostedClimbs`). Absent: the runtime record. */
+  deliverClimb?: (climb: StatusClimb) => boolean;
   dir: string;
   session: string;
   root: string;
@@ -104,9 +115,22 @@ export type RetryScene = {
   /** The pass's native hold by seat: nothing is typed at a seat whose presence proves a turn, a
    *  person wait, a session end, or cannot be trusted. Absent, the retry is exactly today's. */
   nativeHeld?: ReadonlySet<string>;
+  /** The seats this pass's qualified presence proves mid-turn (`presenceWorkingSince`), a subset
+   *  of the hold. The lead-unread alarm re-arms its clock for these only (RFC event-comms E3);
+   *  nothing is typed for them either way. Absent, no seat is proven working. */
+  nativeWorking?: ReadonlySet<string>;
   /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
    *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
   socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** E7b (R3.4): the re-send scheduler's adapter. Offers one stamped, unsettled record of the seat
+   *  once more through the seat's current resolved delivery walk, whatever adapter it names, and
+   *  returns the leg that took it (null when none did). The walk types nothing: at its typed leg
+   *  it calls `typedRequest`, and the pass's own guarded typed wake carries the pointer. Absent,
+   *  the unread pass re-sends nothing. */
+  resendStamped?(seat: Seat, dropDir: string, id: string, typedRequest: () => boolean, startAfter?: 'typed'): Promise<string | null>;
+  /** The event legs the seat's own resolved order permits a re-offer on (`permittedEventLegs`):
+   *  the send walk's own answer, exclusions included. Absent, the unread pass re-offers nothing. */
+  eventLegs?(seat: string): { channel: boolean; socket: boolean; pointer?: boolean; why?: string };
   /** The pass's shared mail reading: the folds' unread and unacked lists, already taken once.
    *  Absent, this pass takes its own — the same answer, read once more in the pass. */
   mail?: MailPass;
@@ -208,8 +232,8 @@ function failedNotes(drop: PendingDrop): { failed?: string[] } {
  *  from the disk, so an age-out does not name a file that was moved away. */
 function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string, dropGone = false): void {
   clearPending(dropDir, drop.id);
-  const gone = dropGone || !existsSync(join(dropDir, drop.id));
-  const tail = gone ? 'send it again' : `the record is at ${join(dropDir, drop.id)}; send it again`;
+  const gone = dropGone || !existsSync(liveRecordPath(dropDir, drop.id));
+  const tail = gone ? 'send it again' : `the record is at ${liveRecordPath(dropDir, drop.id)}; send it again`;
   scene.say(`${drop.to}: ${heldWords(drop)} was not delivered (${why}); ${tail}`, true);
 }
 
@@ -218,8 +242,8 @@ function giveUp(scene: RetryScene, dropDir: string, drop: PendingDrop, why: stri
  *  the message still waits. A drop whose file is gone is named for the folder, not a file. */
 function giveUpUnread(scene: RetryScene, dropDir: string, drop: PendingDrop, why: string): void {
   clearPending(dropDir, drop.id);
-  const where = existsSync(join(dropDir, drop.id))
-    ? `the drop file is at ${join(dropDir, drop.id)}`
+  const where = existsSync(liveRecordPath(dropDir, drop.id))
+    ? `the drop file is at ${liveRecordPath(dropDir, drop.id)}`
     : `its drop file is gone from ${dropDir}`;
   scene.say(`${drop.to}: a dropped send from ${drop.from} was not read (${why}); ${where}`, true);
 }
@@ -329,7 +353,7 @@ function holdChannelPush(scene: RetryScene, dropDir: string, drop: PendingDrop):
 async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
   // The marker is only a convenience; the drop file is the message. A record left behind a drop
   // that was moved or removed has nothing to tell the seat, so it is given up on, not typed.
-  if (!existsSync(join(dropDir, drop.id))) {
+  if (!existsSync(liveRecordPath(dropDir, drop.id))) {
     giveUp(scene, dropDir, drop, `its drop file is gone from ${dropDir}`, true);
     return;
   }
@@ -423,7 +447,7 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     const began = Date.now();
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
-      dropPath: join(dropDir, drop.id),
+      dropPath: liveRecordPath(dropDir, drop.id),
       receipt,
     });
     noteWake(scene, drop, {
@@ -605,7 +629,7 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
   // snapshot from before this promotion.
   const read = new Set<string>();
   for (const seat of scene.team.seats) {
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     for (const drop of readPending(dropDir)) {
       // A marker with no leg is a typed retry's own record; a receipt on the drop is another
       // send's proof and never this one's.
@@ -667,7 +691,7 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
  *  a loop. */
 function queuedTriggerLine(scene: RetryScene, seat: Seat, dropDir: string, drop: PendingDrop): string | null {
   const home = scene.home;
-  if (home === undefined || !existsSync(join(dropDir, drop.id))) return null;
+  if (home === undefined || !existsSync(liveRecordPath(dropDir, drop.id))) return null;
   const payload = verifiedPayloadOf(dropDir, drop.id, home);
   if (payload === null) return null;
   const sender = wakeTrigger(payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
@@ -701,7 +725,7 @@ async function reofferQueuedDrop(
   const wake = scene.sources.typedWake;
   if (wake === undefined || !queuedWakeOn(seat)) return;
   const drop = queued[0];
-  if (drop === undefined || !existsSync(join(dropDir, drop.id))) return;
+  if (drop === undefined || !existsSync(liveRecordPath(dropDir, drop.id))) return;
   if (drop.tries >= PENDING_MAX_TRIES) {
     giveUpUnread(scene, dropDir, drop, `the seat did not read it in ${String(PENDING_MAX_TRIES)} offers`);
     return;
@@ -724,7 +748,7 @@ async function reofferQueuedDrop(
  */
 export async function retryHeldDrops(scene: RetryScene): Promise<void> {
   for (const seat of scene.team.seats) {
-    const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
+    const dropDir = seatMailDirIn(scene.dir, scene.session, seat.name);
     const drops = readPending(dropDir);
     if (drops.length === 0) continue;
     // A launch-brief sidecar whose delivery the seat's claim has moved past is retired here:
@@ -766,6 +790,17 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
           });
         }
         scene.say(`${seat.name}: ${heldWords(drop)} was cleared by ${cleared.by}`, false);
+        return false;
+      }
+      // E7b: a stamped record is never on this ladder, neither retried nor given up on: the one
+      // re-send scheduler owes it (src/queue/resend.ts). Its marker is only cleaned up once the
+      // record is settled (its recipient's ack or reply, or a clearance).
+      if (recordStampAt(dropDir, drop.id) === true) {
+        const key = scene.home === undefined ? null : messageKeyState(scene.home);
+        if (key !== null && key.kind === 'key'
+          && stampedSettled(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session, lead: scene.team.orchestrator }, key.key)) {
+          clearPending(dropDir, drop.id);
+        }
         return false;
       }
       if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;

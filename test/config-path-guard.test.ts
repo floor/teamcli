@@ -13,8 +13,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { runConfig } from '../src/commands/config.ts';
-import { getAt, parsePath, withValue } from '../src/config/team-record.ts';
+import { editedRecordText, getAt, parsePath, withValue } from '../src/config/team-record.ts';
 import { parseYaml, toValue } from '../src/yaml.ts';
 import { seatOwner } from './helpers/owner-seat.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
@@ -91,6 +92,20 @@ function place(): Place {
   return { base, home, root, store: seatOwner(home) };
 }
 
+/** `--request` records and writes nothing. The signed `--approval` is what writes. */
+async function requestedConfig(at: Place, argv: string[], sources: Parameters<typeof runConfig>[2]): Promise<void> {
+  const before = storedTeam(at.root, at.home)!.text;
+  const ask = testIo(at.root, { kind: 'owner' });
+  expect(await runConfig([...argv, '--request'], ask, sources), ask.err + ask.out).toBe(0);
+  expect(ask.out).toContain('recorded');
+  expect(storedTeam(at.root, at.home)!.text).toBe(before);
+  const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out)?.[1];
+  expect(id).toBeTruthy();
+  expect(approveOwnerAction(at.home, id!, 'oui', at.store, NOW).ok).toBe(true);
+  const ran = testIo(at.root, { kind: 'owner' });
+  expect(await runConfig([...argv, '--approval', id!], ran, sources), ran.err + ran.out).toBe(0);
+}
+
 describe('the path grammar', () => {
   test('keeps an inherited name as a segment', () => {
     // Where the segment is a key is decided against the record, not by the spelling: under a
@@ -115,11 +130,9 @@ describe('a list item named after an inherited property', () => {
     const at = place();
     await underRegistry(async () => {
       const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
-      const byName = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'seats.constructor.model', 'Claude Sonnet', '--request'], byName, sources), byName.err).toBe(0);
+      await requestedConfig(at, ['set', 'seats.constructor.model', 'Claude Sonnet'], sources);
       expect(storedTeam(at.root, at.home)!.text).toContain('model: Claude Sonnet');
-      const byIndex = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'seats.2.model', 'Claude Haiku', '--request'], byIndex, sources), byIndex.err).toBe(0);
+      await requestedConfig(at, ['set', 'seats.2.model', 'Claude Haiku'], sources);
       const text = storedTeam(at.root, at.home)!.text;
       expect(text).toContain('model: Claude Haiku');
       expect(text).not.toContain('model: Claude Sonnet');
@@ -137,10 +150,8 @@ describe('an owned map key named after an inherited property', () => {
       const get = testIo(at.root, { kind: 'owner' });
       expect(await runConfig(['get', 'budgets.accounts.constructor.reserve'], get, sources), get.err).toBe(0);
       expect(get.out.trim()).toBe('20%');
-      const set = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'budgets.accounts.constructor.reserve', '10%', '--request'], set, sources), set.err).toBe(0);
-      const unset = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['unset', 'budgets.accounts.prototype.sources', '--request'], unset, sources), unset.err).toBe(0);
+      await requestedConfig(at, ['set', 'budgets.accounts.constructor.reserve', '10%'], sources);
+      await requestedConfig(at, ['unset', 'budgets.accounts.prototype.sources'], sources);
       const record = toValue(parseYaml(storedTeam(at.root, at.home)!.text));
       expect(getAt(record, ['budgets', 'accounts', 'constructor', 'reserve'])).toEqual({ found: true, value: '10%' });
       expect(getAt(record, ['budgets', 'accounts', 'prototype', 'sources'])).toEqual({ found: false });
@@ -239,10 +250,54 @@ describe('team config through an inherited name', () => {
     const at = place();
     await underRegistry(async () => {
       const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
-      const io = testIo(at.root, { kind: 'owner' });
-      expect(await runConfig(['set', 'project', 'other', '--request'], io, sources), io.err).toBe(0);
+      await requestedConfig(at, ['set', 'project', 'other'], sources);
       expect(storedTeam(at.root, at.home)!.text).toContain('\nproject: other\n');
       expect(at.store.prompts.length).toBe(1);
     });
   });
+});
+
+// A map set at a name the seats list does not hold adds a seat; a single value still needs
+// an existing item.
+test('a map at a new seat name adds the seat; a single value at a new name is refused', () => {
+  const record = toValue(parseYaml(TEAM));
+  const added = withValue(record, ['seats', 'argus'], { role: 'reviewer', cli: 'grok', launch: 'grok' });
+  expect(added.ok).toBe(true);
+  if (!added.ok) return;
+  expect(added.changed).toBe(true);
+  expect(getAt(added.root, ['seats', 'argus', 'name'])).toEqual({ found: true, value: 'argus' });
+  expect(getAt(added.root, ['seats', 'argus', 'cli'])).toEqual({ found: true, value: 'grok' });
+  // The original record is untouched.
+  expect(getAt(record, ['seats', 'argus']).found).toBe(false);
+
+  const scalar = withValue(record, ['seats', 'ghost'], 'grok');
+  expect(scalar.ok).toBe(false);
+  if (!scalar.ok) expect(scalar.why).toContain('has no item named "ghost"');
+
+  const mismatched = withValue(record, ['seats', 'argus'], { name: 'other', cli: 'grok' });
+  expect(mismatched.ok).toBe(false);
+  if (!mismatched.ok) expect(mismatched.why).toContain('is not "argus"');
+
+  const numbered = withValue(record, ['seats', '99'], { cli: 'grok' });
+  expect(numbered.ok).toBe(false);
+});
+
+test('adding a seat keeps the record\'s comments and writes the item after the last seat', () => {
+  const text = [
+    '# the team', 'project: demo', 'seats:', '  # the lead', '  - role: coordinator', '    name: lead', '    cli: claude-code', '    launch: claude',
+    '', '# rules below', 'rules:', '  - Be kind.', '',
+  ].join('\n');
+  const record = toValue(parseYaml(text));
+  const item = { role: 'reviewer', cli: 'grok', launch: 'grok' };
+  const changed = withValue(record, ['seats', 'argus'], item);
+  expect(changed.ok).toBe(true);
+  if (!changed.ok) return;
+  const edited = editedRecordText(text, ['seats', 'argus'], item, changed.root);
+  expect(edited.kept).toBe(true);
+  expect(edited.text).toContain('# the team');
+  expect(edited.text).toContain('  # the lead');
+  expect(edited.text).toContain('# rules below');
+  expect(edited.text.indexOf('name: argus')).toBeGreaterThan(edited.text.indexOf('name: lead'));
+  expect(edited.text.indexOf('name: argus')).toBeLessThan(edited.text.indexOf('# rules below'));
+  expect(JSON.stringify(toValue(parseYaml(edited.text)))).toBe(JSON.stringify(changed.root));
 });

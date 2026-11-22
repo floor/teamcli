@@ -1,3 +1,4 @@
+// Codex launches omit the obsolete OAuth refresh override after the dialog fix.
 // Builder-5's small follow-ups, independently: a codex launch line that spells its permission
 // options with an attached short value (`-aon-request`, `-sworkspace-write`) or a joined
 // `=` value names the same options as the spaced forms, so it receives no stray default and the
@@ -25,25 +26,25 @@ const launched = (line: string): string => launchCommand(codex, line, 'RULES.');
 describe('an attached or joined short permission value is the option it names', () => {
   test('both attached short values keep their own and receive no default pair', () => {
     expect(launched('codex -aon-request -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen',
     );
   });
 
   test('one attached short value suppresses only its own default pair', () => {
     expect(launched('codex -aon-request')).toBe(
-      'AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen',
     );
     expect(launched('codex -sworkspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen',
     );
   });
 
   test('a short value joined with = suppresses its own default pair', () => {
     expect(launched('codex -a=never')).toBe(
-      'AGENT_UNATTENDED=1 codex -a=never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -a=never -s danger-full-access --no-alt-screen',
     );
     expect(launched('codex -s=workspace-write')).toBe(
-      'AGENT_UNATTENDED=1 codex -s=workspace-write -a never --no-alt-screen -c features.mcp_oauth_refresh_coordination=false',
+      'AGENT_UNATTENDED=1 codex -s=workspace-write -a never --no-alt-screen',
     );
   });
 

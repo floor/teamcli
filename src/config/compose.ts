@@ -55,10 +55,10 @@ export type ConfigRow = {
   applies: 'restart-resume' | 'at-once';
 };
 
-/** The seat fields the composition reads. A built `Seat` satisfies it; a test may pass the six. */
+/** The seat fields the composition reads. A built `Seat` satisfies it; a test may pass the seven. */
 export type ConfigSeatInput = Pick<
   Seat,
-  'model' | 'modelFrom' | 'effort' | 'nickname' | 'human' | 'deliveryOrder'
+  'model' | 'modelFrom' | 'effort' | 'nickname' | 'human' | 'deliveryOrder' | 'desktopControl'
 >;
 
 /**
@@ -116,6 +116,9 @@ export function composeSeatConfig(
   seat: ConfigSeatInput,
   teamDeliveryOrder: readonly OrderWord[] | null,
   records: ConfigRecordValues = {},
+  /** The team file's own `desktop_control`, when it writes one: it stands under a seat's word
+   *  and every record, over the release default. */
+  teamDesktopControl: boolean | null = null,
 ): ConfigRow[] {
   // Every order is copied: the seat's word, the team's and the release default stay the
   // sources' own arrays, and one caller holding a row never changes what the next read says.
@@ -132,7 +135,13 @@ export function composeSeatConfig(
       return rowOf('delivery_order', [...DELIVERY_ORDER.fallback], 'default');
     })(),
     human: fileOrRecord('human', seat.human === true ? true : null, records.human),
+    desktop_control: fileOrRecord('desktop_control', seat.desktopControl ?? null, records.desktop_control),
   };
+  // The team file's own word stands under every record and the seat's own entry.
+  if (rows.desktop_control.origin === 'none' && teamDesktopControl !== null) {
+    rows.desktop_control = rowOf('desktop_control', teamDesktopControl, 'team default');
+  }
+  if (rows.desktop_control.origin === 'none') rows.desktop_control = rowOf('desktop_control', true, 'default');
   // `human` has a release default; a key no record and no file word reaches reads it, not unset.
   if (rows.human.origin === 'none') rows.human = rowOf('human', false, 'default');
   return CONFIG_KEYS.map((key) => rows[key]);

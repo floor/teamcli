@@ -129,9 +129,9 @@ const differences: [string, string, (launch: string) => { model: string; version
 
 const commands: [string, string, string, string][] = [
   ['claude-code', 'claude --model claude-opus-5-5 ', "Don't stop.\n- two", "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt 'Don'\\''t stop.\n- two'"],
-  // Codex seats pin one feature set on every launch: the shared background server refuses a
-  // front end whose settings differ.
-  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false'],
+  // Codex launches omit the obsolete OAuth refresh override after the dialog fix, and pin
+  // computer and browser use off.
+  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'],
   ['cursor', 'cursor-agent', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --force --sandbox disabled'],
   ['cursor', 'cursor-agent --model grok-4.7-high', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled'],
   ['antigravity', 'agy --model gemini-3.8-flash-high', 'Rules.', 'AGENT_UNATTENDED=1 agy --model gemini-3.8-flash-high --dangerously-skip-permissions'],
@@ -184,6 +184,59 @@ describe('launch data through the profile files', () => {
       same(`${launch} on main`, read(launch), before);
       same(`${launch} now`, profile?.modelOf(launch) ?? null, after);
     }
+  });
+});
+
+describe('Grok permission selectors', () => {
+  function command(line: string): string {
+    const profile = profileFor('grok');
+    if (!profile) throw new Error('grok has no profile');
+    return launchCommand(profile, line, 'Rules.');
+  }
+
+  test('always-approve keeps its mode without adding auto, and the folder is trusted', () => {
+    const result = command('grok --always-approve --model grok-4.7 --no-subagents');
+    expect(result).toContain('--always-approve');
+    expect(result).not.toContain('--permission-mode');
+    expect(result.match(/--trust/g)).toHaveLength(1);
+  });
+
+  test.each(['auto', 'dontAsk'])('an explicit permission-mode %s keeps its value', (mode) => {
+    const result = command(`grok --permission-mode ${mode}`);
+    expect(result.match(/--permission-mode/g)).toHaveLength(1);
+    expect(result).toContain(`--permission-mode ${mode}`);
+    expect(result).not.toContain('--always-approve');
+  });
+
+  test('a joined permission-mode keeps its value', () => {
+    const result = command('grok --permission-mode=dontAsk');
+    expect(result.match(/--permission-mode/g)).toHaveLength(1);
+    expect(result).not.toContain('--permission-mode auto');
+  });
+
+  test('quoted flag names and wrapper scripts preserve an explicit choice', () => {
+    for (const line of ['grok "--always-approve"', 'zsh -lc "grok --always-approve"']) {
+      expect(command(line)).not.toContain('--permission-mode');
+    }
+  });
+
+  test('a flag mentioned inside rules does not select the permission mode', () => {
+    expect(command("grok --rules 'Never select --always-approve'"))
+      .toContain('--permission-mode auto');
+  });
+
+  test('no permission selector gets the auto default, and the folder is trusted', () => {
+    const result = command('grok');
+    expect(result).toContain('--permission-mode auto');
+    expect(result).toContain('--trust');
+  });
+
+  test('explicit permission-mode also suppresses an always-approve profile default', () => {
+    const profile = profileFor('grok');
+    if (!profile) throw new Error('grok has no profile');
+    const result = launchCommand({ ...profile, unattended: ['--always-approve'] }, 'grok --permission-mode dontAsk', 'Rules.');
+    expect(result).not.toContain('--always-approve');
+    expect(result).toContain('--permission-mode dontAsk');
   });
 });
 

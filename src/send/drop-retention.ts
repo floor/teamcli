@@ -27,21 +27,11 @@
 // 4. Within each family, the record and non-receipt sidecars move first and the read/replied
 //    receipts move last. If the pass stops at a slice boundary or fails on a later family, every
 //    family that left the live folder is recorded in a signed manifest and named in the report.
-// 5. `.unread.json` stays in the live seat folder: unread ids stay untouched, and any stale entry
-//    naming a drop that was just archived is pruned atomically.
 import { createHash, type KeyObject } from 'node:crypto';
-import {
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  lstatSync,
-  opendirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  writeSync,
-} from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, opendirSync, readdirSync, readFileSync } from 'node:fs';
+import { fchmodSync, openSync, writeSync } from '../host/guarded-fs.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+import { openWrites } from '../host/guarded-fs.ts';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { SweepSlices } from '../daemon/fallback-sweep.ts';
@@ -64,9 +54,14 @@ import {
   type ReceiptStatus,
   type RecordPayload,
 } from './record.ts';
+import { LEGACY_TREE, mailTreeIn } from '../queue/mail-tree.ts';
 
 export const DROP_ARCHIVE_DOMAIN = 'teamcli-drop-archive-v1\0';
 export const DROP_ARCHIVE_DIR = '.archive';
+
+/** The daily inbox-archive run's file at the top of send-drops. Named here, not imported, so the
+ *  store module does not load the daemon's chores; inbox-archive.ts uses this one name. */
+export const INBOX_ARCHIVE_RUN_FILE = '.drops-archive-run.json';
 
 /** Default steady-state limit per pass, matching `FALLBACK_STORE_PASS_LIMIT`. */
 export const DROP_ARCHIVE_PASS_LIMIT = 256;
@@ -88,6 +83,9 @@ const AT_REMOVEDIR = process.platform === 'linux' ? 0x200 : 0x0080;
 
 const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const WORK_PREFIX = 'work-';
+
+/** How many skipped entries one pass names before it only counts them. */
+const SKIP_DETAILS = 20;
 
 /** Sidecars moved after the message record and before the read/replied receipts. */
 const PRE_RECEIPT_SUFFIXES: readonly string[] = [
@@ -188,6 +186,8 @@ export type DropRetirementReport = {
   scanned: number;
   stayed: number;
   refused: string | null;
+  /** Entries the pass did not know and left where they were, each said once by the caller. */
+  skipped: string[];
 };
 
 /** Shape of `bun:ffi` used when running under Bun, so `tsc -p tsconfig.build.json` compiles without Bun types. */
@@ -375,12 +375,31 @@ function loadNodeDirOps(req: NodeRequire): RelativeDirOps {
  * Returns the relative directory-descriptor operations for the current runtime (`bun:ffi` or
  * `node:ffi`), or `null` when unavailable.
  */
+/** The operations behind the warm send host's effect guard (review round 1, finding 1): every
+ *  change through a directory descriptor passes `hostedCommit` first; an `openat` passes it only
+ *  when its flags can change a file. A no-op outside the host. */
+function guardedDirOps(raw: RelativeDirOps): RelativeDirOps {
+  const out: RelativeDirOps = {
+    openat: (dirfd, name, flags, mode) => {
+      if (openWrites(flags)) hostedCommit('ffi openat');
+      return raw.openat(dirfd, name, flags, mode);
+    },
+    mkdirat: (dirfd, name, mode) => { hostedCommit('ffi mkdirat'); return raw.mkdirat(dirfd, name, mode); },
+    renameatExcl: (a, b, c, d) => { hostedCommit('ffi renameat'); return raw.renameatExcl(a, b, c, d); },
+    renameatReplace: (a, b, c, d) => { hostedCommit('ffi renameat'); return raw.renameatReplace(a, b, c, d); },
+    unlinkat: (dirfd, name) => { hostedCommit('ffi unlinkat'); return raw.unlinkat(dirfd, name); },
+  };
+  const rmdirat = raw.rmdirat;
+  if (rmdirat !== undefined) out.rmdirat = (dirfd, name) => { hostedCommit('ffi rmdirat'); return rmdirat(dirfd, name); };
+  return out;
+}
+
 export function getRelativeDirOps(): RelativeDirOps | null {
   if (cachedDirOps !== undefined) return cachedDirOps;
   const req = createRequire(import.meta.url);
   try {
-    cachedDirOps =
-      process.versions.bun !== undefined ? loadBunDirOps(req) : loadNodeDirOps(req);
+    const raw = process.versions.bun !== undefined ? loadBunDirOps(req) : loadNodeDirOps(req);
+    cachedDirOps = raw === null ? null : guardedDirOps(raw);
   } catch {
     cachedDirOps = null;
   }
@@ -920,9 +939,40 @@ export function verifyDropArchive(raw: unknown, key: KeyObject): DropArchivePayl
   return payload as unknown as DropArchivePayload;
 }
 
+/** The fixed names TeamCLI writes in a seat's drop folder that are not a message's family, each
+ *  from its writer: the inbox listener (src/mcp/inbox.ts LISTENER_FILE), the unread hint an
+ *  earlier build wrote (`.unread.json`, no longer written), the wake retry's line record (src/watch/unread.ts
+ *  `wakeLinesPath`), the stuck-episode marker (src/watch/mail-pass.ts STUCK_MARKER), and
+ *  Finder's folder file. test/drop-retention.test.ts holds this list to the writers. */
+export const SEAT_DROP_FIXED_FILES: readonly string[] = ['.inbox-listener', '.unread.json', '.wake-lines.json', '.stuck', '.DS_Store'];
+
+/** Sidecars other movers own: a message carrying one is left whole for them, silently. `team
+ *  ack`'s note (src/send/inbox-retention.ts `ackNotePath`, moved by inbox retention into the
+ *  seat's month archive), a webhook post in flight and done (src/bus/webhook.ts), and the unread
+ *  wake's lead episode (src/watch/unread.ts). They are never taken as this pass's sidecars: a
+ *  record whose own name ends so would otherwise be moved as another's. */
+export const SEAT_DROP_LEFT_SUFFIXES: readonly string[] = ['.ack.json', '.posting', '.posted', '.lead-episode'];
+
+/** Folders TeamCLI keeps in a seat's drop folder: the month archive inbox retention writes
+ *  (src/send/drop-folder.ts DROP_MONTH_ARCHIVE). Never walked or moved here. */
+export const SEAT_DROP_KNOWN_FOLDERS: readonly string[] = ['archive'];
+
+/** Folder names an earlier build left in seat drop folders: the quarantine of plain-text drops
+ *  it could not sign (`legacy-unsigned-<YYYY-MM-DD>`). Never walked or moved here. */
+export const SEAT_DROP_LEGACY_FOLDER = /^legacy-unsigned-\d{4}-\d{2}-\d{2}$/;
+
+/** Record names the daemon's own notices use whose length can exceed a record name here: the
+ *  blocked-episode notice (src/commands/watch.ts, `blocked-episode-<seat>-<…>`). Such a record
+ *  and its sidecars are left whole, silently; the notice's own retention is its sender's. */
+export const SEAT_DROP_LEFT_PREFIXES: readonly string[] = ['blocked-episode-'];
+
+/** Entries TeamCLI keeps in a session's drop folder beside the seats: a client's own inbox
+ *  (src/client/inbox.ts, `.clients/<client>`), and Finder's folder file. Never walked here. */
+export const SESSION_DROP_KNOWN_ENTRIES: readonly string[] = ['.clients', '.DS_Store'];
+
 /** Whether `name` is an expected regular file name inside `.agents/send-drops/<session>/<seat>/`. */
 function isExpectedSeatDropFile(name: string): boolean {
-  if (name === '.inbox-listener' || name === '.unread.json') return true;
+  if (SEAT_DROP_FIXED_FILES.includes(name)) return true;
   if (UNREAD_TEMP_NAME.test(name) || RESERVE_TEMP_NAME.test(name)) return true;
   if (!name.includes('.')) return RECORD_NAME.test(name);
   const dot = name.indexOf('.');
@@ -1088,62 +1138,6 @@ type CandidateFamily = {
   newestMs: number;
 };
 
-/** Removes archived message ids from `.unread.json` in `seatHeld` while keeping all unread ids intact. */
-function pruneArchivedFromUnreadHint(
-  atFfi: RelativeDirOps,
-  baseHeld: HeldDir,
-  seatHeld: HeldDir,
-  archivedIds: ReadonlySet<string>,
-): string | null {
-  if (archivedIds.size === 0) return null;
-  const chainProblem = verifyHeldDirChain(atFfi, baseHeld, seatHeld);
-  if (chainProblem !== null) return chainProblem;
-  const hintPath = join(seatHeld.path, '.unread.json');
-  const held = heldAt(hintPath);
-  if (held.kind === 'missing') return null;
-  if (held.kind === 'link') return `${hintPath}: a symbolic link was found and not followed`;
-  if (held.kind !== 'file') return `${hintPath}: unexpected ${held.kind} at .unread.json`;
-  if (process.getuid !== undefined && held.uid !== process.getuid()) {
-    return `${hintPath}: another user's file`;
-  }
-  let parsed: unknown;
-  try {
-    const data = readRegularNoFollowInDir(atFfi, seatHeld, '.unread.json');
-    parsed = JSON.parse(data.toString('utf8')) as unknown;
-  } catch {
-    // An unreadable hint is left untouched as it stands.
-    return null;
-  }
-  if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.unread)) return null;
-  const unread = parsed.unread as Record<string, unknown>;
-  const nextUnread: Record<string, { entries: { id: string; at: string }[] }> = {};
-  let changed = false;
-  for (const [peer, rawEntry] of Object.entries(unread)) {
-    if (!isRecord(rawEntry) || !Array.isArray(rawEntry.entries)) continue;
-    const kept: { id: string; at: string }[] = [];
-    for (const item of rawEntry.entries) {
-      if (!isRecord(item) || typeof item.id !== 'string' || typeof item.at !== 'string') continue;
-      if (archivedIds.has(item.id)) {
-        changed = true;
-        continue;
-      }
-      kept.push({ id: item.id, at: item.at });
-    }
-    if (kept.length > 0) nextUnread[peer] = { entries: kept };
-  }
-  if (!changed) return null;
-  const tmpName = `.unread.json.${String(process.pid)}.tmp`;
-  const bytes = Buffer.from(`${JSON.stringify({ v: 1, unread: nextUnread }, null, 2)}\n`, 'utf8');
-  const wrote = writeNewFileInHeldDir(atFfi, baseHeld, seatHeld, tmpName, bytes);
-  if (!wrote.ok) return null;
-  const moved = atFfi.renameatReplace(seatHeld.fd, tmpName, seatHeld.fd, '.unread.json');
-  if (!moved.ok) {
-    // Clean up the temporary file and leave the existing hint intact if the atomic swap failed.
-    unlinkInHeldDir(atFfi, seatHeld, tmpName);
-  }
-  return null;
-}
-
 function writeArchiveManifestInHeldDir(
   atFfi: RelativeDirOps,
   baseHeld: HeldDir,
@@ -1231,7 +1225,6 @@ export function* dropRetirementSteps(
   const archived: DropArchiveFamily[] = [];
   const reclaimed: DropArchiveFamily[] = [];
   const movedRecords: { srcHeld: HeldDir; destHeld: HeldDir; files: string[] }[] = [];
-  const archivedBySeatDir = new Map<string, { seatHeld: HeldDir; ids: Set<string> }>();
   let manifestPath: string | null = null;
   let scanned = 0;
   let stayed = 0;
@@ -1243,6 +1236,19 @@ export function* dropRetirementSteps(
 
   const atFfi = input.atFfi !== undefined ? input.atFfi : getRelativeDirOps();
 
+  // At most `SKIP_DETAILS` entries are named; the rest are counted.
+  const skipped: string[] = [];
+  const skippedSet = new Set<string>();
+  let skippedMore = 0;
+  const skip = (why: string): void => {
+    if (skippedSet.has(why)) return;
+    if (skipped.length >= SKIP_DETAILS) {
+      skippedMore += 1;
+      return;
+    }
+    skippedSet.add(why);
+    skipped.push(why);
+  };
   const snapshot = (): DropRetirementReport => {
     const report: DropRetirementReport = {
       at: atIso,
@@ -1252,6 +1258,7 @@ export function* dropRetirementSteps(
       scanned,
       stayed,
       refused,
+      skipped: skippedMore === 0 ? [...skipped] : [...skipped, `and ${String(skippedMore)} more`],
     };
     if (stateSink !== undefined) stateSink.report = report;
     return report;
@@ -1279,7 +1286,6 @@ export function* dropRetirementSteps(
     }
     movedRecords.length = 0;
     archived.length = 0;
-    archivedBySeatDir.clear();
   };
 
   const finalizeMoved = (): void => {
@@ -1299,7 +1305,7 @@ export function* dropRetirementSteps(
       return;
     }
 
-    // Before writing `.unread.json` updates or the signed manifest, verify that `.archive/<date>`
+    // Before writing the signed manifest, verify that `.archive/<date>`
     // and every moved family's destination folder still resolve inside `send-drops` without any
     // symbolic link. If any archive parent was swapped for a link, roll back all moved files so no
     // family escapes or sits without a manifest.
@@ -1318,11 +1324,6 @@ export function* dropRetirementSteps(
         snapshot();
         return;
       }
-    }
-
-    for (const { seatHeld, ids } of archivedBySeatDir.values()) {
-      const problem = pruneArchivedFromUnreadHint(atFfi, sendDropsHeld, seatHeld, ids);
-      if (problem !== null && refused === null) refused = problem;
     }
 
     const wrote = writeArchiveManifestInHeldDir(
@@ -1354,19 +1355,21 @@ export function* dropRetirementSteps(
     const agentsProblem = folderProblemAt(agentsDir);
     if (agentsProblem !== null) return fail(`${agentsDir}: ${agentsProblem}`);
 
-    const sendDropsDir = join(agentsDir, 'send-drops');
+    const sendDropsDir = mailTreeIn(agentsDir);
     if (heldAt(sendDropsDir).kind === 'missing') return snapshot();
     const sendDropsProblem = folderProblemAt(sendDropsDir);
     if (sendDropsProblem !== null) return fail(`${sendDropsDir}: ${sendDropsProblem}`);
 
     if (atFfi === null) {
-      return fail('relative directory-descriptor moves (openat/renameat) are unavailable on this runtime');
+      return fail(process.versions.bun === undefined
+        ? 'relative directory-descriptor moves (openat/renameat) are unavailable: this Node needs --experimental-ffi'
+        : 'relative directory-descriptor moves (openat/renameat) are unavailable on this runtime');
     }
 
     const agentsStep = openRootDirNoFollow(agentsDir);
     if (!agentsStep.ok) return fail(agentsStep.reason);
     openedFds.push(agentsStep.fd);
-    const sendDropsStep = openChildDirNoFollow(atFfi, agentsStep.fd, sendDropsDir, 'send-drops');
+    const sendDropsStep = openChildDirNoFollow(atFfi, agentsStep.fd, sendDropsDir, LEGACY_TREE);
     if (!sendDropsStep.ok) return fail(sendDropsStep.reason);
     openedFds.push(sendDropsStep.fd);
     sendDropsHeld = {
@@ -1417,16 +1420,26 @@ export function* dropRetirementSteps(
     for (const session of sessionEntries) {
       yield;
       if (session === DROP_ARCHIVE_DIR) continue;
+      // Finder's folder file is no team entry: it never stops the archive (teamcli, 2026-11-15).
+      if (session === '.DS_Store') continue;
+      // The daemon's daily inbox-archive run keeps its day and totals here (src/daemon/chores/inbox-archive.ts).
+      if (session === INBOX_ARCHIVE_RUN_FILE) continue;
       const sessionDir = join(sendDropsDir, session);
-      if (!insideSendDrops(sendDropsDir, sessionDir) || !RECORD_NAME.test(session)) {
-        return fail(`${sessionDir}: unexpected entry in send-drops`);
+      if (!insideSendDrops(sendDropsDir, sessionDir)) {
+        return fail(`${sessionDir}: path escapes send-drops`);
+      }
+      if (!RECORD_NAME.test(session)) {
+        skip(`${sessionDir}: unexpected entry in send-drops`);
+        continue;
       }
       const sessionHeld = heldAt(sessionDir);
       if (sessionHeld.kind === 'link') {
-        return fail(`${sessionDir}: a symbolic link was found and not followed`);
+        skip(`${sessionDir}: a symbolic link was found and not followed`);
+        continue;
       }
       if (sessionHeld.kind !== 'folder') {
-        return fail(`${sessionDir}: unexpected ${sessionHeld.kind} in send-drops`);
+        skip(`${sessionDir}: unexpected ${sessionHeld.kind} in send-drops`);
+        continue;
       }
       const sessionProblem = folderProblemAt(sessionDir);
       if (sessionProblem !== null) return fail(`${sessionDir}: ${sessionProblem}`);
@@ -1440,16 +1453,24 @@ export function* dropRetirementSteps(
 
       for (const seat of seatEntries) {
         yield;
+        // A client's own inbox and Finder's folder file are known and left alone.
+        if (SESSION_DROP_KNOWN_ENTRIES.includes(seat)) continue;
         const seatDir = join(sessionDir, seat);
-        if (!insideSendDrops(sendDropsDir, seatDir) || !RECORD_NAME.test(seat)) {
-          return fail(`${seatDir}: unexpected entry in session drop folder`);
+        if (!insideSendDrops(sendDropsDir, seatDir)) {
+          return fail(`${seatDir}: path escapes send-drops`);
+        }
+        if (!RECORD_NAME.test(seat)) {
+          skip(`${seatDir}: unexpected entry in session drop folder`);
+          continue;
         }
         const seatHeldCheck = heldAt(seatDir);
         if (seatHeldCheck.kind === 'link') {
-          return fail(`${seatDir}: a symbolic link was found and not followed`);
+          skip(`${seatDir}: a symbolic link was found and not followed`);
+          continue;
         }
         if (seatHeldCheck.kind !== 'folder') {
-          return fail(`${seatDir}: unexpected ${seatHeldCheck.kind} in session drop folder`);
+          skip(`${seatDir}: unexpected ${seatHeldCheck.kind} in session drop folder`);
+          continue;
         }
         const seatProblem = folderProblemAt(seatDir);
         if (seatProblem !== null) return fail(`${seatDir}: ${seatProblem}`);
@@ -1467,6 +1488,16 @@ export function* dropRetirementSteps(
 
         const fileSet = new Set<string>();
         const fallbackNoteIds = new Set<string>();
+        // An entry the pass does not know is skipped and said, never moved: the message it may
+        // belong to (the name before its first dot) stays where it is with all its files, and the
+        // rest of the team's mail is archived as usual. Before 2026-11-15 one such entry switched
+        // archiving off for the whole team.
+        const heldBack = new Set<string>();
+        const holdBack = (name: string, why: string): void => {
+          skip(`${join(seatDir, name)}: ${why}`);
+          const dot = name.indexOf('.');
+          heldBack.add(dot > 0 ? name.slice(0, dot) : name);
+        };
         for (const name of fileNames) {
           yield;
           const filePath = join(seatDir, name);
@@ -1474,17 +1505,33 @@ export function* dropRetirementSteps(
             return fail(`${filePath}: path escapes send-drops`);
           }
           const held = heldAt(filePath);
+          if (held.kind === 'folder' && (SEAT_DROP_KNOWN_FOLDERS.includes(name) || SEAT_DROP_LEGACY_FOLDER.test(name))) continue;
+          if (SEAT_DROP_LEFT_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+            const dot = name.indexOf('.');
+            heldBack.add(dot > 0 ? name.slice(0, dot) : name);
+            continue;
+          }
           if (held.kind === 'link') {
-            return fail(`${filePath}: a symbolic link was found and not followed`);
+            holdBack(name, 'a symbolic link was found and not followed');
+            continue;
           }
           if (held.kind !== 'file') {
-            return fail(`${filePath}: unexpected ${held.kind} in seat drop folder`);
+            holdBack(name, `unexpected ${held.kind} in seat drop folder`);
+            continue;
           }
           if (process.getuid !== undefined && held.uid !== process.getuid()) {
-            return fail(`${filePath}: another user's file`);
+            holdBack(name, "another user's file");
+            continue;
+          }
+          const leftFor = SEAT_DROP_LEFT_SUFFIXES.find((suffix) => name.endsWith(suffix) && name.length > suffix.length);
+          if (leftFor !== undefined) {
+            // Known, and another mover's: the message stays whole, and nothing is said.
+            heldBack.add(name.slice(0, name.length - leftFor.length));
+            continue;
           }
           if (!isExpectedSeatDropFile(name)) {
-            return fail(`${filePath}: unexpected file in seat drop folder`);
+            holdBack(name, 'unexpected file in seat drop folder');
+            continue;
           }
           fileSet.add(name);
           const dot = name.indexOf('.');
@@ -1500,6 +1547,11 @@ export function* dropRetirementSteps(
           candidateCheckCount += 1;
           if (candidateCheckCount % DIR_SCAN_CHUNK === 0) yield;
           if (name.includes('.') || name.startsWith(WORK_PREFIX) || !RECORD_NAME.test(name)) continue;
+          // Only an accepted regular file is a candidate: a skipped entry (a folder such as the
+          // month archive, a link, another user's file) never is.
+          if (!fileSet.has(name)) continue;
+          // A message with an entry the pass does not know, or another mover's sidecar, stays whole.
+          if (heldBack.has(name)) continue;
           yield;
           scanned += 1;
           let recordData: Buffer;
@@ -1681,8 +1733,7 @@ export function* dropRetirementSteps(
 
       // Phase 3: Move each family relative to the held `seatHeld.fd` and `destHeld.fd` descriptors
       // (record and non-receipt sidecars first, receipts last). If the pass stops at a slice boundary
-      // or fails on a later family, `finalizeMoved()` in `finally` updates `.unread.json` and writes
-      // the signed manifest for every family that completed its move.
+      // or fails on a later family, `finalizeMoved()` in `finally` writes the signed manifest for every family that completed its move.
       for (const item of prepared) {
         yield;
         const { candidate, destHeld, hashed } = item;
@@ -1732,12 +1783,6 @@ export function* dropRetirementSteps(
           id: candidate.id,
           files: movedFiles,
         });
-        let seatEntry = archivedBySeatDir.get(candidate.seatHeld.path);
-        if (seatEntry === undefined) {
-          seatEntry = { seatHeld: candidate.seatHeld, ids: new Set<string>() };
-          archivedBySeatDir.set(candidate.seatHeld.path, seatEntry);
-        }
-        seatEntry.ids.add(candidate.id);
         snapshot();
       }
 
@@ -2206,6 +2251,7 @@ export async function retireDropsSliced(
       scanned: 0,
       stayed: 0,
       refused: null,
+      skipped: [],
     },
   };
   const steps = dropRetirementSteps(input, stateSink);

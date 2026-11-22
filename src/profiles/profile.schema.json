@@ -25,6 +25,15 @@
       "description": "optional: the one feature set every seat's launch pins, as name=true or name=false; each pair rides the launch as a trailing -c features.<pair>, so the CLI's last-wins config rule makes it the seat's effective value",
       "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+=(true|false)$" }
     },
+    "desktop_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "optional: what a seat's desktop_control setting changes on the launch; features names the pins of features a seat with desktop control on does not carry, and config is the -c pairs a seat with it off carries (computer and browser MCP servers and plugins off)",
+      "properties": {
+        "features": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" } },
+        "config": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "rules": {
       "oneOf": [
         { "const": "first-message" },
@@ -33,7 +42,10 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["option"],
-          "properties": { "option": { "type": "string", "minLength": 1 } }
+          "properties": {
+            "option": { "type": "string", "minLength": 1 },
+            "file_option": { "type": "string", "minLength": 1, "description": "optional: the option that names a file holding the rules; the launch names a file under TeamCLI's machine folder instead of carrying the whole text" }
+          }
         },
         {
           "type": "object",
@@ -185,6 +197,10 @@
       "type": "integer",
       "minimum": 150,
       "description": "optional: the space in milliseconds between the typed wake's two opening reads, never below 150 (one host read on a loaded host); absent, the measured default of 150; refused unless typed_wake is declared"
+    },
+    "typed_wake_max": {
+      "type": "integer", "minimum": 1,
+      "description": "optional: the longest typed wake in bytes this CLI's box was measured to read back, at most 4096; absent, 200; refused unless typed_wake is declared"
     },
     "wake": {
       "enum": ["agent-prompt"],

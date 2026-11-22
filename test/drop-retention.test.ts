@@ -4,12 +4,13 @@
 // 2. Never follows a symbolic link, never leaves `<root>/.agents/send-drops`, and refuses the whole
 //    pass on any unexpected file type or name before moving anything.
 // 3. Runs only in the chores child, sliced, never on the daemon loop.
-// 4. Keeps `.unread.json` consistent and proves an unread drop is never moved.
+// 4. Leaves a `.unread.json` an earlier build wrote as it is and proves an unread drop is never moved.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,7 +23,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createReconcileState, reconcilePass } from '../src/bus/reconcile.ts';
 import { listDrops, runDrops } from '../src/commands/drops.ts';
 import { listUnackedMessages, plantRecord, recordDir, runMessages } from '../src/commands/messages.ts';
@@ -222,7 +223,7 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     ]);
   });
 
-  test('.unread.json stays consistent and an unread drop is never moved', async () => {
+  test('a leftover .unread.json is left as it is and an unread drop is never moved', async () => {
     plant('worker', READ_ID_1, OLD_ISO);
     markRead('worker', READ_ID_1, OLD_ISO);
     ageFamily('worker', READ_ID_1, OLD);
@@ -251,6 +252,7 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
       { mode: 0o600 },
     );
     utimesSync(unreadPath, OLD, OLD);
+    const hintBefore = readFileSync(unreadPath, 'utf8');
 
     const report = await retireDropsSliced({
       root,
@@ -267,13 +269,8 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     expect(existsSync(livePath('worker', UNREAD_ID))).toBe(true);
     expect(existsSync(join(archiveSeatDir('worker'), UNREAD_ID))).toBe(false);
 
-    // .unread.json remains in the live seat folder, retains UNREAD_ID, and drops the archived READ_ID_1.
-    expect(existsSync(unreadPath)).toBe(true);
-    const updatedHint = JSON.parse(readFileSync(unreadPath, 'utf8')) as {
-      v: number;
-      unread: Record<string, { entries: { id: string; at: string }[] }>;
-    };
-    expect(updatedHint.unread.lead?.entries).toEqual([{ id: UNREAD_ID, at: OLD_ISO }]);
+    // The leftover hint stays in the live seat folder, unread and unwritten.
+    expect(readFileSync(unreadPath, 'utf8')).toBe(hintBefore);
   });
 
   test('general briefs, pending/taken drops, active fallback markers, and recent drops stay', async () => {
@@ -349,28 +346,6 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     markRead('worker', READ_ID_2, OLD_ISO);
     plant('worker', UNREAD_ID, OLD_ISO);
 
-    const unreadPath = livePath('worker', '.unread.json');
-    writeFileSync(
-      unreadPath,
-      `${JSON.stringify(
-        {
-          v: 1,
-          unread: {
-            lead: {
-              entries: [
-                { id: UNREAD_ID, at: OLD_ISO },
-                { id: READ_ID_1, at: OLD_ISO },
-                { id: READ_ID_2, at: OLD_ISO },
-              ],
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      { mode: 0o600 },
-    );
-
     let tickA = 0;
     let stopNow = false;
     const stopReport = await retireDropsSliced({
@@ -411,10 +386,6 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
     expect(stopManifest).not.toBeNull();
     expect(stopManifest?.families.map((f) => f.id)).toEqual([READ_ID_1]);
 
-    const hintAfterStop = JSON.parse(readFileSync(unreadPath, 'utf8')) as {
-      unread: Record<string, { entries: { id: string; at: string }[] }>;
-    };
-    expect(hintAfterStop.unread.lead?.entries.map((e) => e.id)).toEqual([UNREAD_ID, READ_ID_2]);
 
     // Scene B: pass fails on a later family (READ_ID_3 fails on its receipt rename after READ_ID_2 moved).
     const readId3 = '11111111-2222-4333-8444-555555555553';
@@ -466,7 +437,7 @@ describe('slice 1: archives retired drops into send-drops/.archive with a signed
 });
 
 describe('condition 2: never follow a link, never leave send-drops, and refuse whole pass on unexpected file types', () => {
-  test('refuses the whole pass when a symlink exists inside a seat folder', async () => {
+  test('a symlink inside a seat folder is never followed: it and its message stay, and the rest is archived', async () => {
     plant('worker', READ_ID_1, OLD_ISO);
     markRead('worker', READ_ID_1, OLD_ISO);
     ageFamily('worker', READ_ID_1, OLD);
@@ -483,11 +454,12 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
       slices: defaultSlices(),
     });
 
-    expect(report.refused).toContain('symbolic link');
-    expect(report.archived).toEqual([]);
-    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
-    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
-    expect(existsSync(join(root, '.agents', 'send-drops', DROP_ARCHIVE_DIR))).toBe(false);
+    expect(report.refused).toBeNull();
+    expect(report.skipped.join('\n')).toContain('symbolic link');
+    // The link and its name's message stay; the unrelated read message is archived.
+    expect(lstatSync(livePath('worker', READ_ID_2)).isSymbolicLink()).toBe(true);
+    expect(readFileSync(outside, 'utf8')).toBe('secret\n');
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
   });
 
   test('refuses the whole pass when the archive folder is a symlink pointing outside send-drops', async () => {
@@ -513,7 +485,7 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
     expect(readdirSync(outsideDir)).toEqual([]);
   });
 
-  test('refuses the whole pass when an unexpected file or subdirectory sits in a seat folder', async () => {
+  test('an unexpected file or subdirectory in a seat folder is left and said, and the rest is archived', async () => {
     plant('worker', READ_ID_1, OLD_ISO);
     markRead('worker', READ_ID_1, OLD_ISO);
     ageFamily('worker', READ_ID_1, OLD);
@@ -529,10 +501,15 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
       at: NOW,
       slices: defaultSlices(),
     });
-    expect(report1.refused).toContain('unexpected');
-    expect(report1.archived).toEqual([]);
-    expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(report1.refused).toBeNull();
+    expect(report1.skipped.join('\n')).toContain('unexpected file');
+    expect(existsSync(unexpectedFile)).toBe(true);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
     rmSync(unexpectedFile);
+    // A second read message, and an unexpected folder beside it.
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    ageFamily('worker', READ_ID_2, OLD);
 
     // Plant an unexpected nested directory in the seat drop folder.
     const unexpectedDir = livePath('worker', 'nested-dir');
@@ -544,9 +521,92 @@ describe('condition 2: never follow a link, never leave send-drops, and refuse w
       at: NOW,
       slices: defaultSlices(),
     });
-    expect(report2.refused).toContain('unexpected');
-    expect(report2.archived).toEqual([]);
+    expect(report2.refused).toBeNull();
+    expect(report2.skipped.join('\n')).toContain('unexpected folder');
+    expect(existsSync(unexpectedDir)).toBe(true);
+    expect(existsSync(livePath('worker', READ_ID_2))).toBe(false);
+  });
+
+  test('an unknown sidecar keeps its whole message in place', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    writeFileSync(livePath('worker', `${READ_ID_1}.mystery`), 'x');
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
     expect(existsSync(livePath('worker', READ_ID_1))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_1}.read.json`))).toBe(true);
+  });
+
+  test('a seat\'s month archive folder is never a candidate, and an acknowledged message is left whole for inbox retention', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    plant('worker', READ_ID_2, OLD_ISO);
+    markRead('worker', READ_ID_2, OLD_ISO);
+    ageFamily('worker', READ_ID_2, OLD);
+    writeFileSync(livePath('worker', `${READ_ID_2}.ack.json`), '{}');
+    mkdirSync(livePath('worker', join('archive', '2026-11')), { recursive: true });
+    writeFileSync(livePath('worker', join('archive', '2026-11', 'kept')), 'x');
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
+    expect(report.skipped).toEqual([]);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+    expect(existsSync(livePath('worker', READ_ID_2))).toBe(true);
+    expect(existsSync(livePath('worker', `${READ_ID_2}.ack.json`))).toBe(true);
+    expect(existsSync(livePath('worker', join('archive', '2026-11', 'kept')))).toBe(true);
+  });
+
+  test('a daemon notice record and an earlier build\'s quarantine folder are left, silently', async () => {
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    const notice = `blocked-episode-worker-${'x'.repeat(90)}`;
+    writeFileSync(livePath('worker', notice), '{}');
+    writeFileSync(livePath('worker', `${notice}.channel-push.json`), '{}');
+    mkdirSync(livePath('worker', 'legacy-unsigned-2026-10-19'), { recursive: true });
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
+    expect(report.skipped).toEqual([]);
+    expect(existsSync(livePath('worker', notice))).toBe(true);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+  });
+
+  test('the known names are the ones their writers use', async () => {
+    const { SEAT_DROP_FIXED_FILES, SEAT_DROP_KNOWN_FOLDERS, SESSION_DROP_KNOWN_ENTRIES } = await import('../src/send/drop-retention.ts');
+    const { LISTENER_FILE } = await import('../src/mcp/inbox.ts');
+    const { STUCK_MARKER } = await import('../src/watch/mail-pass.ts');
+    const { wakeLinesPath } = await import('../src/watch/unread.ts');
+    const { DROP_MONTH_ARCHIVE } = await import('../src/send/drop-folder.ts');
+    const { ackNotePath } = await import('../src/send/inbox-retention.ts');
+    const { SEAT_DROP_LEFT_SUFFIXES } = await import('../src/send/drop-retention.ts');
+    expect(SEAT_DROP_FIXED_FILES).toContain(LISTENER_FILE);
+    expect(SEAT_DROP_FIXED_FILES).toContain(STUCK_MARKER);
+    expect(SEAT_DROP_FIXED_FILES).toContain(wakeLinesPath('/x').slice('/x/'.length));
+    expect(SEAT_DROP_KNOWN_FOLDERS).toContain(DROP_MONTH_ARCHIVE);
+    expect(SEAT_DROP_LEFT_SUFFIXES).toContain(ackNotePath('/x', 'id').slice('/x/id'.length));
+    expect(SESSION_DROP_KNOWN_ENTRIES).toContain('.clients');
+  });
+
+  test('archives past the entries a team writes beside the mail: a stuck marker, a client inbox and Finder\'s folder file', async () => {
+    // 2026-11-15: archiving was off on every root because the pass stopped on these, so read
+    // mail piled up and every chores pass walked thousands of files.
+    plant('worker', READ_ID_1, OLD_ISO);
+    markRead('worker', READ_ID_1, OLD_ISO);
+    ageFamily('worker', READ_ID_1, OLD);
+    writeFileSync(livePath('worker', '.stuck'), '{}');
+    writeFileSync(livePath('worker', '.DS_Store'), '');
+    const clientInbox = join(dirname(livePath('worker', 'x')), '..', '.clients', 'grok-bot');
+    mkdirSync(clientInbox, { recursive: true });
+    writeFileSync(join(clientInbox, 'note'), 'a client record');
+    writeFileSync(join(dirname(livePath('worker', 'x')), '..', '.DS_Store'), '');
+    const report = await retireDropsSliced({ root, home, team, at: NOW, slices: defaultSlices() });
+    expect(report.refused).toBeNull();
+    expect(report.archived.length).toBeGreaterThan(0);
+    expect(existsSync(livePath('worker', READ_ID_1))).toBe(false);
+    // The entries themselves are left where they are.
+    expect(existsSync(livePath('worker', '.stuck'))).toBe(true);
+    expect(existsSync(join(clientInbox, 'note'))).toBe(true);
   });
 
   test('refuses check-then-rename race when archive destination or manifest parent is swapped for a symlink mid-pass', async () => {

@@ -22,21 +22,8 @@
 // never done — a signed word means the path it says. The undo below is the move's own
 // inverse from the note, never automatic.
 import { createHash, randomBytes } from 'node:crypto';
-import {
-  chmodSync,
-  closeSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-  writeSync,
-  type Stats,
-} from 'node:fs';
+import { closeSync, lstatSync, readSync, readdirSync, readFileSync, type Stats } from 'node:fs';
+import { chmodSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { lobbyDir } from '../lobby/gate.ts';

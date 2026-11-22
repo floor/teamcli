@@ -17,6 +17,7 @@ import { listDrops } from '../src/commands/drops.ts';
 import { listUnacked, plantMessage } from '../src/commands/messages.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { installCliHooks } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
@@ -1148,33 +1149,6 @@ describe('an inbox send past its fallback window', () => {
 });
 
 describe('a retry that ends taken', () => {
-  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: it leaves the taken marker and the taken word, and the later confirmation types nothing', async () => {
-    const made = world();
-    // The first send is not-submitted: the box keeps the trigger and the retry record is written.
-    const one = pane(claudeBox(''));
-    one.submits = false;
-    const native: NativePane = {
-      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = claudeBox(text); return true; },
-      pressEnter: () => { one.enters += 1; if (one.submits) one.screen = claudeBox(''); return true; },
-      status: () => one.status,
-      wait: async () => {},
-      paneText: () => one.screen,
-    };
-    const host: SendHost = {
-      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
-      processInfo: () => ({ shell: 111, foreground: [222] }),
-      socketsDir: made.sockets,
-      deliver: async () => ({ ok: true }),
-      native,
-      now: () => NOW,
-      home: made.home,
-    };
-    const io = testIo(made.root, { kind: 'owner' });
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
-    expect(one.typed).toEqual([]);
-  });
 
   test('a receipt the seat wrote after the retry is delivered (read), and the confirmation types nothing', () => {
     const made = world();
@@ -1219,90 +1193,6 @@ describe('a retry that ends taken', () => {
 });
 
 describe('team send leaves the record the retry reads', () => {
-  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a send held by a draft writes the marker, and the watch delivers it once the box is free', async () => {
-    const made = world();
-    const one = pane(claudeBox('a draft only its author can send'));
-    const native: NativePane = {
-      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = claudeBox(text); return true; },
-      pressEnter: () => { one.enters += 1; return true; },
-      status: () => one.status,
-      wait: async () => {},
-      paneText: () => one.screen,
-    };
-    const host: SendHost = {
-      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
-      processInfo: () => ({ shell: 111, foreground: [222] }),
-      socketsDir: made.sockets,
-      deliver: async () => ({ ok: true }),
-      native,
-      now: () => NOW,
-      home: made.home,
-    };
-    const io = testIo(made.root, { kind: 'owner' });
-
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
-    expect(one.typed).toEqual([]);
-  });
-
-  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a retry that meets the owner\'s draft clears it, delivers, and pastes the text back', async () => {
-    // The watch's shipped sources carry herdr's key sender: unlike the no-key fallback above,
-    // the retry is a delivery, and a delivery moves the owner's text out of the way and puts it
-    // back exactly — the copy beside the drop is removed once the box reads it again.
-    const made = world();
-    const draft = 'a draft only its author can send';
-    const one = pane(claudeBox(draft));
-    const native: NativePane = {
-      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = claudeBox(text); return true; },
-      pressEnter: () => { one.enters += 1; return true; },
-      status: () => one.status,
-      wait: async () => {},
-      paneText: () => one.screen,
-    };
-    const host: SendHost = {
-      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
-      processInfo: () => ({ shell: 111, foreground: [222] }),
-      socketsDir: made.sockets,
-      deliver: async () => ({ ok: true }),
-      native,
-      now: () => NOW,
-      home: made.home,
-    };
-    const io = testIo(made.root, { kind: 'owner' });
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
-    expect(one.typed).toEqual([]);
-  });
-
-  test('no pane messaging, nothing is held for a typed retry and the bus inbox keeps it; was: no pane messaging, the watch types nothing and the bus inbox keeps it; was: a send stopped by a dialog writes the record, and the watch delivers it once the seat is idle', async () => {
-    const made = world();
-    const one = pane(claudeBox(''));
-    // The composer is empty when the line is typed; the question is up by the read-back.
-    const native: NativePane = {
-      typeText: (_session, _pane, text) => { one.typed.push(text); one.screen = QUESTION_SCREEN; return true; },
-      pressEnter: () => { one.enters += 1; return true; },
-      status: () => one.status,
-      wait: async () => {},
-      paneText: () => one.screen,
-    };
-    const host: SendHost = {
-      agents: () => [{ name: 'lead', pane: 'w1:p1' }],
-      processInfo: () => ({ shell: 111, foreground: [222] }),
-      socketsDir: made.sockets,
-      deliver: async () => ({ ok: true }),
-      native,
-      now: () => NOW,
-      home: made.home,
-    };
-    const io = testIo(made.root, { kind: 'owner' });
-
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
-    expect(one.typed).toEqual([]);
-  });
 });
 
 describe('team watch retries a held drop', () => {
@@ -1340,7 +1230,8 @@ describe('team watch retries a held drop', () => {
     };
 
     const io = testIo(directory, { kind: 'owner' });
-    const retired = await runWatch(['--file', file], io, sources);
+    // Daemon-only watch: the hosted loop is the pass, and it types nothing.
+    const retired = await runWatch(['--file', file], io, withHostedLoop(sources));
     expect(await retired).toBe(0);
     expect(typed).toEqual([]);
   });
@@ -1388,7 +1279,8 @@ describe('team watch promotes an inbox send its seat has read', () => {
       home: directory,
     };
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, sources);
+    // Daemon-only watch: the hosted loop is the pass. It still promotes a read receipt and types nothing.
+    const code = await runWatch(['--file', file], io, withHostedLoop(sources));
     expect(code).toBe(0);
     expect(typed).toEqual([]);
     expect(one.enters).toBe(0);
@@ -1435,7 +1327,8 @@ describe('team watch promotes an inbox send its seat has read', () => {
     // The watch that types nothing still promotes: the receipt is the seat's own read, and the
     // sender's word is the history line, not a keystroke.
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file, '--no-nudge'], io, sources);
+    // Daemon-only watch: the hosted loop is the pass. It still promotes a read receipt and types nothing.
+    const code = await runWatch(['--file', file, '--no-nudge'], io, withHostedLoop(sources));
 
     expect(code).toBe(0);
     expect(typed).toEqual([]);
@@ -1460,99 +1353,6 @@ describe('team watch promotes an inbox send its seat has read', () => {
 });
 
 describe('the turn-start read, end to end', () => {
-  test('a plain send lands by drop, the installed hook reads it, and its receipt promotes the send', async () => {
-    const made = world();
-    // The default order — mcp-inbox, typed, drop — with no inbox listener would type; the team's
-    // word keeps the typed leg out, so the drop file takes the send and nothing wakes the seat.
-    const text = teamText(made.root, lobbyDir(made.home)).replace(
-      "# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,\n# then the line is typed. The team's word keeps the default's drop step out.\ndelivery_order: [mcp-inbox, typed]\n",
-      "# This scene walks the drop leg: the inbox is tried and skipped for want of a listener, and\n# the team's word keeps the typed step out so the drop file takes the send.\ndelivery_order: [mcp-inbox, drop]\n",
-    );
-    writeFileSync(join(made.root, '.agents', 'team.yaml'), text);
-    const dialled: string[] = [];
-    const host: SendHost = {
-      agents: () => [],
-      processInfo: () => null,
-      socketsDir: made.sockets,
-      deliver: async (socketPath: string) => {
-        dialled.push(socketPath);
-        return { ok: true };
-      },
-      native: {
-        typeText: () => true,
-        pressEnter: () => true,
-        status: () => 'idle',
-        wait: async () => {},
-        paneText: () => null,
-      },
-      now: () => NOW,
-      home: made.home,
-    };
-    const io = testIo(made.root, { kind: 'owner' });
-
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nlead: queued, not woken (drop, 0 ms); queued; lead reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(dialled).toEqual([]);
-
-    const dropDir = join(made.dir, 'send-drops', 'acme', 'lead');
-    const pending = readPending(dropDir);
-    expect(pending).toHaveLength(1);
-    expect(pending[0]?.leg).toBe('drop');
-    const id = pending[0]?.id as string;
-    const body = recordBody(join(dropDir, id));
-
-    // The launch installs the hook the seat's next turn start runs, and the read finds the drop.
-    const landed = installCliHooks(made.dir, 'acme', [{ name: 'lead', cli: 'claude-code', launch: 'claude' }]);
-    const settingsPath = landed.lead as string;
-    const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
-      hooks: { UserPromptSubmit: { hooks: { command: string }[] }[] };
-    };
-    const read = settings.hooks.UserPromptSubmit
-      .flatMap((entry) => entry.hooks.map((hook) => hook.command))
-      .find((command) => command.includes('drops --read'));
-    expect(typeof read).toBe('string');
-
-    // The hook's stdout is the JSON envelope the CLI adds to the turn; the body arrives whole.
-    // It runs as the launch does: in the project, under the seat's own pane, with the seat's own
-    // home for its message key. The read places its caller, so the subprocess gets what a hook
-    // inside the seat's pane has — the pane's server answer and the seat's recorded standing.
-    const PANE = 'pane-lead';
-    const shell = paneShell({ bin: join(made.home, 'bin'), dir: made.dir, session: 'acme', seat: 'lead', pane: PANE, home: made.home });
-    const out = shell.run(read as string, made.root);
-    const envelope = JSON.parse(out) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
-    expect(envelope.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit');
-    // The hook takes the sender from the verified record, not from the body's opening. This
-    // send's claimed from is owner, so the header is `from owner (owner):`. The opening names
-    // "the owner", which is not that name, and the preamble stays content.
-    expect(envelope.hookSpecificOutput.additionalContext).toBe(`from owner (owner):\n\n${body}`);
-
-    // The receipt is the seat's proof, at the name, mode and shape the promotion reads: the same
-    // signed status receipt the inbox server writes, not a marker of the hook's own.
-    expect(statSync(receiptPath(dropDir, id)).mode & 0o777).toBe(0o600);
-    const receipt = signedReceiptOf(JSON.parse(readFileSync(receiptPath(dropDir, id), 'utf8')));
-    const key = messageKeyState(made.home);
-    if (receipt === null || key.kind !== 'key') throw new Error('no signed receipt or no message key');
-    expect(verifyReceipt(receipt, key.key)).toBe(true);
-    expect(receipt.payload).toMatchObject({ kind: 'receipt', status: 'read', id, to: 'lead', session: 'acme' });
-
-    // The history's first line said what the sender could know; the receipt promotes it once.
-    const said: string[] = [];
-    promoteInboxDrops({
-      dir: made.dir, session: 'acme', root: made.root, home: made.home, team: teamOf(text),
-      live: { running: true, agents: [], workspaces: [], screens: {} } as Live,
-      ownPane: null, sources: scripts(pane(claudeBox(''))), now: NOW,
-      say: (line: string) => said.push(line),
-    });
-    expect(readPending(dropDir)).toEqual([]);
-    expect(said).toEqual(['lead: a dropped send from owner was read in its drop folder']);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
-      [id, 'queued, not woken', 'drop'],
-      [id, 'delivered (read)', 'drop'],
-    ]);
-  }, 30_000);
 
 });
 

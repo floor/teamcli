@@ -152,7 +152,7 @@ what waits — a UUID-named regular file with no verified read receipt beside it
 brief's current and superseded ids aside. A message older than the seat's unread window — the
 file's `watch.unread_after` when it moved the section, else the delivery class's default (30 s
 for a seat a message can wake while it is idle, 60 s for a typed or pull-only seat; ADR
-`zeus-message-path`, D2) — is one difference for the seat,
+`architect-message-path`, D2) — is one difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with `; <m> more unread`
 when others are due and the oldest named. The repair reads the seat's delivery class on this
 pass (`seatDeliveryClass`), so it cannot promise a wake the seat does not have. A seat whose

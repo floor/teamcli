@@ -19,6 +19,7 @@ import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const NOW_MS = NOW.getTime();
@@ -64,7 +65,7 @@ function live(): Live {
 }
 
 function sources(over: Partial<WatchSources> = {}): WatchSources {
-  return {
+  return withHostedLoop({
     live: () => live(),
     machine: () => FINE,
     standing: standingSource(home),
@@ -84,7 +85,7 @@ function sources(over: Partial<WatchSources> = {}): WatchSources {
     pid: 4_242,
     home,
     ...over,
-  };
+  });
 }
 
 beforeEach(() => {

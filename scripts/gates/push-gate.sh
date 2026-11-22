@@ -5,8 +5,7 @@
 # that imports a changed src module two hops deep (depth 2 only while the selection stays under 80
 # files, a heavy file only when the change touches it, a hub module reduced to its own name/path
 # test with the rest left to the light check's hub sweep) and the files that enumerate commands or
-# read the docs when your diff reaches them, with test/exit-codes.test.ts narrowed to the exit ids
-# your diff touches — see gate-common.sh. A private name and phrase scan refuses the push on a
+# read the docs when your diff reaches them — see gate-common.sh. A private name and phrase scan refuses the push on a
 # hit (its location, source, class and ordinal only, never the matched text) and refuses when a
 # list is present but unusable. No lock: seats no
 # longer queue behind
@@ -45,14 +44,6 @@ done
 if (( depth2_capped )); then
   print -r -- "push-gate: depth 2 left to the hourly suite: ${depth2_cap_why}" >> $log
 fi
-if (( exit_full )); then
-  print -r -- "push-gate: exit-codes.test.ts runs unfiltered: ${exit_full_why}" >> $log
-elif (( ${#exit_ids} )); then
-  print -r -- "push-gate: exit ids (${#exit_ids}): ${(j:, :)exit_ids}" >> $log
-else
-  print -r -- "push-gate: no exit id in the diff; exit-codes.test.ts skipped" >> $log
-  print "push-gate: no exit id in the diff; exit-codes.test.ts skipped locally (CI runs it in full)"
-fi
 
 # Private name and phrase scan: a hit refuses the push, and so does a list that is present but
 # unusable. A default list that is absent, or a checkout that predates the shared check, is a
@@ -85,7 +76,6 @@ else
   fail=1
 fi
 
-ids=$(gate_exit_ids_env)
 if (( ! fail )) && [[ -f .agents/team.yaml ]]; then
   # The commit-signature policy's push gate, in the same predicate the commit-msg hook runs.
   # Only a CLI that reads --point can run it: the shared script must never block a seat on an
@@ -105,7 +95,6 @@ if (( ! fail )) && [[ -f .agents/team.yaml ]]; then
   fi
 fi
 if (( ! fail )); then
-  if [[ -n $ids ]]; then export TEAM_EXIT_IDS=$ids; fi
   for t in $tests; do
     step=$SECONDS
     if [[ -n ${GATE_ISOLATED_HOME:-} ]]; then

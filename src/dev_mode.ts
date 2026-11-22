@@ -61,6 +61,7 @@ import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
+import { ownerMachinePinned } from './client/owner-pin-path.ts';
 import { findRoot } from './file/load.ts';
 import { readTeamConfig } from './file/team-config.ts';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
@@ -136,6 +137,9 @@ export type DevModeRun = {
   machine?: { mode: DevelopmentMode; since: string; generation: number };
   /** Why a machine record was present and could not be used: dev mode is not applied on it. */
   machineRefusal?: string;
+  /** Dev mode was on, and this machine's owner seat is pinned from another machine: nothing is
+   *  lifted, for any caller (src/client/owner-pin-path.ts). */
+  pinnedMachine?: true;
 };
 
 /** The project a team belongs to, read the way `team check`'s policy pass reads it. The
@@ -221,8 +225,27 @@ function nearestExpiry(expired: readonly { name: string; level: PolicyLevel; exp
  *   variable is not consulted, since a governing value may be among what could not be read.
  * - `devModeGoverned`: the variable is ignored; `on` iff the effective `dev-mode` is `on`.
  * - Otherwise: the variable, set to exactly `1`, keeps its pre-policy behaviour.
+ * - In every case, on a machine whose owner seat is pinned from another machine, nothing is
+ *   lifted, for any caller (`withoutPinnedMachine`).
  */
 export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+  return withoutPinnedMachine(resolveDevModeAt(command, io, context), context.home);
+}
+
+/**
+ * On a machine whose owner seat is pinned from another machine (src/client/owner-pin-path.ts),
+ * the owner's word is a signed answer from the machine that holds the signers. A mode an agent
+ * may set (the variable) or sign with the account's own key (a chain value, the machine record)
+ * must never stand in for it, so dev mode lifts no gate there — for a terminal, an agent outside
+ * herdr, an unattended run and a placed lead alike. The answer is the machine's, read from the one
+ * resolver: no caller placement, variable or home decides it.
+ */
+function withoutPinnedMachine(run: DevModeRun, home: string | undefined): DevModeRun {
+  if (!run.on || !ownerMachinePinned(home)) return run;
+  return { ...run, on: false, by: null, pinnedMachine: true };
+}
+
+function resolveDevModeAt(command: DevModeCommand, io: Pick<Io, 'env'>, context: DevModeContext): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
   const machine = machineRun(readDevelopmentMode(context.home), command, envSet);
@@ -249,9 +272,13 @@ export function resolveDevMode(command: DevModeCommand, io: Pick<Io, 'env'>, con
  * Dev mode's state at the caller's place, without the operation list: `on` here means dev mode
  * itself is on (the effective policy is `on`, or the variable is in effect before any policy),
  * which is what the owner-gate admission reads. The operation list is a separate question, asked
- * by `resolveDevMode`; nothing here widens it.
+ * by `resolveDevMode`; nothing here widens it. A pinned machine reads it off, for every caller.
  */
 export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}): DevModeRun {
+  return withoutPinnedMachine(devModeStateAt(io, context), context.home);
+}
+
+function devModeStateAt(io: Pick<Io, 'env'>, context: DevModeContext): DevModeRun {
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return variableOnly(envSet);
   const machine = machineRun(readDevelopmentMode(context.home), null, envSet);
@@ -404,13 +431,35 @@ export type DevModeOwnerLift = {
 const NO_LIFT = (caller: Caller): DevModeOwnerLift => ({ lifted: false, warning: null, caller, role: null, audit: () => { /* nothing was admitted */ } });
 
 /**
+ * Owner-reserved actions. Development mode does not admit them: the lift returns not lifted
+ * before it reads whether dev mode is on, so there is no warning and no run. A development
+ * check is any other gate, and it keeps the admission below.
+ */
+export const OWNER_RESERVED_GATES: readonly { command: string; gate: string }[] = [
+  { command: 'remove', gate: 'abandon-seat' },
+  { command: 'down', gate: 'abandon-team' },
+  { command: 'add', gate: 'restore-seat' },
+  { command: 'forget', gate: 'forget' },
+  { command: 'grant', gate: 'grant' },
+  { command: 'delegate', gate: 'delegate' },
+  { command: 'revoke', gate: 'revoke' },
+  { command: 'config', gate: 'trust' },
+];
+
+/** Whether this command and gate are owner-reserved. An omitted gate is a development check. */
+export function ownerReservedGate(command: string, gate: string | undefined): boolean {
+  if (gate === undefined) return false;
+  return OWNER_RESERVED_GATES.some((row) => row.command === command && row.gate === gate);
+}
+
+/**
  * Whether dev mode admits a caller to one owner-only command. The caller must be a placed seat:
  * the target team's lead on the pane the target state records for it in the target
  * session, or — the route the main team's lead takes — a lead of another team the registry holds, on
  * the pane that team's own state records, in that team's session; and dev mode must be `on` for
  * the caller's place. The file's own `operator:` seat holds a second, narrower admission:
  * only at a command that passes `admitsOperator` — `check
- * --repair`, `remove --abandon`, `down --abandon`, `policy set`/`unset`, `daemon restart` — and
+ * --repair`, `policy set`/`unset`, `daemon restart` — and
  * only while the `lead-gates` policy reads `lead+operator` on the caller's chain. The owner is
  * not this path's to admit — the command's own `isOwner` answers first — and a no-terminal or
  * unplaced caller never is. An admitted run logs the same warning the folded caller gate logs,
@@ -433,12 +482,17 @@ export function devModeOwnerLift(
     /** Whether the `lead-gates` policy's `lead+operator` value may admit the target file's own
      *  placed operator to exactly this gate. Absent or false keeps the gate the lead's. */
     admitsOperator?: boolean;
+    /** Which gate this call is. A gate in `OWNER_RESERVED_GATES` is never lifted. */
+    gate?: string;
     /** When the audit line is written: with the admission (the sibling writers' `now`), or by
      *  the caller through the returned `audit` once its own write succeeded (`later`). */
     audit?: 'now' | 'later';
   },
 ): DevModeOwnerLift {
   const caller = callerOf(io, options.team.session);
+  // Owner-reserved actions refuse every caller but the owner. That answer is not a warning:
+  // dev mode is not consulted, and nothing is written.
+  if (ownerReservedGate(options.command, options.gate)) return NO_LIFT(caller);
   const state = devModeState(io, {
     ...(options.home !== undefined ? { home: options.home } : {}),
     team: options.team,
@@ -481,8 +535,10 @@ export function devModeOwnerLift(
  */
 export function devModeOwnerLiftAtCwd(
   io: Io,
-  options: { command: string; refusal: string; home?: string; now?: Date; admitsOperator?: boolean; audit?: 'now' | 'later' },
+  options: { command: string; refusal: string; home?: string; now?: Date; admitsOperator?: boolean; audit?: 'now' | 'later'; gate?: string },
 ): DevModeOwnerLift | null {
+  // The same reserved table, before the cwd's team file is read and before dev mode is asked.
+  if (ownerReservedGate(options.command, options.gate)) return NO_LIFT(walkCaller(io));
   const walked = walkCaller(io);
   if (walked.kind !== 'seat' && !(walked.kind === 'unplaced' && walked.reason === 'it runs under herdr')) return null;
   // A caller the walk cannot place is the usual refusal, and it may not pay for a team-file
@@ -520,6 +576,7 @@ export function devModeOwnerLiftAtCwd(
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.admitsOperator !== undefined ? { admitsOperator: options.admitsOperator } : {}),
     ...(options.audit !== undefined ? { audit: options.audit } : {}),
+    ...(options.gate !== undefined ? { gate: options.gate } : {}),
   });
 }
 
@@ -530,6 +587,8 @@ export function devModeOwnerLiftAtCwd(
  * reports inactive: a policy the tool could not verify does not quiet a single row.
  */
 export function devModeActive(io: Pick<Io, 'env'>, context: DevModeContext = {}): boolean {
+  // A pinned machine has no dev mode to fold rows under: it lifts nothing there.
+  if (ownerMachinePinned(context.home)) return false;
   const envSet = io.env.TEAMCLI_DEV_MODE === '1';
   if (context.home === undefined) return envSet;
   const machine = readDevelopmentMode(context.home);

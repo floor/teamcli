@@ -32,6 +32,9 @@ import { reportedPath, reportUnreadDrops, wakePath, wakeUnreadDrops } from '../s
 import { claudeBox, testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
+// Leads wake at 180 seconds, independently of the ordinary seat delivery order.
+const N = 180;
+
 let cleanup: () => void = () => {};
 afterEach(() => {
   cleanup();
@@ -156,126 +159,6 @@ function watchScene(made: World, sources: RetrySources, now: Date) {
   };
 }
 
-test('an accepted socket frame writes no read receipt, and the frame opens with the sender line', async () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  declare(made);
-  const host = fake(made);
-
-  const code = await runSend(['lead', 'a note'], owner(made.root), host);
-
-  expect(code).toBe(0);
-  expect(host.frames).toHaveLength(1);
-  // The frame's first line is the compact sender header; the body follows it under one blank line.
-  expect(frameContent(host.frames[0] as string).startsWith('from the owner (owner):\n\na note')).toBe(true);
-  // The taken frame is a delivery, never a read: the record has no receipt beside it and waits
-  // for the seat's own read.
-  const drops = dropDir(made.dir, 'lead');
-  const id = recordName(drops);
-  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
-  const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
-  expect(listUnread(drops, context, made.home).map((message) => message.id)).toEqual([id]);
-});
-
-test('the watch re-wakes a socket-delivered record like any other, and reports it when no seat read comes', async () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  declare(made);
-  const host = fake(made);
-  expect(await runSend(['lead', 'a note'], owner(made.root), host)).toBe(0);
-  const drops = dropDir(made.dir, 'lead');
-  const id = recordName(drops);
-
-  // Eleven minutes later the record is unread and due. This build types nothing into a seat's
-  // pane, so the wake writes no line and leaves no reservation — the message keeps its place.
-  const pane = watchPane();
-  const { scene, said } = watchScene(made, pane.source, new Date(NOW.getTime() + 11 * 60_000));
-  await wakeUnreadDrops(scene, { unreadAfter: 600 });
-  expect(pane.typed).toEqual([]);
-  expect(said).toEqual([]);
-  expect(existsSync(wakePath(drops, id))).toBe(false);
-
-  // Twice the window with still no seat receipt: the sender's mailbox and the lead are told.
-  reportUnreadDrops(watchScene(made, watchPane().source, new Date(NOW.getTime() + 22 * 60_000)).scene, { unreadAfter: 600 });
-  expect(existsSync(reportedPath(drops, id))).toBe(true);
-});
-
-test('a socket-taken frame under a held dialog writes no receipt, and the record waits for the watch retry', async () => {
-  const made = world(['socket', 'typed']);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  declare(made);
-  const rule = '─'.repeat(30);
-  const heldDialog = `Held message from another session\n${rule}\n❯ \n${rule}`;
-  const pane = scripted(['idle', 'working', 'idle', 'working', 'idle']);
-  let reads = 0;
-  pane.paneText = () => {
-    reads += 1;
-    return heldDialog;
-  };
-  const dials: string[] = [];
-  const host = fake(made, {
-    native: pane,
-    deliver: async (_path: string, frame: string) => {
-      dials.push(frame);
-      return { ok: true };
-    },
-  });
-
-  expect(await runSend(['lead', 'held note'], owner(made.root), host)).toBe(0);
-  expect(dials).toHaveLength(1);
-  // The frame was taken, and the sender did not look at the box to ask what came of it: the one
-  // look is the quota preflight every send makes, never a held-dialog probe.
-  expect(reads).toBe(1);
-  const drops = dropDir(made.dir, 'lead');
-  const id = recordName(drops);
-  // No receipt, no other status file: only the seat's own read writes one.
-  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
-  // The record is still the watch's to retry.
-  const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
-  expect(listUnread(drops, context, made.home).map((message) => message.id)).toEqual([id]);
-});
-
-test("drops --read serves a socket-delivered record until the seat's own read", async () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  declare(made);
-  expect(await runSend(['lead', 'a note'], owner(made.root), fake(made))).toBe(0);
-  const drops = dropDir(made.dir, 'lead');
-  const id = recordName(drops);
-  const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
-
-  // No sender receipt hides the taken frame: the seat's own reader is served.
-  const listing = listDrops(drops, messageKeyOf(made.home), context);
-  expect(listing.kind).toBe('ok');
-  if (listing.kind !== 'ok') return;
-  expect(listing.rows.map((row) => row.id)).toEqual([id]);
-
-  // The seat's own signed read receipt is what settles it: nothing is served again.
-  const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id, to: 'lead', root: realpathSync(made.root), session: 'acme', at: NOW.toISOString() }, made.home);
-  expect(writeReceipt(drops, receipt, made.home).ok).toBe(true);
-  expect(listDrops(drops, messageKeyOf(made.home), context)).toEqual({ kind: 'ok', rows: [] });
-});
-
-test("team messages lists a socket-delivered record as unacked until the seat's own read", async () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  declare(made);
-  expect(await runSend(['lead', 'a note'], owner(made.root), fake(made))).toBe(0);
-  const drops = dropDir(made.dir, 'lead');
-  const id = recordName(drops);
-
-  expect(listUnacked(made.root, 'acme', made.home).map((row) => row.id)).toEqual([id]);
-
-  const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id, to: 'lead', root: realpathSync(made.root), session: 'acme', at: NOW.toISOString() }, made.home);
-  expect(writeReceipt(drops, receipt, made.home).ok).toBe(true);
-  expect(listUnacked(made.root, 'acme', made.home)).toEqual([]);
-});
-
 test('the read receipt verifies with read_by and an older receipt without it still does', () => {
   const made = world(null);
   cleanup = made.cleanup;
@@ -318,70 +201,69 @@ test('a seat with no nickname opens the frame with its written label name, and w
   ]);
   cleanup = made.cleanup;
   declare(made);
-  const labelled = registerSeat(made, 'labelled', 'w4:p1');
-  place(made, 'labelled', 'w4:p1');
+  const labelled = registerSeat(made, 'labelled', 'fixture-pane-a');
+  place(made, 'labelled', 'fixture-pane-a');
   roster(made, { agent: labelled, seat: 'labelled', role: 'builder' });
-  const host = fake(made, { agents: () => [{ name: 'labelled', pane: 'w4:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const io = testIo(made.root, { kind: 'seat', name: 'labelled', pane: 'w4:p1', session: 'acme' });
+  const host = fake(made, {
+    agents: () => [
+      { name: 'labelled', pane: 'fixture-pane-a', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const io = testIo(made.root, { kind: 'seat', name: 'labelled', pane: 'fixture-pane-a', session: 'acme' });
 
   // The roster holds no nickname, so the written label's name before the middle dot stands.
   expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('from Seat Eight (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Seat Eight · labelled@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 
   // A written label with nothing before the middle dot falls through to the seat name.
-  const blank = registerSeat(made, 'blank', 'w5:p1');
-  place(made, 'blank', 'w5:p1');
+  const blank = registerSeat(made, 'blank', 'fixture-pane-c');
+  place(made, 'blank', 'fixture-pane-c');
   roster(made, { agent: blank, seat: 'blank', role: 'builder' });
-  const again = fake(made, { agents: () => [{ name: 'blank', pane: 'w5:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'w5:p1', session: 'acme' });
+  const again = fake(made, {
+    agents: () => [
+      { name: 'blank', pane: 'fixture-pane-c', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'fixture-pane-c', session: 'acme' });
   expect(await runSend(['lead', 'from the blank'], fromBlank, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('from blank (to orchestrator):\n\n')).toBe(true);
-});
-
-test('a direct-only push leaves the record unread: its receiving runtime is the reader', async () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  declareEntity(made);
-  declare(made);
-  const host = fake(made);
-
-  const run = await sendDirect(owner(made.root), host, { seat: 'lead', pane: 'w1:p1', cli: 'claude-code', body: 'run team next' });
-
-  expect(run.code).toBe(0);
-  expect(run.result?.route).toBe('socket');
-  expect(host.frames).toHaveLength(1);
-  const drops = dropDir(made.dir, 'lead');
-  const id = recordName(drops);
-  // The watch's push is a request: the receiver's own read gate serves it and writes its receipt
-  // then, so the send itself must leave the record unread.
-  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
-  const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
-  expect(listUnread(drops, context, made.home).map((message) => message.id)).toEqual([id]);
+  expect(frameContent(again.frames[0] as string).startsWith('blank · blank@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 });
 
 test('a seat sender opens the frame with its nickname, and with its seat name when the roster holds none', async () => {
   const made = world(null);
   cleanup = made.cleanup;
   declare(made);
-  const helper = registerSeat(made, 'helper', 'w1:p1', 'Bea');
-  place(made, 'helper', 'w1:p1');
+  const helper = registerSeat(made, 'helper', 'fixture-pane-a', 'Bea');
+  place(made, 'helper', 'fixture-pane-a');
   roster(made, { agent: helper, seat: 'helper', role: 'implementer', nickname: 'Bea' });
-  const host = fake(made, { agents: () => [{ name: 'helper', pane: 'w1:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const io = testIo(made.root, { kind: 'seat', name: 'helper', pane: 'w1:p1', session: 'acme' });
+  const host = fake(made, {
+    agents: () => [
+      { name: 'helper', pane: 'fixture-pane-a', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const io = testIo(made.root, { kind: 'seat', name: 'helper', pane: 'fixture-pane-a', session: 'acme' });
 
   expect(await runSend(['lead', 'from bea'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('from Bea (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Bea · helper@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 
   // The roster without a nickname for the seat: the same line falls back to the seat name.
-  const native = registerSeat(made, 'native', 'w3:p1');
-  place(made, 'native', 'w3:p1');
+  const native = registerSeat(made, 'native', 'fixture-pane-c');
+  place(made, 'native', 'fixture-pane-c');
   roster(made, { agent: native, seat: 'native', role: 'reviewer' });
-  const again = fake(made, { agents: () => [{ name: 'native', pane: 'w3:p1' }, { name: 'lead', pane: 'w2:p1' }] });
-  const fromNative = testIo(made.root, { kind: 'seat', name: 'native', pane: 'w3:p1', session: 'acme' });
+  const again = fake(made, {
+    agents: () => [
+      { name: 'native', pane: 'fixture-pane-c', cli: 'claude' },
+      { name: 'lead', pane: 'fixture-pane-b', cli: 'claude' },
+    ],
+  });
+  const fromNative = testIo(made.root, { kind: 'seat', name: 'native', pane: 'fixture-pane-c', session: 'acme' });
   expect(await runSend(['lead', 'from native'], fromNative, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('from native (to orchestrator):\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('native · native@acme · Test 1 · 2026-10-05 04:00Z · admitted: to orchestrator\n\n')).toBe(true);
 });

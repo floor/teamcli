@@ -1,5 +1,7 @@
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { accessSync, linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, readFileSync } from 'node:fs';
+import { linkSync, mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { processStartOf } from '../watch/pane.ts';
 
@@ -194,10 +196,26 @@ export function acquireSeatLock(
   overrides?: Partial<LockSteps>,
   budget: LockBudget = {},
 ): SeatLock {
+  // Taking the lock creates folders, stages a token and may clear a stale lock: an effect.
+  hostedCommit('seat lock');
+  return acquireLockAt(seatLockPath(dir, session, seat), join(dir, 'seat-locks', session), overrides, budget);
+}
+
+/**
+ * The same lock at any path: the seat lock above, and the receiver's queue lock
+ * (src/queue/append.ts). `folder` is created first; the token, the stale-holder rule and the
+ * takeover are the seat lock's own, unchanged.
+ */
+export function acquireLockAt(
+  path: string,
+  folder: string,
+  overrides?: Partial<LockSteps>,
+  budget: LockBudget = {},
+): SeatLock {
+  hostedCommit('file lock');
   const steps: LockSteps = { ...lockSteps, ...overrides };
-  const path = seatLockPath(dir, session, seat);
   const claimPath = `${path}.steal`;
-  steps.prepare(join(dir, 'seat-locks', session));
+  steps.prepare(folder);
   const pid = steps.pid();
   const startedAt = Math.round(steps.ownStart());
   const token = `${pid} ${steps.nonce()} ${String(startedAt)}`;

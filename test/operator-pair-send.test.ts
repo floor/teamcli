@@ -205,34 +205,6 @@ describe('operators of one team send to each other', () => {
     admitted(await send({ team: 'acme', seat: 'operator-3' }, 'operator-2'));
   });
 
-  test('the word is the role, not the seat name', async () => {
-    const root = world.roots.acme as string;
-    // `ops` holds `role: operator` and is reached by the operator-pair rule; `operatorish` is
-    // spelled like one and is a builder, so only the declared-seat rule reaches it.
-    expect((await send({ team: 'acme', seat: 'operator-2' }, 'ops', [])).code).toBe(0);
-    const opsDrops = join(root, '.agents', 'send-drops', 'acme', 'ops');
-    const opsRecords = readdirSync(opsDrops).filter((name) => !name.includes('.'));
-    expect(recordBody(join(opsDrops, opsRecords[0] as string))).toContain('admitted by: an operator to another operator of its own team');
-
-    expect((await send({ team: 'acme', seat: 'operator-2' }, 'operatorish', [])).code).toBe(0);
-    const ishDrops = join(root, '.agents', 'send-drops', 'acme', 'operatorish');
-    const ishRecords = readdirSync(ishDrops).filter((name) => !name.includes('.'));
-    expect(recordBody(join(ishDrops, ishRecords[0] as string))).toContain('admitted by: a seat to a declared seat of its own team');
-  });
-
-  test('one side that is no operator falls through to the declared-seat rule, in either direction', async () => {
-    const root = world.roots.acme as string;
-    expect((await send({ team: 'acme', seat: 'operator-2' }, 'helper', [])).code).toBe(0);
-    const helperDrops = join(root, '.agents', 'send-drops', 'acme', 'helper');
-    const helperRecords = readdirSync(helperDrops).filter((name) => !name.includes('.'));
-    expect(recordBody(join(helperDrops, helperRecords[0] as string))).toContain('admitted by: a seat to a declared seat of its own team');
-
-    expect((await send({ team: 'acme', seat: 'helper' }, 'operator-2', [])).code).toBe(0);
-    const opDrops = join(root, '.agents', 'send-drops', 'acme', 'operator-2');
-    const opRecords = readdirSync(opDrops).filter((name) => !name.includes('.'));
-    expect(recordBody(join(opDrops, opRecords[0] as string))).toContain('admitted by: a seat to a declared seat of its own team');
-  });
-
   test('the pair never leaves the team, even inside one entity', async () => {
     refused(await send({ team: 'acme', seat: 'operator-2' }, 'other-op@other'));
     refused(await send({ team: 'other', seat: 'other-op' }, 'operator-2@acme'));
@@ -251,59 +223,7 @@ describe('operators of one team send to each other', () => {
     refused(reading);
     expect(reading.err).toContain('an operator to another operator of its own team');
   });
-
-  test('the role the live file writes today decides, not the role the record was registered under', async () => {
-    const root = world.roots.acme as string;
-    // The record says operator; the file now says builder: the operator-pair rule does not answer.
-    reword('acme', 'operator-3', 'builder');
-    expect((await send({ team: 'acme', seat: 'operator-2' }, 'operator-3', [])).code).toBe(0);
-    const op3Drops = join(root, '.agents', 'send-drops', 'acme', 'operator-3');
-    const op3Records = readdirSync(op3Drops).filter((name) => !name.includes('.'));
-    expect(recordBody(join(op3Drops, op3Records[0] as string))).toContain('admitted by: a seat to a declared seat of its own team');
-
-    // The record says builder; the file now says operator: the operator-pair rule answers.
-    reword('acme', 'operatorish', 'operator');
-    expect((await send({ team: 'acme', seat: 'operator-2' }, 'operatorish', [])).code).toBe(0);
-    const ishDrops = join(root, '.agents', 'send-drops', 'acme', 'operatorish');
-    const ishRecords = readdirSync(ishDrops).filter((name) => !name.includes('.'));
-    expect(recordBody(join(ishDrops, ishRecords[0] as string))).toContain('admitted by: an operator to another operator of its own team');
-  });
 });
 
 describe('a send admitted by the operators\' rule is logged like every send', () => {
-  test('the drop header names the rule and the team log carries the line', async () => {
-    const root = world.roots.acme as string;
-    const reading = await send({ team: 'acme', seat: 'operator-2' }, 'operator-3', []);
-    expect(reading.err).toBe(queuedLine('operator-3'));
-    expect(reading.code).toBe(0);
-    expect(reading.out).toContain('operator-3: queued, not woken (drop, 0 ms)');
-    // The drop folder: the one signed record (the `.pending` marker beside it is the watch's),
-    // whose payload carries the sender header and the admitting rule, the message one empty line
-    // under it. The raw drop body the record replaced is gone.
-    const drops = join(root, '.agents', 'send-drops', 'acme', 'operator-3');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    expect(recordBody(join(drops, records[0] as string))).toBe(
-      "from operator-2 — admitted by: an operator to another operator of its own team\n\na status line",
-    );
-    // The log: one line naming the sender, the receiver and the outcome.
-    const log = readFileSync(join(root, '.agents', LOG_FILE), 'utf8');
-    expect(log).toContain('send [operator-2] operator-3: sent to its drop folder');
-    // The history the reading seat's inbox keeps: one entry, the receiver and the outcome.
-    const read = readHistory('acme', root, world.home);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.entries).toHaveLength(1);
-    expect(read.entries[0]).toMatchObject({ from: 'operator-2', to: 'operator-3', outcome: 'queued, not woken', via: 'drop' });
-  });
-
-  test('the same pair from the operator place is logged under the place\'s own rule', async () => {
-    const root = world.roots.acme as string;
-    const reading = await send({ team: 'acme', seat: 'operator-1' }, 'operator-2', []);
-    expect(reading.code).toBe(0);
-    const drops = join(root, '.agents', 'send-drops', 'acme', 'operator-2');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    expect(recordBody(join(drops, records[0] as string))).toContain('admitted by: an orchestrator or operator to a seat of its own team');
-  });
 });

@@ -418,3 +418,18 @@ describe('the pure parsers', () => {
     expect(parseAuditTail('', 3)).toEqual([]);
   });
 });
+
+
+test('doctor names the local channel setup restoration record without reading its stored contents', async () => {
+  const fake = new Fake().full(); fake.process = true;
+  fake.file('/fake/.team-channel-setup.json', 'fixture-restoration-content-must-not-print');
+  const sources = fake.sources(); const read = sources.readText;
+  sources.readText = (path, cap) => { if (path.endsWith('.team-channel-setup.json')) throw new Error('doctor must not read restoration content'); return read(path, cap); };
+  for (const args of [['doctor'], ['doctor', '--json']]) {
+    const io = testIo('/fake'); const rc = await runMcp(args, io, sources);
+    expect(rc).toBe(0); expect(io.out).toContain('.team-channel-setup.json');
+    expect(io.out).toContain('restoration record'); expect(io.out).toContain('team mcp setup <seat> --off');
+    expect(io.out).not.toContain('fixture-restoration-content-must-not-print');
+    if (args.includes('--json')) assertMatchesOutputSchema(io.out, MCP_OUTPUT_SCHEMA);
+  }
+});

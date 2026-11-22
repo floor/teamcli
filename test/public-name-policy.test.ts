@@ -10,7 +10,7 @@ import { scanPublicNames, type PublicNameHit, type PublicNameRule } from '../src
 
 const REPO = join(import.meta.dir, '..');
 const SCRIPT = join(REPO, 'scripts/check-public-names.ts');
-const TEAM = join(REPO, '.github/team.yaml');
+const TEAM = join(REPO, '.github/policy.yaml');
 
 // The declared internal tracker pattern and a synthetic id in its shape; neither is whole in
 // this source, and the id is not one from any finding.

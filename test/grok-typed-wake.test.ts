@@ -27,6 +27,10 @@ const PERMISSION = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.5
 const UNSENT = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'unsent.txt'), 'utf8');
 const UNSENT_WRAP = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'unsent-wrap.txt'), 'utf8');
 const SLASH_MENU = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.50', 'slash-menu.txt'), 'utf8');
+// The 1.0.77 fresh start: the welcome card over the empty box, a `Tip:` row between them.
+const WELCOME = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.77', 'welcome.txt'), 'utf8');
+const TRUST_1077 = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.77', 'trust.txt'), 'utf8');
+const PERMISSION_1077 = readFileSync(join(import.meta.dir, 'fixtures', 'grok', '1.0.77', 'permission.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
 const FAST = { settleMs: 1, enterSettleMs: 1, pollMs: 1, verifyMs: 1 };
@@ -153,7 +157,8 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   test('a working pane is never typed into', async () => {
     const pane = wakeFake(() => WORKING);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    // 1345 never-drop: the busy screen waits to the bound, and the refusal reason says so.
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -174,7 +179,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
     expect(readScreen('grok', WORKING).kind).toBe('working');
     const livePane = wakeFake(() => WORKING);
     const refused = await deliverTypedWake(livePane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(refused).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(refused).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(livePane.prompts).toEqual([]);
     expect(livePane.typed).toEqual([]);
     expect(livePane.enters).toBe(0);
@@ -191,7 +196,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   test('text already in the box refuses before a key', async () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -243,7 +248,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
 
       const firstRead = wakeFake(() => draft);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'grok', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -297,7 +302,7 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
 
       const firstRead = wakeFake(() => workingFrame);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'grok', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -318,6 +323,43 @@ describe('the Grok typed wake: the profile’s own screens gate the keys', () =>
   });
 });
 
+describe('a first read the wake cannot place is looked at once more (2026-11-17)', () => {
+  // A loaded terminal host answered a wake's first read with a frame that was not the pane's
+  // settled screen; the wake refused a Grok seat sitting at its empty idle prompt, and the next
+  // wake 10 s later landed. The second look types nothing; the two idle reads still gate a key.
+  test('a blank first read, then the idle box: the wake lands', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read === 0 ? '' : IDLE));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out.delivered).toBe(true);
+    expect(pane.prompts).toEqual([LINE]);
+  });
+
+  test('an unreadable first read, then the idle box: the wake lands', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : read === 0 ? null : IDLE));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out.delivered).toBe(true);
+  });
+
+  test('two unplaceable reads refuse with nothing typed, after exactly two reads', async () => {
+    const pane = wakeFake(() => '');
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out).toMatchObject({ delivered: false, typed: false, tries: 0 });
+    expect(out.reason).toContain('the first read showed unknown');
+    expect(pane.reads).toBe(2);
+    expect(pane.prompts).toEqual([]);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a placed screen that is not idle (the answer widget) is refused on its one read', async () => {
+    const pane = wakeFake(() => QUESTION);
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out.delivered).toBe(false);
+    expect(pane.reads).toBe(1);
+    expect(pane.prompts).toEqual([]);
+  });
+});
+
 describe('team send: the Grok typed wake', () => {
   const cleanups: (() => void)[] = [];
   afterEach(() => {
@@ -331,134 +373,27 @@ describe('team send: the Grok typed wake', () => {
     cleanups.push(made.cleanup);
     return made;
   }
+});
 
-  test('a Grok seat is woken by one typed trigger, and the send is delivered', async () => {
-    const made = grokWorld();
-    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
-    const host = fake(made, {
-      agents: () => [{ name: 'grok', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-    });
-    const io = owner(made.root);
-    expect(await runSend(['grok', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: delivered (typed wake)\n');
-    expect(pane.prompts).toHaveLength(1);
-    expect(pane.prompts[0]).toContain('team drops --read');
-    expect(pane.prompts[0]!.length).toBeLessThanOrEqual(80);
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-    const drops = join(made.dir, 'send-drops', 'acme', 'grok');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    expect(recordBody(join(drops, records[0] as string))).toBe(filed('hello'));
-    const history = readHistory('acme', made.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'delivered (typed wake)', via: 'typed' });
-      expect(history.entries[0]?.failed).toBeUndefined();
-    }
+describe('the Grok 1.0.77 fresh start: the welcome card over the empty box', () => {
+  test('the card over an empty box is idle; text in the box is unsent; the dialogs still refuse', () => {
+    expect(readScreen('grok', WELCOME).kind).toBe('idle');
+    const held = drawn(WELCOME, LINE);
+    expect(readScreen('grok', held).kind).toBe('unsent');
+    expect(boxHoldsText('grok', LINE, held)).toBe(true);
+    expect(readScreen('grok', TRUST_1077).kind).toBe('trust');
+    expect(readScreen('grok', PERMISSION_1077).kind).toBe('permission');
   });
 
-  test('the answer widget leaves the message in the bus inbox, and the sender is told so', async () => {
-    const made = grokWorld();
-    const pane = wakeFake(() => QUESTION);
-    const host = fake(made, {
-      agents: () => [{ name: 'grok', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-    });
-    const io = owner(made.root);
-    expect(await runSend(['grok', 'hello'], io, host)).toBe(0);
-    // The typed wake failed and the walk ends on the drop leg, which wakes nothing: the ending is
-    // `queued, not woken`, the same word the history line carries, never `sent (unconfirmed)`.
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ngrok: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed question, not an empty idle prompt; nothing was typed); grok reads it at its next turn, and nothing here gives it one (pull-only)\n');
-    expect(io.err).toBe(queuedLine('grok', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-    const history = readHistory('acme', made.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'queued, not woken', via: 'drop' });
-      expect(history.entries[0]?.failed).toEqual([
-        'typed: the first read showed question, not an empty idle prompt; nothing was typed',
-      ]);
-    }
-  });
-
-  test('independent adversarial: line held while working through bound in send is not delivered, never retyped, and message stays unread; box cleared or partial line mid-poll refuses', async () => {
-    // 1. Line held while working through the bound in `runSend` -> not delivered, never retyped, message still unread.
-    const made = grokWorld();
-    const pane = wakeFake((read, enters, typed) => {
-      if (read < 2) return IDLE;
-      const line = typed[typed.length - 1] ?? '';
-      return enters === 0 ? holding(line) : workingHolding(line);
-    });
-    const host = fake(made, {
-      agents: () => [{ name: 'grok', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-    });
-    const io = owner(made.root);
-    expect(await runSend(['grok', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('grok: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after the agent prompt; the line was not submitted)');
-    expect(pane.prompts).toHaveLength(1);
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-    const drops = join(made.dir, 'send-drops', 'acme', 'grok');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    const msgId = records[0]!;
-    expect(existsSync(join(drops, `${msgId}.read.json`))).toBe(false);
-    expect(listUnread(drops, { to: 'grok', root: made.root, session: 'acme' }, host.home).map((m) => m.id)).toEqual([msgId]);
-    const history = readHistory('acme', made.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'grok', outcome: 'queued, not woken', via: 'drop' });
-      expect(history.entries[0]?.failed).toEqual([
-        'typed: the working screen showed with the line still in the box after the agent prompt; the line was not submitted',
-      ]);
-    }
-
-    // 2. Box cleared by someone else mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees IDLE).
-    let clearPoll = 0;
-    const clearedMidPoll = wakeFake((read, enters) => {
-      if (read < 2) return IDLE;
-      if (enters === 0) return holding(LINE);
-      clearPoll += 1;
-      return clearPoll <= 2 ? workingHolding(LINE) : IDLE;
-    });
-    const outCleared = await deliverTypedWake(clearedMidPoll.host, 'pane-1', LINE, 'grok', { ...FAST, verifyMs: 4 });
-    expect(outCleared).toEqual({
-      delivered: false,
-      typed: true,
-      tries: 1,
-      reason: 'no working screen showed after the agent prompt',
-      submittedAt: expect.any(Number),
-    });
-    expect(clearedMidPoll.prompts).toEqual([LINE]);
-    expect(clearedMidPoll.typed).toEqual([]);
-    expect(clearedMidPoll.enters).toBe(0);
-
-    // 3. A partial line left mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees holding(partial)).
-    for (const partial of [LINE.slice(0, 12), LINE.slice(5)]) {
-      let partialPoll = 0;
-      const partialMidPoll = wakeFake((read, enters) => {
-        if (read < 2) return IDLE;
-        if (enters === 0) return holding(LINE);
-        partialPoll += 1;
-        return partialPoll <= 2 ? workingHolding(LINE) : holding(partial);
-      });
-      const outPartial = await deliverTypedWake(partialMidPoll.host, 'pane-1', LINE, 'grok', { ...FAST, verifyMs: 4 });
-      expect(outPartial).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 1,
-        reason: 'no working screen showed after the agent prompt',
-      });
-      expect(partialMidPoll.prompts).toEqual([LINE]);
-      expect(partialMidPoll.typed).toEqual([]);
-      expect(partialMidPoll.enters).toBe(0);
-    }
+  test('the wake prompts once on two welcome reads, and types nothing into a card holding a draft', async () => {
+    const pane = wakeFake((read, enters) => (enters > 0 ? WORKING : WELCOME));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'grok', FAST);
+    expect(out).toMatchObject({ delivered: true, tries: 1 });
+    expect(pane.prompts).toEqual([LINE]);
+    const draft = wakeFake(() => drawn(WELCOME, 'half a thought'));
+    const refused = await deliverTypedWake(draft.host, 'pane-1', LINE, 'grok', FAST);
+    expect(refused.delivered).toBe(false);
+    expect(draft.prompts).toEqual([]);
+    expect(draft.typed).toEqual([]);
   });
 });

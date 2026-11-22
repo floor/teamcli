@@ -1,8 +1,9 @@
 // The pause as the commands hand it to each other, not as each command's own fixture fakes it:
 // `team pause` writes the record `team next` then reads and refuses under, `team resume` clears
-// that same record and the queue moves once, and a watch started after the pause reads the record
-// from the state and types the pause notice instead of the work nudge. The per-command edge tests
-// stand in a hand-written record; these run the record through the commands that write and read it.
+// that same record and the queue moves once, and a hosted watch started after the pause reads
+// the record from the state. That pass types no pause notice and dispatches nothing while the
+// record stands; a resume lets the ordinary dispatch through. The per-command edge tests stand
+// in a hand-written record; these run the record through the commands that write and read it.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync, execSync } from 'node:child_process';
 import {
@@ -21,6 +22,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import type { WorkPush, WorkPushRequest } from '../src/watch/dispatch.ts';
 import { claudeBox, testIo } from './helpers.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -186,6 +188,8 @@ describe('the pause the command writes is the one next reads', () => {
 
 // The watch reads the pause from the project's state, not from a value a test handed its pass:
 // the same file example the nudge tests use, with the record `team pause` would have written.
+// A hand-run watch returns before the loop. The hosted seam is what still runs the pass, and
+// that pass does not type the old pause trigger.
 const raw = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const PROMPT = 'Take the next unfinished item in your queue and start it.';
 const RULE = '─'.repeat(40);
@@ -220,10 +224,12 @@ describe('the watch reads the pause from the state', () => {
   let typed: string[];
   let screenNow: string;
   let clock: number;
+  let cycles: number;
 
   function sources(over: Partial<WatchSources> = {}): WatchSources {
     let left = 2;
-    return {
+    // Daemon-only watch: the hosted loop is the pass, and that pass types no pause notice.
+    return withHostedLoop({
       live: () => scene({ status: 'idle', screen: idle }),
       machine: () => fine,
       standing: () => ({ kind: 'none' }),
@@ -241,7 +247,9 @@ describe('the watch reads the pause from the state', () => {
       pid: 4242,
       home: dir,
       ...over,
-    };
+    }, {
+      cycled() { cycles += 1; },
+    });
   }
 
   /** Every drop the watch typed as a trigger, as its path. */
@@ -260,6 +268,7 @@ describe('the watch reads the pause from the state', () => {
     typed = [];
     screenNow = idle;
     clock = Date.parse('2026-10-03T14:00:00Z');
+    cycles = 0;
   });
 
   afterEach(() => {
@@ -282,38 +291,11 @@ describe('the watch reads the pause from the state', () => {
     }));
   }
 
-  test('the notice, not the work nudge, is typed, and a restarted watch reads the pause again', async () => {
-    const at = '2026-10-03T13:00:00.000Z';
-    seedPause(at);
-    const notice = `Team watch: paused since ${at} by owner — finish the step you are on, take nothing new, and hold no lock until \`team resume\``;
-
-    expect(await watchOnce()).toBe(0);
-    const first = triggers();
-    expect(first).toHaveLength(1);
-    expect(readFileSync(first[0] as string, 'utf8')).toBe(notice);
-    expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
-
-    // A restart is a new process: the pause is still in the state, so its watch notices again
-    // rather than falling back to nudging work under a stop.
-    typed = [];
-    expect(await watchOnce()).toBe(0);
-    const restarted = triggers();
-    expect(restarted).toHaveLength(1);
-    expect(readFileSync(restarted[0] as string, 'utf8')).toBe(notice);
-    expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
-  });
-
-  test('the resume restores the ordinary direct dispatch', async () => {
-    seedPause();
-    expect(await watchOnce()).toBe(0);
-    expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
-
+  /** Idle clocks and a launch the dispatcher can wake, plus one unassigned task. */
+  function readyToDispatch(): void {
     updateState(join(dir, '.agents'), (state) => {
-      delete state.pause;
       const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
       for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
-        // The launch that left these records enabled the development channel, so an idle wake
-        // reaches the seat: the resumed route is this dispatch's own push.
         seats[seat] = {
           stage: 'ready',
           last_active: '2026-10-03T13:00:00.000Z',
@@ -323,12 +305,56 @@ describe('the watch reads the pause from the state', () => {
       }
     });
     writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
+  }
+
+  test('a paused watch dispatches nothing, and a restarted watch still reads the pause', async () => {
+    const at = '2026-10-03T13:00:00.000Z';
+    seedPause(at);
+    readyToDispatch();
     const pushed: WorkPushRequest[] = [];
     const pushWork: WorkPush = async (request) => {
       pushed.push(request);
       return { ok: true, outcome: 'typed (unconfirmed)' };
     };
+
+    expect(await watchOnce({ pushWork })).toBe(0);
+    // The hosted pass reads the pause and leaves it. It types no pause trigger and pushes no work.
+    expect(cycles).toBeGreaterThan(0);
+    expect(readState(join(dir, '.agents')).pause).toMatchObject({ by: 'owner', at });
+    expect(pushed).toEqual([]);
+    expect(triggers()).toHaveLength(0);
+    expect(typed).toEqual([]);
+
+    // A restart is a new process: the same pause record still holds the dispatch.
     typed = [];
+    pushed.length = 0;
+    const ran = cycles;
+    expect(await watchOnce({ pushWork })).toBe(0);
+    expect(cycles).toBeGreaterThan(ran);
+    expect(readState(join(dir, '.agents')).pause).toMatchObject({ by: 'owner', at });
+    expect(pushed).toEqual([]);
+    expect(triggers()).toHaveLength(0);
+    expect(typed).toEqual([]);
+  });
+
+  test('the resume restores the ordinary direct dispatch', async () => {
+    seedPause();
+    readyToDispatch();
+    const pushed: WorkPushRequest[] = [];
+    const pushWork: WorkPush = async (request) => {
+      pushed.push(request);
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    expect(await watchOnce({ pushWork })).toBe(0);
+    expect(cycles).toBeGreaterThan(0);
+    expect(pushed).toEqual([]);
+    expect(typed.some((line) => line.includes(PROMPT))).toBe(false);
+
+    updateState(join(dir, '.agents'), (state) => {
+      delete state.pause;
+    });
+    typed = [];
+    pushed.length = 0;
     expect(await watchOnce({ pushWork })).toBe(0);
     // The ordinary route after a resume is the dispatcher's direct push; nothing is typed.
     expect(pushed.map((one) => one.seat)).toEqual(['deepseek-acme-2']);

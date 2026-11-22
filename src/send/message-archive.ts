@@ -7,7 +7,8 @@
 // no reader: it is moved whole, alone, and never served or acknowledged. Every file is read
 // without following a link and moved with `renameSync`; nothing here unlinks anything.
 import { createHash, type KeyObject } from 'node:crypto';
-import { closeSync, constants, existsSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { openSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
 import { dirname, join, relative } from 'node:path';
 import { legacyReceiptMatches, messagePayload } from '../commands/messages.ts';
 import { ensureFoldersBelow } from './history.ts';
@@ -15,6 +16,7 @@ import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE, isGeneralBriefRecord } from '..
 import { isReadOrCleared, recordAuthOf, sameFolder, statusOf, type RecordPayload } from './record.ts';
 import { readState } from '../state.ts';
 import { MESSAGE_DOMAIN, verifyDomain, type Json } from '../store/keys.ts';
+import { LEGACY_TREE, seatDropDir, seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** A family member's suffixes in move order: the receipts in status order, the thread close, and
  *  the bookkeeping that is only meaningful beside the record. The record itself is named first. */
@@ -48,7 +50,7 @@ export type Stay = { id: string; reason: StayReason };
 /** One family the archive will move: the record first for the transport tree, the receipt first
  *  for the legacy store, as the procedure's manual move does. */
 export type PlannedMove = {
-  store: 'send-drops' | 'messages';
+  store: typeof LEGACY_TREE | 'messages';
   seat: string;
   id: string;
   dir: string;
@@ -103,7 +105,7 @@ export function seatClearTargetStatus(options: {
     return { kind: 'admitted' };
   }
   if (recorded !== undefined) return { kind: 'admitted' };
-  if (realDir(join(agents, 'send-drops', session, seat))) return { kind: 'admitted' };
+  if (realDir(seatMailDirIn(agents, session, seat))) return { kind: 'admitted' };
   if (realDir(join(agents, 'messages', seat))) return { kind: 'admitted' };
   return { kind: 'unknown' };
 }
@@ -227,7 +229,7 @@ export function scanAckSeat(options: {
   const { root, session, seat, key } = options;
   const context = { to: seat, root, session, ...(options.lead === undefined ? {} : { lead: options.lead }) };
   const cutoff = options.now.getTime() - options.olderThanMs;
-  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const dir = seatDropDir(root, session, seat);
   const scan: AckScan = { due: [], already: 0, stays: [], scanned: 0 };
   if (!realDir(dir)) return scan;
   for (const name of readdirSync(dir).sort()) {
@@ -301,7 +303,7 @@ export function scanArchiveSeat(options: {
   const { root, session, seat, key } = options;
   const context = { to: seat, root, session, ...(options.lead === undefined ? {} : { lead: options.lead }) };
   const cutoff = options.now.getTime() - options.olderThanMs;
-  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const dir = seatDropDir(root, session, seat);
   const scan: ArchiveScan = { move: [], stays: [], scanned: 0 };
   if (!realDir(dir)) return scan;
   for (const name of readdirSync(dir).sort()) {
@@ -322,7 +324,7 @@ export function scanArchiveSeat(options: {
         stay(scan, name, 'too-recent');
         continue;
       }
-      scan.move.push({ store: 'send-drops', seat, id: name, dir, files: [name], newest, bytes: sizeOf(path) });
+      scan.move.push({ store: LEGACY_TREE, seat, id: name, dir, files: [name], newest, bytes: sizeOf(path) });
       continue;
     }
     const auth = authOf(parsed, key);
@@ -364,7 +366,7 @@ export function scanArchiveSeat(options: {
       continue;
     }
     scan.move.push({
-      store: 'send-drops',
+      store: LEGACY_TREE,
       seat,
       id: name,
       dir,
@@ -457,7 +459,7 @@ function destinationOf(
   entry: Pick<PlannedMove, 'store' | 'seat'>,
   at: { agents: string; date: string; session: string },
 ): string {
-  return entry.store === 'send-drops'
+  return entry.store === LEGACY_TREE
     ? join(at.agents, 'send-drops-archive', at.date, at.session, entry.seat)
     : join(at.agents, 'messages-archive', at.date, entry.seat);
 }

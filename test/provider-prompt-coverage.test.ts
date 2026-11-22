@@ -72,7 +72,8 @@ const rateLimitAfterCompletion = [
   'API Error: Request rejected (429)',
   'Usage limit reached',
   'Your limit will reset at 11:00',
-  ...box(),
+  // A current wall has an exhausted window; the ordinary footer otherwise proves this limit is history.
+  ...box().map((row) => row === STATUS ? row.replace('L: 13%', 'L: 100%') : row),
 ].join('\n');
 const permissionAfterCompletion = [
   `⏺ ${LOST}`,

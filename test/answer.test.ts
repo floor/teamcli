@@ -1768,18 +1768,19 @@ describe('team answer', () => {
     const io = testIo(root, { kind: 'owner' });
     expect(await runStatus(FILE, io, sources)).toBe(1);
     expect(io.out).toContain('waiting for owner (trust)');
-    expect(io.out).toContain('team answer lead trust');
+    expect(io.out).toContain('the lead asks its parent orchestrator (team send)');
+    expect(io.out).not.toContain('team answer lead trust');
     const json = testIo(root, { kind: 'owner' });
     expect(await runStatus([...FILE, '--json'], json, sources)).toBe(1);
     const row = (JSON.parse(json.out) as { rows: { name: string; state: string }[] }).rows.find((item) => item.name === 'lead');
     expect(row?.state).toBe('waiting-owner');
 
-    // The setting off: the same dialog is still reported, and the repair is the owner's
-    // `team up` — never the `team answer` the grant would allow.
+    // A waiting lead asks its parent orchestrator even when the trust grant changes.
     revokeTrust(home);
     const held = testIo(root, { kind: 'owner' });
     expect(await runStatus(FILE, held, sources)).toBe(1);
     expect(held.out).toContain('waiting for owner (trust)');
+    expect(held.out).toContain('the lead asks its parent orchestrator (team send)');
     expect(held.out).not.toContain('team answer lead trust');
     grantTrust(root, home);
 

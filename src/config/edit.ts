@@ -5,14 +5,17 @@
 // owner's, as editing the file by hand was.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import {
+  callerLabel,
   callerOf,
   describeCaller,
   detachedRefusal,
@@ -22,7 +25,7 @@ import {
   type Caller,
   type SeatStanding,
 } from '../caller.ts';
-import { charterGate } from '../charter/check.ts';
+import { charterGate, passCharterOwner } from '../charter/check.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
@@ -39,6 +42,7 @@ import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 import { editedRecordText, getAt, parsePath, parseValue, reservedKeyIn, shownValue, withValue, type RecordPath } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 function realRoot(cwd: string): string {
   return findRoot(cwd) ?? resolve(cwd);
@@ -66,8 +70,14 @@ function usageRefused(io: Io, json: boolean, message: string, usage: string): nu
   return 2; // exit: config.usage
 }
 
+function refuseUnreadable(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'config', { id: 'config.unreadable', message, repair: 'team import' });
+  return 2; // exit: config.unreadable
+}
+
 function runEditor(path: string, env: Record<string, string | undefined>): number {
   const editor = env.VISUAL || env.EDITOR || 'vi';
+  hostedCommit('node:child_process.spawnSync');
   const ran = spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'sh', path], { stdio: 'inherit' });
   return ran.status ?? 1;
 }
@@ -94,15 +104,16 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   if (why !== null || typeof path === 'string') return usageRefused(io, json, why ?? 'invalid path', usage);
   const home = sources.home ?? homedir();
   const env = sources.env ?? process.env;
-  const root = realRoot(io.cwd);
+  const seat = path[0] === 'seats' && path[1] !== undefined && !/^\d+$/.test(path[1]) ? path[1] : undefined;
+  const binding = addressedTeam(home, io.cwd, seat, io);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') return refuseUnreadable(io, json, binding.message);
+  const root = binding.kind === 'bound' ? binding.team.root : realRoot(io.cwd);
   const file = join(root, TEAM_FILE);
   let target: ReturnType<typeof teamTextTarget>;
   try {
     target = teamTextTarget(file, { home, env });
   } catch (error) {
-    refuse(io, json, 'config', { id: 'config.unreadable', message: `the registry's record of this team cannot be read: ${error instanceof Error ? error.message : String(error)}`, repair: 'team import' });
-    // exit: config.unreadable
-    return 2;
+    return refuseUnreadable(io, json, `the registry's record of this team cannot be read: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (target.kind === 'file' && !existsSync(file)) {
     const held = readStoredTeamConfig(home, teamIdOf(root)) !== null;
@@ -135,6 +146,18 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   } catch (error) {
     parseError = error;
   }
+  // The orchestrator seat's own fields stay the owner's, whichever door admitted the run.
+  if ((verb === 'set' || verb === 'unset') && (path[0] === 'coordinator' || path[0] === 'orchestrator' || path[0] === 'leads') && !isOwner(callerOf(rawIo))) {
+    const caller = callerOf(rawIo);
+    refuse(io, json, 'config', {
+      id: 'config.orchestrator',
+      message: `only the owner changes the orchestrator's seat; this call is ${describeCaller(caller)}`,
+      repair: null,
+      rule: 'owner-only',
+    });
+    // exit: config.orchestrator
+    return 1;
+  }
   const reserved = parsed === null ? null : reservedKeyIn(parsed, path);
   if (reserved !== null) {
     return usageRefused(io, json, `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`, usage);
@@ -159,8 +182,11 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // to the owner seat (Touch ID); `--approval <id>` applies it once the owner's verified signature
   // binds these words. Nothing is written on a request, and an approval for other words refuses.
   let seatApproved = false;
+  let auditRule = 'owner-only';
+  let auditClient = rawIo.general?.clientId;
+  if (rawIo.general !== undefined) auditRule = `general-grant:${rawIo.general.grantId}`;
   if (args.flags.has('request') || args.values.approval !== undefined) {
-    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home, root, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) }, [root]);
     if (step.kind === 'requested') {
       // exit: config.approval-requested
       return 0;
@@ -170,6 +196,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       return 1;
     }
     seatApproved = step.kind === 'admitted';
+    if (step.kind === 'admitted') auditRule = `${step.admission.via}${step.admission.ruleId === undefined ? '' : `:${step.admission.ruleId}`}`;
   }
   // A general grant: the owner signed it once for this principal across these entities, so a set
   // or unset under it applies directly, with no per-action request.
@@ -187,14 +214,32 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     }
     if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
     seatApproved = true;
+    auditRule = `general-grant:${admitted.grant.grant_id}`;
+    auditClient = admitted.grant.client_id;
   }
-  const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block' && !seatApproved) {
+  const gate = charterGate(
+    home,
+    binding.kind === 'bound'
+      ? { operation: 'config', cwd: root, path: file }
+      : { operation: 'config', cwd: io.cwd, path: root },
+    sources.ownerSeatStore,
+  );
+  if (gate.kind === 'block' && !seatApproved && !isOwner(callerOf(rawIo))) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter
     return 1;
   }
+  // The owner is never refused. One warning names the charter and the repair, and the log keeps it.
+  if (gate.kind === 'block' && isOwner(callerOf(rawIo))) {
+    passCharterOwner(io, gate.message, {
+      dir: join(root, '.agents'),
+      command: 'config',
+      caller: callerLabel(callerOf(rawIo)),
+      ...(sources.now !== undefined ? { now: sources.now() } : {}),
+    });
+  }
   let liftAudit: (() => void) | null = null;
+  if (gate.kind === 'admit' && !seatApproved && rawIo.general === undefined) auditRule = 'charter';
   if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
     const detached = detachedRefusal(caller);
@@ -217,6 +262,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // before the change is validated, and a refused or unchanged run writes no record line.
       const lift = devModeOwnerLiftAtCwd(rawIo, {
         command: 'config',
+        gate: path[0] === 'trust' ? 'trust' : 'record',
         refusal: message,
         home,
         audit: 'later',
@@ -228,7 +274,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
         return 1;
       }
       liftAudit = lift.audit;
+      auditRule = `dev-mode:${lift.role}`;
       io.stderr(`${lift.warning}\n`);
+    } else if (!isOwner(caller)) {
+      auditRule = 'leads-own-team:clear-stopped';
     }
   }
   let next: string;
@@ -305,8 +354,20 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       return 1;
     }
   }
+  // A setup plan must pass this same owner/charter door before another surface writes.
+  // Validation above is the write's preflight; the actual writer still validates again.
+  if (sources.planOnly) {
+    if (!namesAfter.ok) {
+      refuse(io, json, 'config', { id: 'config.invalid', message: `the change does not validate, and nothing was written: ${namesAfter.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ')}`, repair: null });
+      return 1; // exit: config.plan-invalid
+    }
+    return 0; // exit: config.planned
+  }
   const now = sources.now;
-  const wrote = writeTeamText(file, next, { home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}) });
+  const wrote = writeTeamText(file, next, {
+    home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}),
+    audit: { caller: callerOf(rawIo), rule: auditRule, ...(auditClient === undefined ? {} : { client: auditClient }) },
+  });
   if (!wrote.ok) {
     const said = wrote.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
     refuse(io, json, 'config', {

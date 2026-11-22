@@ -6,7 +6,7 @@
 // same state door and apply the same rules; the caller supplies the reading, the instant and the
 // daemon epoch, and this module never samples a source.
 import { readFileSync } from 'node:fs';
-import { isSeatId, readState, type State } from '../../state.ts';
+import { isSeatId, readStateShared, type State } from '../../state.ts';
 import { isPresenceBinding, readPresenceReading } from './contract.ts';
 import { presencePaths } from './spool.ts';
 import type { PresenceCanonicalPosition, PresenceSourceStatus } from './health.ts';
@@ -26,7 +26,7 @@ export function presenceBindingFrom(state: State, session: string, seat: string)
  *  own binding is then fenced against nothing. */
 export function currentPresenceBinding(stateDir: string, session: string, seat: string): string | null {
   try {
-    return presenceBindingFrom(readState(stateDir), session, seat);
+    return presenceBindingFrom(readStateShared(stateDir), session, seat);
   } catch {
     return null;
   }
@@ -43,7 +43,7 @@ export function canonicalSeatOf(
 ): { canonical: PresenceCanonicalPosition | null; why: string | null } {
   let record;
   try {
-    record = readState(stateDir).sessions[session]?.seats?.[seat];
+    record = readStateShared(stateDir).sessions[session]?.seats?.[seat];
   } catch {
     return { canonical: null, why: 'the team state could not be read' };
   }

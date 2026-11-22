@@ -3,7 +3,8 @@
 // request cannot both take effect, and a run that crashed after claiming keeps the id claimed.
 // A duplicate is refused; it is never turned into a silent success.
 
-import { closeSync, lstatSync, mkdirSync, openSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync } from 'node:fs';
+import { mkdirSync, openSync, writeSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { CLIENT_REQUEST_ID_PATTERN } from './verify.ts';
 

@@ -33,6 +33,7 @@
 // owns; a process of that same user can register a job under a label that is not loaded, so this
 // is an identity check against mistakes, not a boundary against that user's deliberate attempt.
 import { darwinServiceManager } from './service-darwin.ts';
+import { linuxServiceManager } from './service-linux.ts';
 export type ServiceRunResult = { status: number | null; stdout: string; stderr: string };
 export type ServiceRunner = (command: string, args: string[]) => ServiceRunResult;
 
@@ -70,6 +71,8 @@ export type ServiceProgram = {
   /** Whether the unit's run command carries the watch opt-in. Absent means the unit starts the
    *  daemon without a hosted watch, exactly as a plain `run` does. Independent of `presence`. */
   watch?: boolean;
+  /** `--send-server`: the run starts the warm send host (src/host/). */
+  sendServer?: boolean;
   /** The PATH the installing shell had (0.5.9). The service manager starts a unit with only
    *  /usr/bin:/bin:/usr/sbin:/sbin, where herdr (often ~/.local/bin or /opt/homebrew/bin) is not
    *  found: every session read then failed and every hosted send answered "the session could not
@@ -162,6 +165,14 @@ export type ServiceInstallSuccess = {
    * copy at all, and this says what could not be read or parsed.
    */
   runtimeKeepFault?: string;
+  /**
+   * Set when the service manager stops this user's services once the user's last login session
+   * ends: the daemon then does not outlive a logout until the owner lets this user's services run
+   * without one, which an install never changes on its own. The command says so in neutral
+   * words; `detail` is the adapter's own account of it, for the daemon log. Absent when the
+   * services outlive a logout, or when the adapter cannot tell.
+   */
+  stopsAtLogout?: { detail: string };
   /**
    * Puts the machine back after a load the manager accepted but whose daemon does not answer:
    * the earlier unit is restored, unchanged, and started again — its entry names the retained
@@ -286,5 +297,6 @@ export type ServiceManagerOptions = {
 export function systemServiceManager(options: ServiceManagerOptions = {}): ServiceManager | null {
   const platform = options.platform ?? process.platform;
   if (platform === 'darwin') return darwinServiceManager(options);
+  if (platform === 'linux') return linuxServiceManager(options);
   return null;
 }

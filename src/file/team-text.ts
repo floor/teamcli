@@ -20,6 +20,8 @@ import { validateTeamFile } from './validate.ts';
 import { writeTeamFile } from './write.ts';
 import { readStoredTeamConfig, sha256, TeamConfigStoreError, writeStoredTeamConfig, type StoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { auditRecordWrite, type RecordWriteAudit } from './record-write-audit.ts';
+import { keptRootWords } from './root-word.ts';
 
 export type TeamTextOptions = {
   /** The home whose registry holds the record; the user's when absent. */
@@ -29,12 +31,19 @@ export type TeamTextOptions = {
   env?: Record<string, string | undefined>;
   /** The editing command, recorded on a registry write. */
   command?: string;
+  /** The admission already decided by the command; reporting only, never read by a gate. */
+  audit?: RecordWriteAudit;
   /** The lead the edited text is validated with: the verified approval's pin, when the caller
    *  carries one across a seat rename. Absent, the edit is read under the live chain. */
   lead?: string;
   now?: () => Date;
   /** A new team (team init): the registry is the target even before it holds a record. */
   create?: boolean;
+  /** An editor that builds values from the team as read (where `{root}` and `{worktrees}` are
+   *  already filled): each line it adds or changes gets the words back for full paths inside the
+   *  entity's folders (`keptRootWords`, src/file/root-word.ts). The owner's own `team config`
+   *  writes the words the owner wrote, and does not set it. */
+  keepWords?: boolean;
 };
 
 export type TeamTextTarget =
@@ -138,16 +147,29 @@ function provenanceOf(
 // lands; the record's `format` lets that change be read without a guess.
 /** The one write of an edited team: validated, then the registry's record or the file. */
 export function writeTeamText(path: string, text: string, options: TeamTextOptions = {}): { ok: true; target: TeamTextTarget['kind'] } | { ok: false; errors: Problem[] } {
+  if (options.keepWords === true) {
+    let previous = '';
+    try { previous = readTeamText(path, options); } catch { /* a new team: every line is the edit's */ }
+    text = keptRootWords(previous, text, options.home ?? homedir());
+  }
   const target = teamTextTarget(path, options);
   if (target.kind === 'file') {
     // A file under a project's own `.agents/` is a team the default lead chain can read for; any
     // other path is read as the file it names, and the chain finds no home project of it.
     const [dir, name] = TEAM_FILE.split('/') as [string, string];
     const root = basename(path) === name && basename(dirname(path)) === dir ? dirname(dirname(path)) : dirname(path);
+    let before = '';
+    if (options.audit !== undefined) {
+      try { before = readFileSync(path, 'utf8'); } catch { /* reporting never changes the write */ }
+    }
     const wrote = writeTeamFile(path, text, {
       home: options.home ?? homedir(),
       root,
       ...(options.lead !== undefined ? { lead: options.lead } : {}),
+    });
+    if (wrote.ok && options.audit !== undefined) auditRecordWrite({
+      root, home: options.home ?? homedir(), command: options.command ?? 'edit',
+      before, after: text, audit: options.audit, now: options.now?.() ?? new Date(),
     });
     return wrote.ok ? { ok: true, target: 'file' } : wrote;
   }
@@ -175,5 +197,9 @@ export function writeTeamText(path: string, text: string, options: TeamTextOptio
     edited_at: now,
   };
   writeStoredTeamConfig(target.home, record);
+  if (options.audit !== undefined) auditRecordWrite({
+    root: target.root, home: target.home, command: options.command ?? 'edit',
+    before: previous?.text ?? '', after: text, audit: options.audit, now: new Date(now),
+  });
   return { ok: true, target: 'registry' };
 }

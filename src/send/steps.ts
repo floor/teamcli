@@ -17,14 +17,21 @@
 //
 // The append is bounded: a writer on a send's own path passes `lockWaitMs` (100 ms for the
 // sender) so a live event-lock holder can never hold the send's line for the lock's whole budget.
-// A step that cannot be appended is dropped with its reason; it never fails the step it records.
-import { appendEvent, type EventAppendInput } from '../bus/log.ts';
+// A step the lock keeps out past a short bounded retry is deferred to the store's own folder and
+// flushed by a later append; it never fails the step it records.
+import { hostedCommit } from '../host/request-scope.ts';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { join } from 'node:path';
+import { appendEvent, type EventAppendInput, type EventAppendResult } from '../bus/log.ts';
+import { storePath } from '../store/store.ts';
 
 /** Where the step is filed: the receiving team's project store, the checkout the record was
  *  written into, and the home that holds the store. */
 export type StepStore = { project: string; root: string; home: string };
 
-export type StepResult = { ok: true; duplicate: boolean } | { ok: false; reason: string };
+export type StepResult = { ok: true; duplicate: boolean } | { ok: false; reason: string; deferred?: true };
 
 /** How long a step append may wait on the event lock. The send's target is a 300 ms p95 for its
  *  whole path; one contended append costs at most this, and the trace is a record, never a
@@ -35,21 +42,108 @@ export function stepRecordId(id: string, step: string, tail?: string): string {
   return tail === undefined ? `${id}:${step}` : `${id}:${step}:${tail}`;
 }
 
-/** One step, appended under the message id's own record id. Never throws. */
+/** The whole wait a busy event lock gets before the step is deferred: the first attempt's bound
+ *  and one longer retry share it. */
+export const STEP_RETRY_BUDGET_MS = 2_000;
+
+/** The most deferred steps one successful append flushes behind itself. */
+const DEFERRED_FLUSH_PER_APPEND = 20;
+
+/** The folder of steps the event lock kept out: one file per record id, in the store's own
+ *  folder, flushed by a later append. */
+export function deferredStepsFolder(store: StepStore): string {
+  return join(storePath(store.project, store.root, store.home), 'deferred-steps');
+}
+
+type AppendOptions = { maxBytes?: number; kept?: number; maxTotalBytes?: number; retentionSeconds?: number };
+
+function appendOnce(store: StepStore, input: EventAppendInput, lockWaitMs: number, options: AppendOptions): EventAppendResult {
+  return appendEvent(store.project, store.root, store.home, input, {
+    ...options,
+    lockWaitMs,
+    deduplicate: true,
+    retain: 'cap',
+  });
+}
+
+/** A step the lock kept out, written whole under its record id so a repeat defers nothing twice.
+ *  The name is the record id hashed, since an id carries `:` and the leg's own words. */
+export function deferStep(store: StepStore, input: EventAppendInput): boolean {
+  try {
+    const folder = deferredStepsFolder(store);
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const name = `${createHash('sha256').update(`${input.kind}\0${input.record_id}\0${input.session}`).digest('hex').slice(0, 32)}.json`;
+    const path = join(folder, name);
+    const tmp = `${path}.${String(process.pid)}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ v: 1, input })}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Appends the steps an earlier busy lock deferred, oldest first, bounded per call. The append
+ *  deduplicates by record id, so a step flushed twice (two flushers, a crash before the unlink) is
+ *  one event. A file that does not read is left for the owner to see, never guessed at. */
+export function flushDeferredSteps(store: StepStore, lockWaitMs = STEP_APPEND_MS, limit = DEFERRED_FLUSH_PER_APPEND): number {
+  let flushed = 0;
+  let names: string[];
+  try {
+    names = readdirSync(deferredStepsFolder(store)).filter((name) => name.endsWith('.json')).sort();
+  } catch {
+    return 0;
+  }
+  for (const name of names.slice(0, limit)) {
+    const path = join(deferredStepsFolder(store), name);
+    let input: EventAppendInput;
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as { v?: unknown; input?: EventAppendInput };
+      if (parsed.v !== 1 || parsed.input === undefined) continue;
+      input = parsed.input;
+    } catch {
+      continue;
+    }
+    try {
+      const result = appendOnce(store, input, lockWaitMs, {});
+      if (!result.ok) break;
+      unlinkSync(path);
+      flushed += 1;
+    } catch {
+      break;
+    }
+  }
+  return flushed;
+}
+
+/**
+ * One step, appended under the message id's own record id. Never throws. A busy event lock gets
+ * one longer retry inside `STEP_RETRY_BUDGET_MS`; still busy, the step is written to the store's
+ * deferred folder and the result says so, and the next append that lands flushes it. A step is
+ * never dropped silently: its reason names the deferral, or why even that could not be written.
+ */
 export function appendStep(
   store: StepStore,
   input: EventAppendInput,
   lockWaitMs = STEP_APPEND_MS,
-  options: { maxBytes?: number; kept?: number; maxTotalBytes?: number; retentionSeconds?: number } = {},
+  options: AppendOptions = {},
 ): StepResult {
+  hostedCommit('appendStep');
   try {
-    const result = appendEvent(store.project, store.root, store.home, input, {
-      ...options,
-      lockWaitMs,
-      deduplicate: true,
-      retain: 'cap',
-    });
-    return result.ok ? { ok: true, duplicate: result.duplicate } : { ok: false, reason: result.reason };
+    let result = appendOnce(store, input, lockWaitMs, options);
+    if (!result.ok && result.busy === true && lockWaitMs < STEP_RETRY_BUDGET_MS) {
+      result = appendOnce(store, input, STEP_RETRY_BUDGET_MS - lockWaitMs, options);
+    }
+    if (result.ok) {
+      flushDeferredSteps(store, lockWaitMs);
+      return { ok: true, duplicate: result.duplicate };
+    }
+    if (result.busy === true) {
+      return deferStep(store, input)
+        ? { ok: false, reason: `${result.reason}; trace record deferred: a later append flushes it`, deferred: true }
+        : { ok: false, reason: `${result.reason}; the trace record could not be deferred either` };
+    }
+    return { ok: false, reason: result.reason };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }

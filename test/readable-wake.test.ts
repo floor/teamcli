@@ -1,0 +1,133 @@
+import { expect, test } from 'bun:test';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { stripSgr } from '../src/ansi.ts';
+import { runSend } from '../src/commands/send.ts';
+import { boxHoldsText } from '../src/launch/deliver.ts';
+import { listUnread } from '../src/mcp/inbox.ts';
+import { inlineWake, RUNTIME_WAKE_MAX } from '../src/send/readable-wake.ts';
+import type { RecordPayload } from '../src/send/record.ts';
+import { fake, owner, world } from './send-native-fixtures.ts';
+
+const idle = stripSgr(readFileSync(new URL('./fixtures/codex/0.167.0/idle.txt', import.meta.url), 'utf8'));
+const working = stripSgr(readFileSync(new URL('./fixtures/codex/0.167.0/working.txt', import.meta.url), 'utf8'));
+const draw = (text: string) => idle.replace('› Ask Codex to do anything', `› ${text.replaceAll('\n', '\n  ')}`);
+
+test('a full multiline typed wake is readable and records its delivery, not a read, after submission', async () => {
+  const w = world(['typed']);
+  try {
+    let typed = '';
+    let enters = 0;
+    const io = owner(w.root);
+    const host = fake(w, {
+      agents: () => [{ name: 'native', pane: 'synthetic-pane', cli: 'codex' }],
+      typedWake: () => ({
+        read: () => enters ? working : typed ? draw(typed) : idle,
+        type: (_pane, text) => { typed = text; return true; },
+        enter: () => { enters++; return true; },
+        wait: async () => {},
+      }),
+      wakeVerifyMs: 1, wakePollMs: 1,
+    });
+    const code = await runSend(['native', 'First line.\nSecond line.'], io, host);
+    expect(code, io.err + io.out).toBe(0);
+    expect(typed).toContain('\n\n');
+    expect(typed).toContain('First line.\nSecond line.');
+    expect(typed).not.toContain('drops --read');
+    expect(enters).toBe(1);
+    const dir = join(w.dir, 'send-drops', 'acme', 'native');
+    // The typed wake is a carrier: it writes the delivered receipt, and only the seat's own read
+    // settles the message, so it stays unread here.
+    expect(readdirSync(dir).some((name) => name.endsWith('.delivered.json'))).toBe(true);
+    expect(readdirSync(dir).some((name) => name.endsWith('.read.json'))).toBe(false);
+    expect(listUnread(dir, { root: w.root, session: 'acme', to: 'native' }, w.home)).toHaveLength(1);
+  } finally { w.cleanup(); }
+});
+
+test('a draft is neither appended to nor receipted by an inline wake', async () => {
+  const w = world(['typed']);
+  try {
+    let writes = 0;
+    const io = owner(w.root);
+    const host = fake(w, {
+      agents: () => [{ name: 'native', pane: 'synthetic-pane', cli: 'codex' }],
+      typedWake: () => ({ read: () => draw('unfinished draft'), type: () => { writes++; return true; }, enter: () => { writes++; return true; }, wait: async () => {} }),
+      wakeVerifyMs: 1, wakePollMs: 1,
+    });
+    await runSend(['native', 'Hello'], io, host);
+    expect(writes).toBe(0);
+    const dir = join(w.dir, 'send-drops', 'acme', 'native');
+    expect(readdirSync(dir).some((name) => name.endsWith('.read.json'))).toBe(false);
+  } finally { w.cleanup(); }
+});
+
+test('multiline read-back requires every row and refuses extra or partial text', () => {
+  const text = 'Header\n\nMessage';
+  expect(boxHoldsText('codex', text, draw(text))).toBe(true);
+  expect(boxHoldsText('codex', text, draw(text + 'extra'))).toBe(false);
+  expect(boxHoldsText('codex', text, draw('Header\n\nMess'))).toBe(false);
+});
+
+test('runtime wake retains all content and refuses an oversized body without truncating it', () => {
+  const payload = { id: '0c0ffee0-0000-4000-8000-000000000001', body: 'One\nTwo', from: 'runtime', root: '/synthetic', at: '2026-11-10T00:00:00Z', rule: 'synthetic rule' } as RecordPayload;
+  expect(inlineWake(payload, '/synthetic')).toContain('One\nTwo');
+  // A runtime report carries no reader line: no seat answers it. A seat's message ends with it,
+  // so the id `team reply` takes is on the screen.
+  expect(inlineWake(payload, '/synthetic')).not.toContain('↩ team reply');
+  const id = payload.id;
+  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic')!.endsWith(`\n\n↩ team reply ${id} "…" · team ack ${id}`)).toBe(true);
+  // A typed wake keeps the id on the last row: a paragraph of its own leaves a composer unreadable.
+  expect(inlineWake({ ...payload, from: 'lead' }, '/synthetic', 200, 'typed')!.endsWith(`One\nTwo ↩ team reply ${id}`)).toBe(true);
+  // Two records sharing the shortest prefix: each wake, in both shapes, names its own whole id,
+  // never a prefix another record in the mailbox could share.
+  const twin = { ...payload, from: 'lead', id: '0c0ffee0-0000-4000-8000-000000000002' } as RecordPayload;
+  for (const shape of ['runtime', 'typed'] as const) {
+    const first = inlineWake({ ...payload, from: 'lead' }, '/synthetic', RUNTIME_WAKE_MAX, shape)!;
+    const second = inlineWake(twin, '/synthetic', RUNTIME_WAKE_MAX, shape)!;
+    expect(first).toContain(`team reply ${payload.id}`);
+    expect(second).toContain(`team reply ${twin.id}`);
+    expect(first).not.toContain(twin.id);
+  }
+  expect(inlineWake({ ...payload, body: 'x'.repeat(RUNTIME_WAKE_MAX) }, '/synthetic')).toBeNull();
+});
+
+test('the Codex queue adapter forwards a multiline body beyond the old pointer bound', async () => {
+  const { codexPushAdapter } = await import('../src/send/push-adapters/codex.ts');
+  let message = '';
+  const adapter = codexPushAdapter({
+    codexDaemon: 'on',
+    resolveSession: () => ({ kind: 'bound', recorded: {
+      agentId: 'synthetic-agent', seatHandle: null, sessionId: 'synthetic-thread',
+      team: 'synthetic-team', seat: 'worker', cli: 'codex', herdrSession: 'synthetic-session', pane: null, address: null,
+    } }),
+    spawn: (_binary, args) => { message = args[args.indexOf('--message') + 1] ?? ''; return { status: 0, stdout: '', stderr: '' }; },
+  });
+  const text = 'Sender header\n\n' + 'body '.repeat(60);
+  const outcome = await adapter.push({ root: '/synthetic-root', home: '/synthetic-home', session: 'synthetic-session', seat: 'worker', id: 'synthetic-message', sender: { seat: 'lead', team: 'synthetic-team' }, agentSession: 'synthetic-thread', pointer: text });
+  expect(outcome.kind).toBe('enqueue');
+  expect(message).toBe(text);
+});
+
+test('an oversized typed body explicitly requests a read and stays unread', async () => {
+  const w = world(['typed']);
+  try {
+    let typed = '';
+    let entered = false;
+    const io = owner(w.root);
+    const host = fake(w, {
+      agents: () => [{ name: 'native', pane: 'synthetic-pane', cli: 'codex' }],
+      typedWake: () => ({ read: () => entered ? working : typed ? draw(typed) : idle, type: (_pane, text) => { typed = text; return true; }, enter: () => { entered = true; return true; }, wait: async () => {} }),
+      wakeVerifyMs: 1, wakePollMs: 1,
+    });
+    expect(await runSend(['native', 'x'.repeat(2000)], io, host), io.err).toBe(0);
+    expect(typed).toContain('Body too long; read it with: team drops --read.');
+    const dir = join(w.dir, 'send-drops', 'acme', 'native');
+    expect(readdirSync(dir).some((name) => name.endsWith('.read.json'))).toBe(false);
+  } finally { w.cleanup(); }
+});
+
+test('compact socket delivery keeps every body line', async () => {
+  const { socketMessageFrame } = await import('../src/send/frame.ts');
+  const frame = JSON.parse(socketMessageFrame('synthetic-session', 'worker', 'First line\nSecond line', 'synthetic-message', { from: 'runtime', compact: true }));
+  expect(frame.message.content).toContain('First line\nSecond line');
+});

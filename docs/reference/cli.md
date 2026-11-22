@@ -232,6 +232,9 @@ Usage:
     team approvals revoke <id...> [--json]
     team approvals revoke <id...> --request [--reason <text>] [--json]
     team approvals revoke <id...> --approval <request-id> [--json]
+    team approvals export <id> --out <file> [--json]
+    team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
+    team approvals answer --from <file> [--json]
 
 ### Who may run it
 
@@ -247,6 +250,33 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `answer`
+
+Hidden: no
+
+Usage:
+
+    team approvals answer --from <file> [--json]
+
+#### Who may run it
+
+`any-caller` — it records an answer carried from another machine, and only one that verifies against this machine's pinned owner seat and is bound to a request of this machine; the command still runs with --approval and is checked again there
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--from` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -270,6 +300,35 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
+### `export`
+
+Hidden: no
+
+Usage:
+
+    team approvals export <id> --out <file> [--json]
+
+#### Who may run it
+
+`any-caller` — it writes a waiting request of a machine whose owner seat is pinned to a file; the request grants nothing until the owner signs an answer on the machine that holds the signers
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--out` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -338,6 +397,37 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `id...` | no | no |
+
+### `sign`
+
+Hidden: no
+
+Usage:
+
+    team approvals sign --from <file> --out <file> [--answer <oui|always|non>] [--signer <name>] [--assertion <file>] [--json]
+
+#### Who may run it
+
+`any-caller` — an agent may start it, but the answer is written only once the owner signs it (on the owner's device, or with a passkey); the request it answers runs only on the machine it names
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--answer` | yes | no | no |
+| `--assertion` | yes | no | no |
+| `--from` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--out` | yes | no | no |
+| `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
 
 ## `archive`
 
@@ -800,6 +890,8 @@ Usage:
     team config unset <path>
     team config set <path> <value> --request [--reason <text>] [--json]
     team config set <path> <value> --approval <request-id> [--json]
+    team config unset <path> --request [--reason <text>] [--json]
+    team config unset <path> --approval <request-id> [--json]
     team config set <path> <value> --general <grant.json> --key <client.key> [--json]
     team config unset <path> --general <grant.json> --key <client.key> [--json]
     team config edit
@@ -915,7 +1007,7 @@ Usage:
 
 #### Who may run it
 
-`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+`owner-only` — the team's record, and an entity's record in the owner's entities file, are the owner's: editing either is the owner's act, as editing the team file was, from a terminal outside herdr, or the owner's signed answer to that exact edit (`--request`, `--approval`)
 
 #### Flags
 
@@ -944,20 +1036,25 @@ Hidden: no
 Usage:
 
     team config unset <path>
+    team config unset <path> --request [--reason <text>] [--json]
+    team config unset <path> --approval <request-id> [--json]
     team config unset <path> --general <grant.json> --key <client.key> [--json]
 
 #### Who may run it
 
-`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+`owner-only` — the team's record, and an entity's record in the owner's entities file, are the owner's: editing either is the owner's act, as editing the team file was, from a terminal outside herdr, or the owner's signed answer to that exact edit (`--request`, `--approval`)
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -991,15 +1088,15 @@ Hidden: no
 Usage:
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon restart [--dry-run] [--json]
-    team daemon uninstall [--home <folder>] [--json]
+    team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
 
-`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, and the system service manager's no-terminal start is the owner's own login session
+`owner-only` — the one machine daemon is the owner's: install, restart, uninstall and run are gated to the owner, or to a verified general grant for install and restart, or to the owner's signed answer to that exact install or uninstall, and the system service manager's no-terminal start is the owner's own login session
 
 ### Flags
 
@@ -1073,24 +1170,31 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
-`owner-only` — registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, or the owner's dev-mode admission for a placed lead, is the other way
+`owner-only` — registering the user service unit is the owner's act; a verified general grant whose ops name `daemon`, the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact install (`--request`, `--approval`) are the other ways
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--no-presence` | no | no | no |
+| `--no-send-server` | no | no | no |
+| `--no-watch` | no | no | no |
 | `--presence` | no | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `--root` | yes | no | no |
+| `--send-server` | no | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1131,7 +1235,7 @@ Hidden: no
 
 Usage:
 
-    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
 
 #### Who may run it
 
@@ -1146,6 +1250,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
+| `--send-server` | no | no | no |
 | `--started-by` | yes | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
@@ -1186,21 +1291,24 @@ Hidden: no
 
 Usage:
 
-    team daemon uninstall [--home <folder>] [--json]
+    team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
-`owner-only` — removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead is the one other way
+`owner-only` — removing the user service unit is the owner's act; the owner's dev-mode admission for a placed lead, or the owner's signed answer to that exact removal (`--request`, `--approval`), are the other ways
 
 #### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--reason` | yes | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1377,7 +1485,9 @@ Hidden: no
 Usage:
 
     team drops [--follow] [--json]
-    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
+    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>] [--due]
+    team drops archive [--dry-run] [--json]
+    team drops archive --unread [--seat <seat>] [--json]
 
 ### Who may run it
 
@@ -1387,6 +1497,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--due` | no | no | no |
 | `--epoch` | yes | no | no |
 | `--follow` | no | no | no |
 | `--general` | yes | no | no |
@@ -1400,6 +1511,36 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `archive`
+
+Hidden: no
+
+Usage:
+
+    team drops archive [--dry-run] [--json]
+    team drops archive --unread [--seat <seat>] [--json]
+
+#### Who may run it
+
+`team-change` — the owner, the orchestrator or the operator archives every seat folder; a seat on its own pane archives only its own
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--unread` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -1521,6 +1662,56 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `id...` | no | no |
+
+## `gh`
+
+Hidden: no
+
+Usage:
+
+    team gh <arguments>
+
+### Who may run it
+
+`owner-or-own-team` — the gh CLI with the entity's GitHub identity, the token held by that one process; merges, releases, repository deletes and renames, API writes, and credential, secret, key, variable and settings commands are refused before anything runs
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `arguments` | no | no |
+
+## `git`
+
+Hidden: no
+
+Usage:
+
+    team git <arguments>
+
+### Who may run it
+
+`owner-or-own-team` — git push, fetch and pull with the entity's GitHub identity: the token is read for that one command and handed to that process only; force pushes, pushes to main or master, deletes and mirrors are refused before anything runs
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `arguments` | no | no |
 
 ## `grant`
 
@@ -1779,6 +1970,58 @@ Usage:
 
 None.
 
+## `launchers`
+
+Hidden: no
+
+Usage:
+
+    team launchers migrate [--dry-run] [--json]
+
+### Who may run it
+
+`owner-or-leads` — rewriting a team's launch lines off repo and temp scripts is the owner, or a lead of that team
+
+A run with no terminal is refused: only the owner or a lead of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `migrate`
+
+Hidden: no
+
+Usage:
+
+    team launchers migrate [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-or-leads` — rewriting a team's launch lines off repo and temp scripts is the owner, or a lead of that team
+
+A run with no terminal is refused: only the owner or a lead of this team runs this, from a terminal outside herdr or its own pane
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `list`
 
 Hidden: no
@@ -1846,11 +2089,12 @@ Usage:
 
     team mcp status [--json]
     team mcp doctor [--json]
+    team mcp setup <seat> [--off] [--dry-run] [--json]
     team mcp serve --seat <seat> [--session <session>] [--file <path>] [--epoch <run_id>]
 
 ### Who may run it
 
-`any-caller` — status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat, and its own row says who it admits
+`any-caller` — status and doctor write nothing and ask for no caller; setup and serve state their own gates in their subcommand rows
 
 ### Flags
 
@@ -1920,6 +2164,36 @@ Usage:
 
 None.
 
+### `setup`
+
+Hidden: no
+
+Usage:
+
+    team mcp setup <seat> [--off] [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the owner or the named seat itself may request setup; the existing config editor must admit its launch change, and register must admit its calling pane before the scoped project pair is published
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--off` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ### `status`
 
 Hidden: no
@@ -1988,6 +2262,7 @@ Usage:
     team migrate [--keep-file] [--dry-run] [--json]
     team migrate [--keep-file] --request [--reason <text>] [--json]
     team migrate [--keep-file] --approval <request-id> [--json]
+    team migrate --root [--dry-run] [--json]
 
 ### Who may run it
 
@@ -2006,6 +2281,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--reason` | yes | no | no |
 | `--request` | no | no | no |
+| `--root` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2080,6 +2356,9 @@ Usage:
     team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
     team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
     team owner-seat serve [--port <port>]
+    team owner-seat export --out <file> [--signer <name>] [--json]
+    team owner-seat pin --from <file> [--name <machine>] [--json]
+    team owner-seat install --account <a,b> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -2096,6 +2375,90 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `export`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat export --out <file> [--signer <name>] [--json]
+
+#### Who may run it
+
+`any-caller` — an agent may start it, but the export is written only once the owner signs it on the owner's device; it carries the seat's public keys and no private key
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--out` | yes | no | no |
+| `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `install`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat install --account <a,b> [--dry-run] [--json]
+
+#### Who may run it
+
+`any-caller` — with --dry-run it prints the steps and changes nothing; a real run changes the machine only as the system's administrator, which on a shared Linux machine is the owner's own account alone, and asks for no team file, seat or terminal
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--account` | yes | no | no |
+| `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `pin`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat pin --from <file> [--name <machine>] [--json]
+
+#### Who may run it
+
+`owner-only` — the first pin is the owner's, from a terminal outside the terminal host on a machine with no pin yet (trust on first use); a changed seat is pinned only from a newer export signed by a signer already pinned there
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--from` | yes | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--name` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -2275,6 +2638,35 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `seat` | no | no |
+
+## `ping`
+
+Hidden: no
+
+Usage:
+
+    team ping <seat> [--wait <seconds>] [--json]
+    team ping --all [--wait <seconds>] [--json]
+
+### Who may run it
+
+`admission` — each message is an ordinary team send from the caller's own folder, decided by the send admission; the acknowledgement is the seat's own read receipt, so this map admits no one to it
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--all` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--wait` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
 
 ## `plan`
 
@@ -2790,6 +3182,152 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `task` | no | no |
+
+## `queues`
+
+Hidden: no
+
+Usage:
+
+    team queues status
+    team queues activate
+    team queues prove [<seat>]
+    team queues deactivate
+    team queues reader <on|off>
+
+### Who may run it
+
+`owner-only` — every verb but status changes what every seat of the root does: the owner, or the owner's dev-mode admission for a placed lead, as the daemon's rows; status states its own row
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `activate`
+
+Hidden: no
+
+Usage:
+
+    team queues activate
+
+#### Who may run it
+
+`owner-only` — turning on at-least-once delivery changes every seat of the root: the owner, or the owner's dev-mode admission for a placed lead
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `deactivate`
+
+Hidden: no
+
+Usage:
+
+    team queues deactivate
+
+#### Who may run it
+
+`owner-only` — the rollback to dark changes every seat of the root: the owner, or the owner's dev-mode admission for a placed lead, as activate
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `prove`
+
+Hidden: no
+
+Usage:
+
+    team queues prove [<seat>]
+
+#### Who may run it
+
+`owner-only` — a channel proof probe is placed in another seat's delivery: the owner, or the owner's dev-mode admission for a placed lead, as activate
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+
+### `reader`
+
+Hidden: no
+
+Usage:
+
+    team queues reader <on|off>
+
+#### Who may run it
+
+`owner-only` — the reader switch moves every seat's reader at once: the owner, or the owner's dev-mode admission for a placed lead, as activate
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `on\|off` | no | no |
+
+### `status`
+
+Hidden: no
+
+Usage:
+
+    team queues status
+
+#### Who may run it
+
+`any-caller` — the report reads the root's floor state, the reader switch and each seat queue's check; it drains, signs and moves nothing and asks for no caller
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
 
 ## `raise`
 
@@ -3743,12 +4281,11 @@ Hidden: no
 
 Usage:
 
-    team swap [--file <path>] [--json]
-    team swap --rule [--file <path>] [--json]
+    team swap <seat> <preset> [--model <model>] [--version <version>] [--vendor <vendor>] [--effort <effort>] [--dry-run] [--file <path>] [--json]
+    team swap [--rule | --run] [--file <path>] [--json]
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
     team swap now <seat> [--file <path>] [--json]
     team swap cancel <seat> [--file <path>] [--json]
-    team swap --run [--file <path>] [--json]
 
 ### Who may run it
 
@@ -3758,18 +4295,26 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--effort` | yes | no | no |
 | `--file` | yes | no | no |
 | `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--model` | yes | no | no |
 | `--rule` | no | no | no |
 | `--run` | no | no | no |
+| `--vendor` | yes | no | no |
+| `--version` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+| `preset` | yes | no |
 
 ### `cancel`
 
@@ -3952,6 +4497,9 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]
+    team up <seat...> [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+    team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]
+    team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]
     team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
     team up --general <grant.json> --key <client-key> [--all] [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
@@ -3977,8 +4525,10 @@ Usage:
 | `--key` | yes | no | no |
 | `--no-launch` | no | no | no |
 | `--reason` | yes | no | no |
+| `--rebind` | yes | no | no |
 | `--request` | no | no | no |
 | `--resolve-launch` | no | no | no |
+| `--retie` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
@@ -3986,7 +4536,9 @@ Usage:
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat...` | yes | no |
 
 ## `usage`
 

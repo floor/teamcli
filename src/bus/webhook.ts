@@ -31,17 +31,20 @@
 // so the bus and the seat's pull keep the fallback they always had.
 import { spawn } from 'node:child_process';
 import { writeStateFile } from '../file-write.ts';
-import { existsSync, lstatSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { renameSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
 import { appendHistory } from '../send/history.ts';
 import { webhookStep, type StepFields } from '../send/steps.ts';
-import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
+import { strayWebhookOf, webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
 import { WEBHOOK_SENDER_DEADLINE_MAX_MS } from '../settings/webhook-sender.ts';
 import { webhookSenderDeadlineMs } from '../settings/webhook-sender-policy.ts';
 import type { SignedEventRecord } from './log.ts';
+import { hostedCommit } from '../host/request-scope.ts';
+import { seatMailDirIn, type MailTree } from '../queue/mail-tree.ts';
 
 /** How hard one record is tried when the request could not be sent at all: three attempts in
  *  total, five seconds each, then one and four seconds between them — about twenty seconds. A
@@ -84,7 +87,7 @@ export type WebhookFacts = {
  *  neither header nor body posts the form every earlier row had. */
 export type WebhookShape =
   | { header?: string; body: 'event' }
-  | { header?: string; body: 'inbox'; message: SignedRecord };
+  | { header?: string; body: 'inbox'; message: SignedRecord; delivery?: string };
 
 /**
  * The one place the routine's contract lives: the body it is sent and the way the secret
@@ -115,7 +118,7 @@ export function webhookRequest(
     init: {
       method: 'POST',
       headers,
-      body: shape.body === 'inbox' ? JSON.stringify(inboxBody(shape.message)) : JSON.stringify({ v: 1, event: record }),
+      body: shape.body === 'inbox' ? JSON.stringify(inboxBody(shape.message, shape.delivery)) : JSON.stringify({ v: 1, event: record }),
     },
   };
 }
@@ -126,7 +129,7 @@ export function webhookRequest(
  * per-record nonce — have no TeamCLI counterpart and are absent rather than invented; `signature`
  * is the record's own hex message signature, not a bridge signature.
  */
-function inboxBody(message: SignedRecord): Record<string, unknown> {
+function inboxBody(message: SignedRecord, delivery?: string): Record<string, unknown> {
   const payload = message.payload;
   return {
     id: payload.id,
@@ -135,6 +138,9 @@ function inboxBody(message: SignedRecord): Record<string, unknown> {
     created_at: payload.at,
     body: payload.body,
     signature: message.signature,
+    // E7b: a stamped record's copy names its message and delivery number on the carrier; the
+    // signed record itself is unchanged.
+    ...(delivery === undefined ? {} : { delivery }),
   };
 }
 
@@ -159,11 +165,20 @@ function ownDropPath(
   if (!segmentOk(session) || !segmentOk(to)) {
     return { ok: false, reason: 'the arrival cannot name a drop folder' };
   }
-  const dir = join(root, '.agents', 'send-drops', session, to);
+  // E7b revision 3: a stamped record sits in the seat's stamped folder (src/queue/mail-tree.ts),
+  // held to the same checks; the legacy folder's answer stands when neither holds it.
+  const legacy = ownDropPathIn(root, session, to, id, 'legacy');
+  if (legacy.ok) return legacy;
+  const stamped = ownDropPathIn(root, session, to, id, 'stamped');
+  return stamped.ok ? stamped : legacy;
+}
+
+function ownDropPathIn(root: string, session: string, to: string, id: string, tree: MailTree): { ok: true; path: string } | { ok: false; reason: string } {
+  const dir = seatMailDirIn(join(root, '.agents'), session, to, tree);
   let expected: string;
   let realDir: string;
   try {
-    expected = join(realpathSync(root), '.agents', 'send-drops', session, to);
+    expected = seatMailDirIn(join(realpathSync(root), '.agents'), session, to, tree);
     realDir = realpathSync(dir);
   } catch {
     return { ok: false, reason: `the message record ${id} is not in the seat's drop folder` };
@@ -194,12 +209,21 @@ const CLAIM_SUFFIX = '.posting';
 /** The seat's own drop folder for this record, resolved through real paths: a linked folder that
  *  leads outside the project proves nothing and is never posted into or marked. Null when the
  *  folder cannot be proven — no root, an unsafe segment, a missing or linked folder. */
-function dropDirAt(root: string | undefined, session: string, to: string): string | null {
+function dropDirAt(root: string | undefined, session: string, to: string, id?: string): string | null {
   if (root === undefined) return null;
   if (!segmentOk(session) || !segmentOk(to)) return null;
+  // E7b revision 3: the marks sit beside the record, in the folder of its own tree.
+  if (id !== undefined) {
+    const stamped = dropDirIn(root, session, to, 'stamped');
+    if (stamped !== null && existsSync(join(stamped, id))) return stamped;
+  }
+  return dropDirIn(root, session, to, 'legacy');
+}
+
+function dropDirIn(root: string, session: string, to: string, tree: MailTree): string | null {
   try {
     const realRoot = realpathSync(root);
-    const expected = join(realRoot, '.agents', 'send-drops', session, to);
+    const expected = seatMailDirIn(join(realRoot, '.agents'), session, to, tree);
     const realDir = realpathSync(expected);
     return realDir === expected ? realDir : null;
   } catch {
@@ -212,7 +236,7 @@ function dropDirAt(root: string | undefined, session: string, to: string): strin
  *  nothing, and an unproved mark is never an excuse to skip the delivery. */
 function postedMarkAt(root: string | undefined, session: string, to: string, id: string): boolean {
   if (!DROP_NAME.test(id)) return false;
-  const dir = dropDirAt(root, session, to);
+  const dir = dropDirAt(root, session, to, id);
   if (dir === null) return false;
   let held;
   try {
@@ -454,7 +478,9 @@ async function shapeOf(
 export function webhookRoutesOf(team: TeamFile): Map<string, SeatWebhook> {
   const routes = new Map<string, SeatWebhook>();
   for (const seat of team.seats) {
-    if (seat.webhook !== undefined) routes.set(seat.name, seat.webhook);
+    // A webhook whose routine runs another CLI than the seat's own is not the seat's route: the
+    // bus never posts the seat's mail to it, and the seat's own pane route carries the message.
+    if (seat.webhook !== undefined && strayWebhookOf(seat.webhook, seat.cli) === null) routes.set(seat.name, seat.webhook);
   }
   return routes;
 }
@@ -463,6 +489,9 @@ export type WebhookDeliveryInput = {
   /** The seat the arrival is for, as the record names it. */
   seat: string;
   webhook: SeatWebhook;
+  /** The seat's declared CLI. The route read for the POST is refused when the routine runs as
+   *  another CLI, on the same reading of the URL the request is built from. */
+  cli?: string;
   record: SignedEventRecord;
   /** The project root: the inbox body shape reads the record the arrival names beneath it. */
   root?: string;
@@ -581,7 +610,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   if (payload.kind === 'message.arrived' && to !== undefined && postedMarkAt(input.root, payload.session, to, payload.record_id)) {
     return done({ outcome: 'skipped', attempts: 0, reason: 'the send already posted this arrival' });
   }
-  const route = webhookRouteOf(input.webhook);
+  const route = webhookRouteOf(input.webhook, input.cli);
   if (route === null || !route.ok) {
     const reason = route === null ? 'no webhook adapter is configured' : route.reason;
     say(input.report, `webhook: ${input.seat}: not posted: ${reason}; the drop file stays in place`);
@@ -621,7 +650,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   // that left it also freed the claim's name.
   const claimId = payload.record_id;
   const claimDir = to !== undefined && payload.kind === 'message.arrived' && DROP_NAME.test(claimId)
-    ? dropDirAt(input.root, payload.session, to)
+    ? dropDirAt(input.root, payload.session, to, claimId)
     : null;
   if (claimDir !== null && to !== undefined) {
     if (holdClaim(claimDir, claimId, policy.claimStaleMs, input.report, input.seat) !== 'held') {
@@ -642,6 +671,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
       // A redirect is never followed: it would carry the secret to a destination the routine's
       // own address never named. The policy rides on the attempt, not on the request object, so a
       // row that names neither new field builds exactly the request object it always did.
+      hostedCommit('fetch');
       const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) {
         if (claimDir !== null) finishClaim(claimDir, claimId, () => new Date(), input.root);
@@ -716,6 +746,9 @@ export type SenderPostInput = {
   seat: string;
   /** The seat's adapter row, as the receiving team file declares it. */
   webhook: SeatWebhook;
+  /** The seat's declared CLI; absent, the receiving team file's row for the seat names it. The
+   *  route read for the POST is refused when the routine runs as another CLI. */
+  cli?: string;
   /** The receiving team file, as the policy chain's team level reads it; absent, the release
    *  default bound stands. */
   team?: TeamFile | null;
@@ -726,6 +759,10 @@ export type SenderPostInput = {
   thread?: string;
   /** The signed message record the send just wrote: the body an inbox-shaped row reads. */
   message: SignedRecord;
+  /** E7b: the numbered copy's header for an inbox-shaped body, taken only when that shape is
+   *  posted. Absent, the body carries none; null (the number could not be recorded), nothing is
+   *  posted. */
+  delivery?: () => string | null;
   /** The folder the record was staged into: the claim and the marks are written beside it. */
   dropDir: string;
   home: string;
@@ -766,13 +803,18 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     held = 'none';
   };
   try {
-    const route = webhookRouteOf(input.webhook);
+    const cli = input.cli ?? input.team?.seats.find((one) => one.name === input.seat)?.cli;
+    const route = webhookRouteOf(input.webhook, cli);
     if (route === null || !route.ok) return { kind: 'none', why: 'no-route' };
     const header = route.header === undefined ? {} : { header: route.header };
     let shape: WebhookShape;
     let event: SignedEventRecord;
     if (route.body === 'inbox') {
-      shape = { body: 'inbox', ...header, message: input.message };
+      // E7b: a stamped body leaves only numbered. A number that cannot be recorded posts nothing;
+      // the record stays due.
+      const delivery = input.delivery === undefined ? undefined : input.delivery();
+      if (delivery === null) return { kind: 'failed', reason: 'the copy number could not be recorded; nothing was posted' };
+      shape = { body: 'inbox', ...header, message: input.message, ...(delivery === undefined ? {} : { delivery }) };
       event = {
         payload: {
           v: 1,
@@ -863,6 +905,7 @@ export async function postArrivalWebhook(input: SenderPostInput): Promise<Sender
     // One request, built above. The signal is the policy max when the sender deadline is the
     // bound, so the injected request can still settle after this caller has returned. A tighter
     // row aborts at its own bound.
+    hostedCommit('fetch');
     const pending = (input.fetch ?? fetch)(request.url, {
       ...prepared,
       redirect: 'error',
@@ -957,6 +1000,7 @@ function unrefPipe(pipe: unknown): void {
  *  settled the answer itself; `stop` closes the pipes so the child settles after the parent is gone. */
 function spawnLateWorker(job: LateJob): { stop: () => void; took: () => void; done: Promise<LateLine | null> } {
   const entry = fileURLToPath(import.meta.url);
+  hostedCommit('node:child_process.spawn');
   const child = spawn(process.execPath, [entry, '--finish-late'], {
     detached: true,
     stdio: ['pipe', 'pipe', 'ignore'],
@@ -1188,6 +1232,7 @@ async function finishLateWorker(): Promise<void> {
   const started = Date.now();
   let line: LateLine;
   try {
+    hostedCommit('fetch');
     const response = await fetch(job.url, {
       method: 'POST',
       headers: job.headers,
@@ -1244,6 +1289,10 @@ export type WebhookDelivery = ((record: SignedEventRecord) => void) & {
  */
 export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery {
   let routes = webhookRoutesOf(input.team);
+  // Each routed seat's declared CLI, rebuilt with the routes: the POST rechecks the target on its
+  // own reading of the URL, so a URL file changed after this map was built cannot slip through.
+  const clisOf = (team: TeamFile): Map<string, string> => new Map(team.seats.map((seat) => [seat.name, seat.cli]));
+  let clis = clisOf(input.team);
   const deliver: WebhookDelivery = (record: SignedEventRecord): void => {
     try {
       if (record.payload.kind !== 'message.arrived') return;
@@ -1253,9 +1302,11 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery
       if (webhook === undefined) return;
       const report = (text: string): void => say(input.stderr, text);
       const onResult = input.onResult;
+      const cli = clis.get(to);
       void deliverWebhook({
         seat: to,
         webhook,
+        ...(cli === undefined ? {} : { cli }),
         record,
         ...(input.root === undefined ? {} : { root: input.root }),
         ...(input.policy === undefined ? {} : { policy: input.policy }),
@@ -1272,6 +1323,7 @@ export function makeWebhookDelivery(input: WebhookFactoryInput): WebhookDelivery
   };
   deliver.reload = (team: TeamFile): void => {
     routes = webhookRoutesOf(team);
+    clis = clisOf(team);
   };
   return deliver;
 }

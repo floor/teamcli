@@ -167,7 +167,6 @@ describe('ci-classify-lane real-tree verification and fail-closed classification
       'src/commands/up.ts',
       'src/commands/send.ts',
       'test/broker.test.ts',
-      'test/exit-codes.test.ts',
       'test/helpers.ts',
     ]) {
       const res = classifyLane([carefulPath]);

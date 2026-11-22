@@ -219,7 +219,7 @@ describe('fix/rc-reds-grant-widened independent verification', () => {
 
   test('probe 3: option values are never read as flags (daemon --inherited, order --file/--session, down --session)', () => {
     // 3a. VALUED entries for daemon, order, and trace match contract/cli.json:
-    expect(VALUED.daemon).toEqual(['home', 'inherited', 'root', 'route', 'started-by']);
+    expect(VALUED.daemon).toEqual(['approval', 'home', 'inherited', 'reason', 'root', 'route', 'started-by']);
     expect(VALUED.order).toEqual(['file', 'session']);
     expect(VALUED.trace).toEqual([]);
 

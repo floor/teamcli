@@ -6,7 +6,7 @@
 // both claim it: exactly one serves. Any token presented is consumed, readable or not. It lives
 // in its own module so the child's entry can read a token without loading the spawner.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from '../../host/guarded-fs.ts';
 import { claimOneUseToken, pidAlive, sweepSpentClaims, type WriteTokenOptions } from '../one-use-token.ts';
 import { choresInheritPath, machineConfigDir } from '../paths.ts';
 import { choresConfigProblem } from './child.ts';

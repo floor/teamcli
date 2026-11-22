@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, renameSync, rmdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { recordSeatRenameOf, recordTeamRenameOf } from '../approve/approval.ts';
@@ -22,6 +23,7 @@ import {
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { renameSeat, renameTeamIdentity } from '../file/lines.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -67,6 +69,7 @@ import {
 import { approvalStanding, storePath, type Standing } from '../store/store.ts';
 import { renameSeatLeases } from '../tasks/lease.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { mailTreeOf, sessionMailDir, type MailTree } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
@@ -140,8 +143,13 @@ function moveFolder(fromDir: string, toDir: string): boolean {
 
 /** Moves `.agents/send-drops/<bucket>/<from>` to `.agents/send-drops/<bucket>/<to>`. */
 function moveSendDrops(root: string, fromSeat: string, toSeat: string): string[] {
+  // E7b revision 3: the stamped tree's seat folders move the same way (src/queue/mail-tree.ts).
+  return [...moveSendDropsIn(root, fromSeat, toSeat, 'legacy'), ...moveSendDropsIn(root, fromSeat, toSeat, 'stamped')];
+}
+
+function moveSendDropsIn(root: string, fromSeat: string, toSeat: string, tree: MailTree): string[] {
   const moved: string[] = [];
-  const dropsRoot = join(root, '.agents', 'send-drops');
+  const dropsRoot = mailTreeOf(root, tree);
   let entries: string[];
   try {
     entries = readdirSync(dropsRoot).sort();
@@ -513,16 +521,22 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
     return 'refused';
   }
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, home);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, renumber ? undefined : args.rest[0], io);
+  const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
   // A launched pointer names where this session was launched from, not a copy to read: the team
   // is read where the edits write it, so a seat `team add` put into the registry's record is
   // found by the name the record gives it, never missed over the file the session launched from.
-  // A `--file` names its file, and is read as that file.
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { file: args.values.file, home })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, { home })
-      : readTeamConfig(io.cwd, { home });
+  // A `--file` names its file, and is read as that file. A cwd inside a registered root does
+  // not consult the pointer.
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { file: args.values.file, home })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, { home })
+        : launched !== undefined
+          ? readLaunchedTeam(launched, { home })
+          : readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team rename: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
@@ -640,7 +654,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(root);
-  const where = { home, command: 'rename' };
+  const where = { home, command: 'rename', keepWords: true };
   const originalText = readTeamText(path, where);
   // The lead the approval pinned, carried through the rename when the renamed seat is the lead.
   // A live chain that no longer resolves to that lead is drift: the rename would re-sign the
@@ -922,12 +936,17 @@ async function executeTeamRename(
     return 'refused';
   }
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, home);
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { file: args.values.file, home })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, { home })
-      : readTeamConfig(io.cwd, { home });
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, undefined, io);
+  const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, home);
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { file: args.values.file, home })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, { home })
+        : launched !== undefined
+          ? readLaunchedTeam(launched, { home })
+          : readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team rename: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
@@ -1019,7 +1038,7 @@ async function executeTeamRename(
     }
   }
 
-  const where = { home, command: 'rename' };
+  const where = { home, command: 'rename', keepWords: true };
   const originalText = readTeamText(path, where);
   const nextText = renameTeamIdentity(originalText, {
     project: newTeamName,
@@ -1139,10 +1158,12 @@ async function executeTeamRename(
   }
 
   if (newSession !== oldSession) {
-    const fromDrops = join(root, '.agents', 'send-drops', oldSession);
-    const toDrops = join(root, '.agents', 'send-drops', newSession);
-    if (moveFolder(fromDrops, toDrops)) {
-      moved.push(relative(root, toDrops));
+    for (const tree of ['legacy', 'stamped'] as const) {
+      const fromDrops = sessionMailDir(root, oldSession, tree);
+      const toDrops = sessionMailDir(root, newSession, tree);
+      if (moveFolder(fromDrops, toDrops)) {
+        moved.push(relative(root, toDrops));
+      }
     }
   }
 

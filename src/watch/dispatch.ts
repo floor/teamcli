@@ -4,7 +4,8 @@
 // cannot disagree with `status` about who is idle or what is takeable. One attempt is spent per
 // seat per idle episode, refusals included; the episode ends only when a later reading no longer
 // counts the seat. A seat whose class cannot be woken while it is idle — pull-on-turn, or
-// nothing at all — is spent no attempt: the work push would be a wake that never lands, so the
+// nothing at all — is spent no attempt (a `typed-wake` seat is woken through its guarded typed
+// wake): the work push would be a wake that never lands, so the
 // seat is left to read its queue at its next turn. The old typed work nudge is suppressed for
 // every episode this dispatcher owns, whether or not a direct route is wired: a seat the
 // dispatcher cannot reach is told nothing rather than typed at by a second path.
@@ -176,6 +177,10 @@ function scopeOf(input: IdleWorkInput): string {
  *  live reading's own name for the seat. A pass with no live agent for the seat, or one whose
  *  reading carries no processes map, keeps the conservative rule. A seat the pass holds no
  *  record for falls to the class its file row declares. */
+function shellAnchored(state: IdleDispatchInput['state']['seats'][string] | undefined): boolean {
+  return state?.pane_shell !== undefined && state.pane_shell_start !== undefined;
+}
+
 function deliveryClassOf(input: IdleDispatchInput, seat: string) {
   const declared = input.team.seats.find((one) => one.name === seat);
   const state = input.state.seats[seat];
@@ -323,7 +328,14 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
     // A seat nothing can wake while it is idle is spent no attempt: the push would be a wake
     // that never lands and the episode's one attempt would be gone with it. A claim of this
     // episode was followed above, so a wake already sent is still settled and announced.
-    if (!wakeableWhileIdle(deliveryClassOf(input, seat))) continue;
+    const cls = deliveryClassOf(input, seat);
+    if (!wakeableWhileIdle(cls)) continue;
+    // A typed wake proves the pane's launch by its shell anchors before each key
+    // (src/launch/identity.ts `typedPaneProof`): a record without them refuses every key, so the
+    // seat is held, with no attempt spent, until a launch records them. A between-turns seat is
+    // held the same way: the direct send leaves its runtime queue out, so the typed wake is the
+    // route it would take.
+    if ((cls === 'typed-wake' || cls === 'between-turns') && !shellAnchored(input.state.seats[seat])) continue;
     const captured = captureIdleClaim(input.dir, {
       session: input.team.session,
       seat,

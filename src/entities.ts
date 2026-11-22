@@ -3,21 +3,12 @@
 // nicknames. Read-only, like the rest of the configuration readers: this writes nothing, runs
 // nothing and opens no pane; the `names.unique` word has its own writer in
 // `src/config/entity-edit.ts`.
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs';
-import { dirname, join } from 'node:path';
+import { closeSync, existsSync, realpathSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, renameSync, unlinkSync, writeFileSync, writeSync } from './host/guarded-fs.ts';
+import { dirname, join, normalize } from 'node:path';
 import { editedRecordText, getAt, withValue } from './config/team-record.ts';
 import { leadWordProblem } from './lead.ts';
+import { cloneRulesMap, currentRunMemo } from './run-memo.ts';
 import { parseYaml, toValue, type YamlEntry, type YamlNode, type YamlValue } from './yaml.ts';
 import { livenessMap } from './settings/declared.ts';
 import type { StateThresholds } from './settings/inherit.ts';
@@ -64,6 +55,10 @@ export function lockedEntities<T>(home: string, work: () => T): T {
     }
   }
   try {
+    // The writer re-reads the file under this lock, so whatever the run memoised before the
+    // write is stale from here on, for this home: drop it before the work runs.
+    currentRunMemo()?.entityRules.delete(home);
+    currentRunMemo()?.teamLoads.clear();
     return work();
   } finally {
     try {
@@ -123,6 +118,155 @@ export function declaredRoots(home: string): Map<string, string[]> {
     if (list.length > 0) out.set(entry.key, list);
   }
   return out;
+}
+
+/** The key of an entity's projects root in its entry: `<entity>: { root: <path> }`. */
+export const ENTITY_ROOT_KEY = 'root';
+
+/** The key of an entity's worktrees folder in its entry: `<entity>: { worktrees: <path> }`. */
+export const ENTITY_WORKTREES_KEY = 'worktrees';
+
+/** One entity's projects root on this machine: the folder its repositories sit directly under,
+ *  as an absolute path; null when the entry writes none; or why the word it writes does not read. */
+export type EntityRootRead = { ok: true; root: string | null } | { ok: false; why: string };
+
+/** The characters a folder of an entity may hold: letters, digits and `/ . _ - @ +`. A folder is
+ *  pasted into launch lines, which a shell reads, so a space, a quote, `$`, a backtick, a
+ *  backslash, a `~` (a pattern word to zsh's extended globbing) or any of `;|&<>()*?[]{}` would
+ *  change what the line runs: such a folder is refused, never quoted on the way in. The owner may
+ *  write a leading `~/`, which is the home and is gone once the folder is read. */
+const FOLDER_CHARACTERS = /^[A-Za-z0-9/._@+-]+$/;
+
+/** Why `path` is too wide to be a folder of an entity: the filesystem's root, the home itself, or
+ *  a folder above the home. Null when it is narrower. */
+function tooWide(path: string, home: string): string | null {
+  const homeless = normalize(home).replace(/\/+$/, '') || '/';
+  if (path === '' || path === '/') return 'cannot be the filesystem root';
+  if (path === homeless) return 'cannot be the home itself: name the folder the repositories sit in';
+  if (homeless.startsWith(`${path}/`)) return 'cannot be a folder above the home';
+  return null;
+}
+
+/**
+ * A folder of an entity (its projects root or its worktrees folder) as the owner writes it,
+ * checked and made absolute: an absolute path, or `~/…` under `home`. Trailing slashes are
+ * dropped, so `{root}/docs` never doubles one. Refused: a relative path, a `..` segment, the
+ * filesystem's root, the home itself or a folder above it, a path that names a word itself, and
+ * any character outside letters, digits and `/ . _ - @ +` after a leading `~/`. The path is lexical: `canonicalFolder`
+ * resolves it where the folder must exist.
+ */
+export function checkedRootPath(value: string, home: string): { ok: true; root: string } | { ok: false; why: string } {
+  const written = value.trim();
+  if (written === '') return { ok: false, why: 'a folder of the entity must name a folder' };
+  if (/\{(root|worktrees)\}/.test(written)) return { ok: false, why: 'a folder of the entity cannot name {root} or {worktrees} itself' };
+  const body = written.startsWith('~/') ? written.slice(2) : written;
+  if (!FOLDER_CHARACTERS.test(body)) {
+    return { ok: false, why: 'a folder of the entity holds only letters, digits and / . _ - @ +, after a leading ~/ (no space, quote, $, backtick, backslash, other ~ or other shell character)' };
+  }
+  if (written.split('/').includes('..')) return { ok: false, why: 'a folder of the entity names no ".." segment' };
+  let path: string;
+  if (written.startsWith('~/')) path = join(home, written.slice(2));
+  else if (written.startsWith('/')) path = written;
+  else return { ok: false, why: `"${written}" is not an absolute path: write /… or ~/…` };
+  path = normalize(path).replace(/\/+$/, '');
+  const wide = tooWide(path, home);
+  if (wide !== null) return { ok: false, why: `a folder of the entity ${wide}` };
+  if (!FOLDER_CHARACTERS.test(path)) return { ok: false, why: `${path} holds a character a launch line cannot carry as it is` };
+  return { ok: true, root: path };
+}
+
+/**
+ * A folder of an entity as it is on disk: its real path, every link resolved, held to the same
+ * limits as the folder written — so a link that points at `/`, the home or a folder above it is
+ * refused like the word would be. A folder that does not resolve is refused: what a signature or
+ * a containment check binds must be a folder that exists.
+ */
+export function canonicalFolder(path: string, home: string): { ok: true; path: string } | { ok: false; why: string; missing?: true } {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    return { ok: false, why: `${path} does not resolve to a folder on this machine`, missing: true };
+  }
+  let realHome = home;
+  try { realHome = realpathSync(home); } catch { /* the lexical home is the bound */ }
+  const wide = tooWide(real, realHome) ?? tooWide(real, home);
+  if (wide !== null) return { ok: false, why: `${path} resolves to ${real}, which ${wide}` };
+  if (!FOLDER_CHARACTERS.test(real)) return { ok: false, why: `${path} resolves to ${real}, which holds a character a launch line cannot carry as it is` };
+  return { ok: true, path: real };
+}
+
+/**
+ * The entity's projects root on this machine, from its entry's `root:` word in the owner's
+ * entities file. The file is the machine's own, never a team's, so a team that writes `{root}`
+ * launches wherever its entity's entry names the folder. Absent when the file, the entry or the
+ * word is absent; a word that does not read is refused, never read as no word, so a typo does not
+ * fill `{root}` with a guess.
+ */
+export function entityProjectsRoot(home: string, entity: string | null): EntityRootRead {
+  return entityFolder(home, entity, ENTITY_ROOT_KEY);
+}
+
+/** One folder word of an entity's entry, read by the projects root's rules. */
+function entityFolder(home: string, entity: string | null, key: string): EntityRootRead {
+  if (entity === null) return { ok: true, root: null };
+  const entry = entityEntries(home).find((candidate) => candidate.key === entity);
+  if (entry === undefined || entry.value.kind !== 'map') return { ok: true, root: null };
+  const field = entry.value.entries.find((candidate) => candidate.key === key);
+  if (field === undefined) return { ok: true, root: null };
+  const value = field.value.kind === 'scalar' ? field.value.value : undefined;
+  if (typeof value !== 'string') return { ok: false, why: `entity "${entity}" ${key} must be one folder path` };
+  const checked = checkedRootPath(value, home);
+  if (!checked.ok) return { ok: false, why: `entity "${entity}" ${key}: ${checked.why}` };
+  return { ok: true, root: checked.root };
+}
+
+/** An entity's two folders on this machine: its projects root, and the folder its worktrees sit
+ *  in — its own `worktrees:` word, else `<root>/worktrees` (`written` says which). Either is null
+ *  when nothing names it; a word that does not read refuses both, never one guessed. */
+export type EntityFolders =
+  | { ok: true; root: string | null; worktrees: string | null; worktreesWritten: boolean }
+  | { ok: false; why: string };
+
+export function entityFolders(home: string, entity: string | null): EntityFolders {
+  const root = entityFolder(home, entity, ENTITY_ROOT_KEY);
+  if (!root.ok) return root;
+  const worktrees = entityFolder(home, entity, ENTITY_WORKTREES_KEY);
+  if (!worktrees.ok) return { ok: false, why: worktrees.why };
+  if (worktrees.root !== null) return { ok: true, root: root.root, worktrees: worktrees.root, worktreesWritten: true };
+  return { ok: true, root: root.root, worktrees: root.root === null ? null : join(root.root, 'worktrees'), worktreesWritten: false };
+}
+
+/**
+ * Every projects root this machine names, one per entity that writes one, in the order the file
+ * lists the entities; and why each entity whose word does not read is left out. Nothing is
+ * derived: an entity that writes no `root:` names no folder, whatever sits under the home.
+ */
+export function declaredProjectRoots(home: string): { roots: Array<{ entity: string; root: string; optional?: true }>; problems: string[] } {
+  const roots: Array<{ entity: string; root: string; optional?: true }> = [];
+  const problems: string[] = [];
+  const add = (entity: string, root: string, optional = false) => {
+    if (!roots.some((known) => known.root === root)) roots.push({ entity, root, ...(optional ? { optional: true as const } : {}) });
+  };
+  for (const entry of entityEntries(home)) {
+    const read = entityFolders(home, entry.key);
+    if (!read.ok) {
+      problems.push(read.why);
+      continue;
+    }
+    if (read.root !== null) add(entry.key, read.root);
+    // The worktrees folder too, as written: whether it lies inside the root is a question for
+    // the folders on disk (`signedRoots` resolves both), since a link can put `<root>/worktrees`
+    // anywhere. The default `<root>/worktrees`, named by no word, is optional: a machine that has
+    // not made it yet signs the root alone.
+    if (read.worktrees !== null) add(entry.key, read.worktrees, !read.worktreesWritten);
+  }
+  return { roots, problems };
+}
+
+/** Whether `path` is `folder` or under it. */
+export function insideFolder(path: string, folder: string): boolean {
+  return path === folder || path.startsWith(`${folder}/`);
 }
 
 /**
@@ -259,9 +403,13 @@ function readClients(node: YamlNode): DeclaredClients {
 
 /**
  * Each entity's declared standing rules (`<entity>.rules`), in the order the file lists them.
- * Rules are text: non-empty string scalars under `rules:`.
+ * Rules are text: non-empty string scalars under `rules:`. Read once per run: the per-run memo
+ * holds the file's words for the life of the run, and a writer under this home drops them.
  */
 export function declaredEntityRules(home: string): Map<string, string[]> {
+  const memo = currentRunMemo();
+  const held = memo?.entityRules.get(home);
+  if (held !== undefined) return cloneRulesMap(held);
   const out = new Map<string, string[]>();
   for (const entry of entityEntries(home)) {
     if (entry.value.kind !== 'map') continue;
@@ -275,6 +423,7 @@ export function declaredEntityRules(home: string): Map<string, string[]> {
     }
     if (list.length > 0) out.set(entry.key, list);
   }
+  memo?.entityRules.set(home, cloneRulesMap(out));
   return out;
 }
 

@@ -18,6 +18,7 @@ a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
 
 ## Synopsis
 
+    team swap <seat> <preset> [--model <model>] [--version <version>] [--vendor <vendor>] [--effort <effort>] [--dry-run] [--file <path>] [--json]
     team swap [--file <path>] [--json]
     team swap --rule [--file <path>] [--json]
     team swap queue <seat> [--to <target>] [--file <path>] [--json]
@@ -25,13 +26,30 @@ a `note:` line, and `team next` refuses a claim for the seat a swap waits on.
     team swap --run [--file <path>] [--json]
     team swap cancel <seat> [--file <path>] [--json]
 
+`team swap <seat> <preset>` installs a recipe at once and starts the seat fresh. The `<preset>` is
+a launcher TeamCLI ships, a preset launcher file in the team's `.agents/launchers/`, or another
+seat of the team whose fields are copied. A shipped launcher gives its own CLI, vendor and default
+model: `grok-build` Grok 4.7, `codex` GPT Sol 6.1, `antigravity` Gemini Argon 4 at high effort, and
+`claude-code` the seat's own Claude model on its vendor (another vendor names `--model` and
+`--version`). `--model`, `--version`, `--vendor` and `--effort` override that default and apply to
+a shipped launcher only. The seat keeps its name, role, label and access; a Grok seat with no
+folder of its own gets the team's seat folder (`worktrees/{project}/{team}/{seat}`), and the
+restart the swap runs launches the seat through the launcher. Example:
+`team swap builder-2 grok-build`, or `team swap reviewer-1 claude-code --vendor deepseek --model "DeepSeek Flash" --version 4.0`.
+
 A `<target>` is `<cli>:<model>`, and the recipe is copied from a seat of the entity that already
 runs it. A name in the seat's own CLI profile's vendor table — `<vendor>:<model>` — moves the seat
 between vendors of that same CLI with no donor and no launcher script: the generated line keeps the
 seat's own wrapper prefix and the assignments that are not a vendor's, and takes the vendor's env
-words, the CLI's binary and its model flag. The move is refused when this machine's credential
-store does not hold the vendor's item — naming the item and the one-time command that adds it,
-never a secret — or when the store cannot be read.
+words, the CLI's binary and its model flag. The key is named, never written: the line carries
+`ANTHROPIC_AUTH_TOKEN={secret:<item>}`, and each launch fills that word with the system's secret
+store's own lookup of the item, which the pane's shell runs when the seat starts. A line an earlier
+swap wrote with its own lookup launches as it is. The move is refused when this machine's
+credential store does not hold the vendor's item — naming the item and the one-time command that
+adds it, never a secret — or when the store cannot be read. Where the profile's own presence
+check does not run (its program is not on the machine), the system's secret store for the team's
+entity answers instead: the entry is read once in memory and dropped, never shown, and a missing
+one is refused naming the store rather than a command.
 
 ## What it reads and writes
 
@@ -105,6 +123,8 @@ is not a rollback.
 
 | Flag | Meaning |
 | --- | --- |
+| `--model <model>`, `--version <version>`, `--vendor <vendor>`, `--effort <effort>` | with `<seat> <preset>` naming a shipped launcher: the model the seat runs, over the launcher's default |
+| `--dry-run` | with `<seat> <preset>`: plan the swap and write nothing |
 | `--rule` | list every breach of the entity's model rule, with the donor each recipe came from |
 | `--to <target>` | with `queue`: take the recipe from a seat running `<cli>:<model>`, instead of the rule's own proposal; `<vendor>:<model>` instead moves the seat between vendors of its own CLI through the profile's vendor table, with no donor and no launcher script |
 | `<seat>` | the seat to queue, force or cancel; required by `queue`, `now` and `cancel` |
@@ -133,6 +153,7 @@ is not a rollback.
 | `team swap: no seat of the entity this team may copy from runs <cli>:<model>` | 1 |
 | `team swap: <vendor> offers no model "<model>"; it offers <ids>` | 1 |
 | `team swap: this machine holds no "<item>" item for the vendor "<vendor>"; add it once with the command below, which asks the store for the secret itself, so nothing is typed here and nothing is read from stdin: <command>` | 1 |
+| `team swap: this machine's secret store holds no "<item>" entry for the vendor "<vendor>"; add it to the system's secret store once, then queue the swap again; nothing is typed here and no secret is read from stdin` | 1 |
 | `team swap: this machine's credential store could not be read while looking for "<item>"; whether it holds the item is not knowable, so the swap is refused rather than guessing` | 1 |
 | `team swap: its launch line is not one this version rewrites for another vendor; refused rather than guessing` | 1 |
 | `team swap: the model "<model>" runs under the lab "<vendor>", which the entity model rule in force does not allow on this seat` | 1 |
@@ -220,15 +241,15 @@ claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the ent
 exit 0
 ```
 
-The orchestrator's seat queues on the pane the state records for it, and only the owner forces a
-swap:
+The orchestrator's seat queues on the pane the state records for it. A seat whose model the rule
+already allows is not swapped:
 
 ```console caller=claude-keeper
 $ team swap queue claude-keeper ; echo "exit $?"
 swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
 exit 0
 $ team swap now worker ; echo "exit $?"
-team swap: only the owner forces a swap; this call is claude-keeper
+team swap: worker declares a model the rule allows; there is nothing to swap to
 exit 1
 ```
 
@@ -255,7 +276,7 @@ exit 0
 $ team swap --run ; echo "exit $?"
 claude-keeper: input box: empty
 claude-keeper: turn: not working (free)
-claude-keeper: context: workspace close ends the pane; relaunch runs "claude --model deepseek-flash" in a new workspace without passing the old transcript
+claude-keeper: context: relaunch runs "claude --model deepseek-flash" in its own pane once the CLI exits (a new workspace if the pane does not return to its shell) without passing the old transcript
 claude-keeper: stopped
 claude-keeper: ready
 claude-keeper: its screen doesn't show a model this version knows; not checked

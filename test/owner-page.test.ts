@@ -146,7 +146,7 @@ describe('owner page', () => {
     const id = made.record.request_id;
     const state = await s.call('GET', '/api/state');
     expect((state.body.requests as Array<{ id: string }>).map((r) => r.id)).toEqual([id]);
-    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
+    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId, shown: made.record.params_sha256 });
     expect(ch.status).toBe(200);
     const done = await s.call('POST', '/api/team-create/answer', { ...p.assert(String(ch.body.challenge)), id, word: 'oui' });
     expect(done.status).toBe(200);
@@ -172,7 +172,7 @@ describe('owner page', () => {
     expect(shown[0]!.description).toBe('iris wants to create a team, then start the team. OK?');
     expect(shown[0]!.scope).toBe('Team demo · creates the team file');
     expect(shown[0]!.description).not.toContain('oui');
-    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
+    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId, shown: made.record.params_sha256 });
     expect(ch.status).toBe(200);
     const done = await s.call('POST', '/api/team-create/answer', { ...p.assert(String(ch.body.challenge)), id, word: 'oui' });
     expect(done.status, JSON.stringify(done.body)).toBe(200);
@@ -196,7 +196,7 @@ describe('owner page', () => {
     const made = createTeamCreateRequest(s.home, root, null, new Date());
     if (!made.ok) throw new Error(made.why);
     const id = made.record.request_id;
-    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
+    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId, shown: made.record.params_sha256 });
     expect(ch.status).toBe(400);
     expect(String(ch.body.error)).toContain('not accepted by the owner-signers policy');
     expect(existsSync(join(actionRequestsFolder(s.home), `${id}.seat-answer.json`))).toBe(false);
@@ -281,6 +281,8 @@ describe('owner page', () => {
       'team-config': "Change the team's record",
       'team-general-grant': 'Issue a general grant',
       'development-mode': 'Set the development mode',
+      'team-entity-config': "Change an entity's record",
+      'team-daemon': 'Change the machine daemon',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({
@@ -291,7 +293,8 @@ describe('owner page', () => {
       });
       expect(card.title).toBe(titles[action] ?? '');
       expect(card.description).not.toMatch(/oui|non|Always allow/);
-      expect(card.onceOnly).toBe(action === 'team-migrate');
+      // A migration, an entity's record and the machine daemon offer no standing rule.
+      expect(card.onceOnly).toBe(action === 'team-migrate' || action === 'team-entity-config' || action === 'team-daemon');
     }
     const migration = ownerPageRequest({
       request_id: `oa_${'cd'.repeat(12)}`,

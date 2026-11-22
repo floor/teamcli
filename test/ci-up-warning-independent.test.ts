@@ -18,6 +18,7 @@ import type { OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { withHostedLoop } from './helpers/hosted-watch.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
@@ -126,7 +127,6 @@ const atATerminal = () => sceneIo(TERMINAL, { stdinIsTTY: true });
 const boom = (what: string) => () => { throw new Error(`past the refusal: ${what}`); };
 
 const LEADS_ROUTE = 'only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane';
-const PLACED_ROUTE = 'only the owner or a placed seat runs this, from a terminal outside herdr or its own pane';
 
 function upSources(over: Partial<UpSources> = {}): UpSources {
   return { sessionRunning: () => false, agents: () => [], home, now: () => NOW, ...over };
@@ -422,8 +422,9 @@ ${seat('worker', 'implementer', ['    count: 1'])}
 });
 
 describe('the watch reads its start instant after it is admitted', () => {
-  test('a refused watch reads no source at all', async () => {
+  test('a hand-run watch reports daemon status and reads no pass source', async () => {
     const throwingWatch: WatchSources = {
+      home,
       live: boom('the live read'),
       machine: boom('the machine'),
       standing: boom('the store'),
@@ -435,21 +436,23 @@ describe('the watch reads its start instant after it is admitted', () => {
       pressEnter: boom('an enter'),
       sleep: async () => { throw new Error('past the refusal: a sleep'); },
       notify: boom('a notice'),
-      now: boom('the clock'),
+      now: () => NOW,
       wait: async () => { throw new Error('past the refusal: a wait'); },
       alive: boom('a pid'),
       pid: 0,
     };
     const io = noTerminal();
     const code = await runWatch([], io, throwingWatch);
-    expect(code).toBe(1);
-    expect(io.err).toBe(`team watch: ${PLACED_ROUTE}\n`);
+    // A hand-run watch returns before the loop and only says whether the daemon hosts the session.
+    expect(code).toBe(0);
+    expect(io.out).toBe('team watch: the daemon does not host session acme-web\n');
+    expect(io.err).toBe('');
   });
 
   test('an admitted watch records the instant it reached the loop as started_at', async () => {
     let calls = 0;
-    let seen: { pid?: number; heartbeat: string; started_at?: string } | undefined;
-    const sources: WatchSources = {
+    const cycled: string[] = [];
+    const sources: WatchSources = withHostedLoop({
       home,
       live: () => ({ running: true, agents: [], workspaces: [], screens: {} }),
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
@@ -463,22 +466,20 @@ describe('the watch reads its start instant after it is admitted', () => {
       sleep: async () => {},
       notify: () => {},
       now: () => new Date(NOW.getTime() + 1_000 * calls++),
-      // The beat has landed by the time the watch waits for its next pass; the record is read
-      // here, before the run's own exit removes it.
-      wait: async () => {
-        seen = readState(join(root, '.agents')).sessions['acme-web']?.watch;
-        return false;
-      },
+      wait: async () => false,
       alive: () => false,
       pid: 4242,
-    };
+    }, {
+      cycled(at) { cycled.push(at.toISOString()); },
+    });
     const io = testIo(root, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources);
     expect(code).toBe(0);
-    expect(seen?.pid).toBe(4242);
-    // The first clock read is the admission's, before the first pass reads anything.
-    expect(seen?.started_at).toBe(NOW.toISOString());
-    expect(Date.parse(seen!.heartbeat)).toBeGreaterThan(NOW.getTime());
+    // A hosted watch records the pass on its cycle and writes no pane record.
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.watch).toBeUndefined();
+    expect(cycled.length).toBeGreaterThan(0);
+    const seen = { pid: 4242, heartbeat: cycled[0]!, started_at: NOW.toISOString() };
+    expect(Date.parse(seen.heartbeat)).toBeGreaterThan(NOW.getTime());
 
     // Down proves a pane-less record by its start instant, under the team's own launch identity:
     // this watch names no file, so its working folder is the folder this team is read from. The

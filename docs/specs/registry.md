@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-11-01
+updated: 2026-11-08
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75)
@@ -374,6 +374,10 @@ This area writes no registry of its own; its words are the fields above. It feed
   words live in the resolver, not in a registry row; a run of `team register` on such a seat is
   refused by placement rather than by a record-shaped exit id.
 
+## Team binding
+
+A command run inside a team's bound place binds to that team. The places are the registered root, each seat's configured cwd resolved against that root (and everything under it), and the team's own lobby when no other team records that same path. The shared `~/.config/team/lobby` is a place for no team. When places nest, the longest one that contains the working directory wins. Both paths are real paths, and a place matches only itself or a descendant separated by a path separator, so `/x/team` does not contain `/x/team-other`. The seat name is looked up only in the bound team. When the working directory sits in no bound place, the command keeps the resolution it had, except a seat name that belongs to more than one team: that is refused, and the refusal names those teams by id.
+
 ## Revision log
 
 - **Draft** (the Runtime text's writer, 2026-10-18): lifted from the Runtime's chapters B and I;
@@ -390,3 +394,7 @@ This area writes no registry of its own; its words are the fields above. It feed
 - **Amended** (2026-11-01): the entity bullet names the command that writes the `names.unique`
   word — the owner's, or a seat's under a wildcard general grant that admits `config` — where it
   said the word was hand-written and the owner's alone.
+- **Amended** (2026-11-08): a command binds to the longest place that holds its working
+  directory — the registered root, a seat's configured cwd, or the team's own lobby when no
+  other team records that path — and a seat name is looked up only in that team. The shared
+  lobby is a place for no team.

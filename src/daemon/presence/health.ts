@@ -45,6 +45,10 @@ export type PresenceSourceStatus = {
   why?: string | null;
   /** The producer's own spelling for the same display detail as `why`. */
   reason?: string | null;
+  /** False once the source stopped admitting for good (closed, a binding it could not confirm, a
+   *  terminal write that failed). A host may then start the seat's source again; absent means the
+   *  producer does not say, and `gone` stays terminal either way. */
+  admitting?: boolean;
 };
 
 /** The read-only runtime source a route owns for one seat. `step` is the bounded stream pump
@@ -293,7 +297,7 @@ export function reconciledProofHolds(input: {
 }
 
 /**
- * How long a finished pass vouches for the channel. The production pass runs every 250 ms; eight
+ * How long a finished pass vouches for the channel. The production pass runs every 500 ms; four
  * missed passes mean a step is hung or the loop is not running, and the honest answer is no.
  */
 export const PRESENCE_HEALTH_GRACE_MS = 2_000;

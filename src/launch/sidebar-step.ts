@@ -41,6 +41,8 @@ export type SidebarStep = {
   rows: readonly (readonly string[])[];
   indicators: SidebarIndicator;
   sessions: readonly string[];
+  /** Set only when `workspace.sidebar.row_gap` is declared. Unset leaves the host's line alone. */
+  rowGap?: number;
   skip?: string;
 };
 
@@ -87,7 +89,7 @@ export function sidebarStepOf(input: SidebarStepInput): SidebarStep | null {
   const text = input.configText();
   let skip: string | undefined;
   if (text !== null && running !== null && registered !== null) {
-    const spliced = spliceSidebarRows(text, policy.rows, policy.indicators);
+    const spliced = spliceSidebarRows(text, policy.rows, policy.indicators, policy.rowGap);
     let records: Record<string, SidebarReloadRecord> = {};
     try {
       records = readSidebarReloads(input.home);
@@ -107,6 +109,7 @@ export function sidebarStepOf(input: SidebarStepInput): SidebarStep | null {
     rows: policy.rows,
     indicators: policy.indicators,
     sessions,
+    ...(policy.rowGap === undefined ? {} : { rowGap: policy.rowGap }),
     ...(skip === undefined ? {} : { skip }),
   };
 }

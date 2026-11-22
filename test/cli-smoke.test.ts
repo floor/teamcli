@@ -46,7 +46,10 @@ const allCommandNames = Array.from(
  * state, require live tmux/herdr panes or network/Keychain access, or run long-lived daemons.
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
+  git: 'runs git against GitHub with the entity\'s token from the keychain; a cold run would reach the network',
+  gh: 'runs the gh CLI against GitHub with the entity\'s token from the keychain; a cold run would reach the network',
   ack: "writes one signed read receipt into the addressee's folder",
+  ping: 'sends one message per seat through team send and waits for the read receipts',
   analyse: 'reads a project only after an owner-signed analyser is named; the cold smoke fixture names none, so it cannot produce the team.analyse report',
   show: "prints one message record from the addressee's folder and writes a signed read receipt",
   approvals: 'lists or revokes owner-seat always rules under the owner home',
@@ -73,6 +76,8 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   raise: "writes one signed owner mailbox record and one event, and rings the owner's notification",
   init: 'writes .agents/team.yaml and registers the project on disk',
   import: "writes this team's configuration record into the registry (~/.config/team/team-config)",
+  // Migration writes launcher declarations and script stubs; it has no registered output schema.
+  launchers: "migrates this team's launch lines, writes launcher declarations and script stubs, and reports unregistered launchers.migrate JSON",
   migrate: "moves this team's .agents/team.yaml into the registry once (~/.config/team/team-config)",
   lock: 'mutates project lock state to acquire a named lock',
   next: 'claims the next open task and writes a local lease at .agents/leases/<id>.json',
@@ -86,6 +91,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   tempo: 'mutates .agents/state.json to change the watch tempo',
   unlock: 'mutates project lock state to release a named lock',
   watch: 'runs the long-lived watch loop daemon',
+  queues: "turns this team's at-least-once delivery on or off, places channel proof probes and flips the reader switch; its status reads live seat processes and its output has no registered --json schema",
 };
 
 type ReadOnlySmokeCase = {

@@ -11,16 +11,18 @@
 // corpus location is printed as `path:line` for an added line and `commit:<sha>:<line>` for a
 // commit-message line; the matched text is never printed.
 //
-//   bun scripts/check-private-diff.ts (--base <rev> | --release) [--root <dir>] [--file <team file>]
+//   bun scripts/check-private-diff.ts (--base <rev> | --release) [--root <dir>] [--file <policy file>]
 //                                     [--private-names <file>] [--private-phrases <file>]
 //
-// `--release` scans `origin/main..HEAD` (the range CI checks), while lane gates pass `--base <rev>`.
+// `--release` scans `origin/main..HEAD` (the range CI checks). `--base` accepts origin/main
+// or a v* tag whose commit is an ancestor of refs/remotes/origin/main. A dirty tree is refused;
+// only committed content is read.
 // Exit 0 clean (or both default lists absent, a visible skip), 1 hits, 2 cannot run.
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { forbiddenPatterns, fromTeamFile, type CheckConfig } from '../src/check/config.ts';
+import { forbiddenPatterns, type CheckConfig } from '../src/check/config.ts';
 import { checkSignature, findForbidden, splitLines } from '../src/check/message.ts';
 import {
   defaultPrivateListPaths,
@@ -30,7 +32,7 @@ import {
   type PrivateSource,
 } from '../src/check/private-names.ts';
 import { INTERNAL_TRACKER } from '../src/check/public-names.ts';
-import { loadTeamFile } from '../src/file/load.ts';
+import { loadConfig } from '../src/check/load.ts';
 
 const GIT_CONFIG = ['log.showSignature=false', 'i18n.logOutputEncoding=UTF-8', 'trailer.separators=:'].flatMap(
   (setting) => ['-c', setting],
@@ -201,12 +203,32 @@ if (import.meta.main) {
   const resolvedBase = release ? 'origin/main' : base;
   if (resolvedBase === undefined) exit('--base needs a value (or pass --release)');
 
-  const defaultFile = existsSync(resolve(process.cwd(), '.github/team.yaml'))
-    ? '.github/team.yaml'
-    : fileURLToPath(new URL('../.github/team.yaml', import.meta.url));
-  const loaded = loadTeamFile(process.cwd(), { file: file ?? defaultFile, checkOnly: true });
+  const resolvedRoot = resolve(root);
+  const status = spawnSync('git', ['--no-optional-locks', '-C', resolvedRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
+  });
+  if (status.error !== undefined || status.status !== 0) exit('cannot check whether the working tree is clean');
+  if (status.stdout !== '') {
+    // NUL records keep spaces and line breaks in paths unambiguous. A rename has two path
+    // records; print both as escaped paths only, never file contents or the raw status record.
+    const records = status.stdout.split('\0');
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]!;
+      if (record === '') continue;
+      console.error(`private-diff:check: dirty ${JSON.stringify(record.slice(3))}`);
+      if (/[RC]/.test(record.slice(0, 2)) && records[index + 1] !== undefined) {
+        console.error(`private-diff:check: dirty ${JSON.stringify(records[++index])}`);
+      }
+    }
+    exit('working tree is dirty; commit or discard staged, unstaged and untracked changes before scanning base..HEAD');
+  }
+
+  const defaultFile = existsSync(resolve(process.cwd(), '.github/policy.yaml'))
+    ? '.github/policy.yaml'
+    : fileURLToPath(new URL('../.github/policy.yaml', import.meta.url));
+  const loaded = loadConfig(process.cwd(), file ?? defaultFile, undefined, { ledger: false });
   if (!loaded.ok) exit(loaded.errors.map((problem) => problem.message).join('; '));
-  const config = fromTeamFile(loaded.team);
+  const config = loaded.config;
 
   const defaults = defaultPrivateListPaths();
   const sources: PrivateSource[] = [];
@@ -225,10 +247,9 @@ if (import.meta.main) {
     sources.push(read.source);
   }
 
-  const resolvedRoot = resolve(root);
   const built = privateDiffCorpus(resolvedRoot, resolvedBase);
   if ('problem' in built) exit(built.problem);
-  const commitsCheck = checkCommitMessages(resolvedRoot, resolvedBase, config);
+  const commitsCheck = checkCommitMessages(resolvedRoot, built.base, config);
   if ('problem' in commitsCheck) exit(commitsCheck.problem);
 
   let failed = false;
@@ -245,7 +266,17 @@ if (import.meta.main) {
   const scan = scanPrivateLines(built.corpus.lines, sources);
   if ('problem' in scan) exit(scan.problem);
 
+  const moveCandidates = new Set(built.corpus.moves);
+  const moved = new Map<number, number>();
   for (const hit of scan.hits) {
+    if (moveCandidates.has(hit.line)) moved.set(hit.line, (moved.get(hit.line) ?? 0) + 1);
+  }
+  console.log(`private diff: treated ${String(moved.size)} line(s) as moves (identical line removed in this diff)`);
+  for (const [line, hits] of [...moved].sort(([a], [b]) => a - b)) {
+    console.log(`private diff: moved ${built.corpus.where[line - 1]} (${String(hits)} rule hit(s))`);
+  }
+  for (const hit of scan.hits) {
+    if (moved.has(hit.line)) continue;
     const where = built.corpus.where[hit.line - 1] ?? `line ${String(hit.line)}`;
     const className = hit.className === undefined ? '' : ` class ${hit.className}`;
     console.error(`private-diff:check: ${where}: it matches private ${hit.origin}${className} entry ${String(hit.ordinal)}`);

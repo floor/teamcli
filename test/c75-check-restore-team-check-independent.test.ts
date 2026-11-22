@@ -47,9 +47,12 @@ const UNSENT_SCREEN = readFileSync(new URL('./fixtures/codex/0.161.0/unsent.txt'
 
 let fakeSessionRunning: boolean | null = true;
 
+// Captured before the mock. Calling the live export from the replacement recurses, and that mock then leaks.
+const realSessionRunning = realHerdr.sessionRunning;
+
 mock.module('../src/herdr.ts', () => ({
   ...realHerdr,
-  sessionRunning: (name: string) => (name === SESSION ? fakeSessionRunning : realHerdr.sessionRunning(name)),
+  sessionRunning: (name: string) => (name === SESSION ? fakeSessionRunning : realSessionRunning(name)),
 }));
 
 const { realCheckSources, runTeamCheck } = await import('../src/check/team.ts');
@@ -309,7 +312,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  mock.module('../src/herdr.ts', () => ({ ...realHerdr }));
+  mock.module('../src/herdr.ts', () => ({ ...realHerdr, sessionRunning: realSessionRunning }));
   discardFixtures([base]);
 });
 
@@ -678,9 +681,10 @@ describe('runTeamCheck live read: each failed-proof reason is stated with repair
       workerScreen: UNSENT_SCREEN,
     });
     expect(unsentScreen.code).toBe(1);
+    // Unsent text does not block a re-tie (owner, 2026-11-17): check reports what up will do.
     expect(workerDiff(unsentScreen.doc)).toEqual({
-      what: 'worker: the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove worker)',
-      repair: 'look at the pane',
+      what: "worker was restored by the terminal host; its pane holds the seat's declared CLI — team up re-ties it",
+      repair: 'team up',
       who: "the team's lead",
     });
   });

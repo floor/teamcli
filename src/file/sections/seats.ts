@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { isAbsolute, posix } from 'node:path';
 import { CLIS } from '../../clis.ts';
 import type { CrossSessionInbound } from '../../launch/declaration.ts';
 import { shippedEfforts } from '../../profiles/efforts.ts';
@@ -7,6 +7,7 @@ import { FRONTS, REACH_ALIAS, REACH_MAX_SEATS, REACH_ROUTE } from '../../reach/r
 import { DELIVERY_LEGS, isLivenessSeconds, LIVENESS_KEYS, MESSAGING_STORES, SENDER_NAME_MODES, type LivenessThresholds } from '../../settings/inherit.ts';
 import type { YamlEntry } from '../../yaml.ts';
 import { insideProject, insideTrust, normalize } from '../paths.ts';
+import { seatFolderOf } from './seat_folder.ts';
 import { hasVersionToken } from '../signature.ts';
 import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
@@ -16,6 +17,7 @@ import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
 import { readDeliveryOrder } from './delivery_order.ts';
 import { readSenderName } from './sender_name.ts';
+import { readDesktopControl } from './desktop_control.ts';
 import { readMessaging } from './messaging.ts';
 import { MODES } from './workspace.ts';
 
@@ -43,12 +45,14 @@ export const DAEMON_NAME = 'daemon';
 export const seats: Section = {
   name: 'seats',
   owner: false,
-  after: ['trust', 'budgets'],
+  after: ['trust', 'budgets', 'project', 'in_project', 'seat_folder'],
   validate(entry, ctx) {
     const trust = valueOf<string[]>(ctx, 'trust');
+    const team = valueOf<string>(ctx, 'project');
+    const folder = { pattern: valueOf<string>(ctx, 'seat_folder'), team, project: valueOf<string | null>(ctx, 'in_project') ?? team };
     const accounts = valueOf<Budgeted>(ctx, 'budgets').declared;
     const marks: LeadMark[] = [];
-    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks);
+    const seats = readSeats(entry, ctx.check, trust, ctx.root.line, ctx.broken, accounts, marks, ctx.rootDir, folder);
     ctx.leads = marks;
     return seats;
   },
@@ -75,6 +79,8 @@ export const seats: Section = {
         display: { type: 'string', $comment: 'defaults to "model version"; must contain the version as a token of its own' },
         launch: { type: 'string', minLength: 1 },
         launcher: { type: 'string', minLength: 1, $comment: 'the declarative launcher whose argv this seat runs when the launch is asked to resolve one; omitted, the launch line is unchanged and the digest is unchanged' },
+        access: { enum: ['read', 'write'], $comment: 'overrides the role default of a shipped launcher: read holds the seat to reads and team commands, write lets it write whatever its role; omitted, the role decides (reviewer, tester and assistant read)' },
+        brief: { type: 'string', minLength: 1, $comment: 'a file whose text is added to this seat\'s own rules at every launch, after the team\'s; relative to the team root or absolute' },
         cwd: { type: 'string', $comment: 'relative to the project, or a trust path' },
         label: { type: 'string', $comment: 'the workspace title when written; left out, the title is the seat name and its role, and this stored value stays the model and version in lowercase' },
         effort: { type: 'string', minLength: 1, $comment: 'optional; a lab with a vocabulary warns when the word is outside it, and check still passes; launch does not read it' },
@@ -116,6 +122,11 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        desktop_control: { type: 'boolean', $comment: 'whether this seat may control the computer (computer use, the user\'s browser, desktop apps); wins over the team\'s desktop_control, and on when neither writes one' },
+        channel: {
+          enum: ['off', 'on'],
+          $comment: 'the team-inbox channel for a claude-code seat: omitted or on is the default, and off leaves the launch and the seat\'s MCP pair alone',
+        },
         watch_wake: {
           enum: ['on', 'off'],
           $comment: 'the watch\'s typed retry for this seat: on exactly where its CLI profile declares typed_wake unless the seat writes off, which keeps the drop-file wake',
@@ -137,6 +148,7 @@ export const seats: Section = {
             secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
             header: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[!#$%&\'*+\\-.^_`|~0-9A-Za-z]+$', $comment: 'an HTTP field name; the secret file\'s line is sent as this header\'s value verbatim, with no scheme word added; absent, the adapter sends Authorization: Bearer <secret>' },
             body: { enum: [...WEBHOOK_BODY_SHAPES], $comment: 'the body the routine reads: event is the bus envelope {v, event}; inbox is the seat-inbox record shape, flattened from the signed message the arrival names; absent, event' },
+            target: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z][a-z0-9-]*$', $comment: 'the CLI the routine runs the seat as; the webhook counts as the seat\'s delivery only when this is the seat\'s own cli; absent, the URL host decides where it names one vendor service, and otherwise the row counts as before' },
             timeout_ms: { type: 'integer', minimum: 1, maximum: 60000, $comment: 'how long one POST waits for the routine\'s answer, in milliseconds; absent, 5000; an answer after the bound is not read and is never retried, so the routine is not asked twice' },
           },
           required: ['url_file', 'secret_file'],
@@ -168,7 +180,7 @@ export const seats: Section = {
 // that names an `account:` must name one of these, or it would silently spend nothing budgeted.
 function readSeats(
   entry: YamlEntry | undefined, check: Check, trust: string[], topLine: number, broken: Set<string>, accounts: ReadonlySet<string>,
-  marks: LeadMark[],
+  marks: LeadMark[], root?: string, folder?: { pattern: string; project: string; team: string },
 ): DraftSeat[] {
   if (!entry) {
     check.fail(topLine, 'seats is required: at least the orchestrator\'s and the operator\'s seat');
@@ -182,8 +194,8 @@ function readSeats(
   const assistants: { name: string; line: number }[] = [];
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
-      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'launcher', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
+      'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'launcher', 'access', 'brief', 'cwd', 'label', 'effort', 'mode',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'channel', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness', 'desktop_control',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -234,11 +246,29 @@ function readSeats(
     const version = readVersion(fields.get('version'), at, line, check);
     const launch = check.required(fields.get('launch'), `${at}: launch`, line);
     const launcherName = check.text(fields.get('launcher'), `${at}: launcher`);
+    const access = check.oneOf(fields.get('access'), `${at}: access`, ['read', 'write']) as 'read' | 'write' | undefined;
+    const brief = check.text(fields.get('brief'), `${at}: brief`);
     const display = check.text(fields.get('display'), `${at}: display`) ?? (model && version ? `${model} ${version}` : undefined);
     if (display && version && fields.get('display') && !hasVersionToken(display, version)) {
       check.fail(fields.get('display')?.line ?? line, `${at}: display must contain the version "${version}" as a token of its own`);
     }
-    const cwd = readCwd(fields.get('cwd'), at, trust, check);
+    // A CLI that writes into its start folder (Grok, Cursor) needs a folder of its own. A line
+    // that names no cwd gets the team's seat folder, so adding such a seat needs no path.
+    // A Claude Code seat on the shipped launcher gets one too (2026-11-12): the shared lobby gives
+    // it nothing (its hooks, settings and rules come from TeamCLI's machine folder), and a builder
+    // there writes into a folder every team shares. The orchestrator and a lead keep the lobby.
+    // The same for a Codex or Antigravity seat on its shipped launcher. An operator keeps its
+    // placement too: it works across checkouts (merges), not in one folder of its own.
+    const onLauncher = (cli === 'claude-code' && launcherName === 'claude-code')
+      || (cli === 'codex' && launcherName === 'codex')
+      || (cli === 'antigravity' && launcherName === 'antigravity');
+    const claudeOnLauncher = onLauncher && role !== 'orchestrator' && role !== 'lead' && role !== 'operator';
+    const ownFolder = fields.get('cwd') === undefined && (cli === 'grok' || cli === 'cursor' || claudeOnLauncher)
+      && folder !== undefined && folder.team !== '' && name !== undefined;
+    const place = ownFolder
+      ? { cwd: normalize(seatFolderOf(folder.pattern, folder.project, folder.team, name)), outside: false }
+      : readCwd(fields.get('cwd'), at, trust, check, root);
+    const cwd = place.cwd;
     const mode = check.oneOf(fields.get('mode'), `${at}: mode`, MODES);
     const parked = check.flag(fields.get('parked'), `${at}: parked`);
     const stopped = check.flag(fields.get('stopped'), `${at}: stopped`);
@@ -260,6 +290,13 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // The seat's own word on controlling the computer, true or false, omitted when the file
+    // writes none — every file that writes none keeps the digest it had.
+    const desktopControl = readDesktopControl(fields.get('desktop_control'), `${at}: desktop_control`, check);
+    // Omitted unless the file writes `off`, so every file that writes no channel key keeps the
+    // digest it had. `on` is the default and is not stored.
+    const channelWord = check.oneOf(fields.get('channel'), `${at}: channel`, ['off', 'on']);
+    const channelOff = channelWord === 'off';
     // The seat's own word on the watch's typed wake retry. A field of the built seat like
     // `human`, omitted when the file writes none — every file that writes none keeps the digest
     // it had, and a written word is part of the digest the owner approves. `on` needs a profile
@@ -331,6 +368,9 @@ function readSeats(
       seats.push({
         role, cli, vendor, model, version, display, launch, cwd, parked, stopped, line,
         ...(launcherName !== undefined ? { launcher: launcherName } : {}),
+        ...(ownFolder ? { cwdDefaulted: true as const } : {}),
+        ...(access !== undefined ? { access } : {}),
+        ...(brief !== undefined ? { brief } : {}),
         name: name + suffix,
         label: (label ?? defaultLabel(model, version)) + suffix,
         ...(label !== undefined ? { labelWritten: true as const } : {}),
@@ -355,6 +395,9 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        // Omitted when the file writes no desktop_control word, for the same reason.
+        ...(desktopControl !== undefined ? { desktopControl } : {}),
+        ...(channelOff ? { channelOff: true as const } : {}),
         // Omitted when the file writes no watch_wake word, for the same reason.
         ...(watchWake !== undefined ? { watchWake } : {}),
         // Omitted when the file marks no public-only seat, for the same reason.
@@ -367,6 +410,8 @@ function readSeats(
         ...(webhook ? { webhook } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
+        // Omitted when the cwd is inside the project or a trust path, so the digest is unchanged.
+        ...(place.outside ? { cwdOutside: true as const } : {}),
         ...(reach ? { reach } : {}),
       });
     }
@@ -463,12 +508,16 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     check.fail(node.line, `${at}: webhook.secret_file is required`);
     return undefined;
   }
-  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body', 'timeout_ms']);
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file', 'header', 'body', 'timeout_ms', 'target']);
   const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
   const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
   const header = readWebhookHeader(fields.get('header'), `${at}: webhook.header`, check);
   const body = check.oneOf(fields.get('body'), `${at}: webhook.body`, [...WEBHOOK_BODY_SHAPES]);
   const timeoutMs = readWebhookTimeout(fields.get('timeout_ms'), `${at}: webhook.timeout_ms`, check);
+  const target = check.text(fields.get('target'), `${at}: webhook.target`);
+  if (target !== undefined && !/^[a-z][a-z0-9-]{0,63}$/.test(target)) {
+    check.fail(fields.get('target')?.value.line ?? node.line, `${at}: webhook.target must be a CLI name such as cursor or claude-code`);
+  }
   if (urlFile === undefined || secretFile === undefined) return undefined;
   return {
     urlFile,
@@ -476,6 +525,7 @@ function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): Se
     ...(header === undefined ? {} : { header }),
     ...(body === undefined ? {} : { body }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(target === undefined || !/^[a-z][a-z0-9-]{0,63}$/.test(target) ? {} : { target }),
   };
 }
 
@@ -569,22 +619,29 @@ function readVersion(entry: YamlEntry | undefined, at: string, line: number, che
   return undefined;
 }
 
-function readCwd(entry: YamlEntry | undefined, at: string, trust: string[], check: Check): string {
+function readCwd(entry: YamlEntry | undefined, at: string, trust: string[], check: Check, root?: string): { cwd: string; outside: boolean } {
   const cwd = check.text(entry, `${at}: cwd`);
-  if (cwd === undefined || !entry) return '.';
+  if (cwd === undefined || !entry) return { cwd: '.', outside: false };
   if (/[\x00-\x1f\x7f`]/.test(cwd)) {
     check.fail(entry.value.line, `${at}: cwd must not contain control characters or backticks`);
-    return '.';
+    return { cwd: '.', outside: false };
+  }
+  // An absolute folder `{root}` or `{worktrees}` was filled into is the file's word, not a path of
+  // this machine's: it is taken when it lies inside the entity's folders (src/file/root-word.ts).
+  if (check.insideWordFolder(entry.value, cwd)) {
+    const path = posix.normalize(cwd).replace(/(.)\/+$/, '$1');
+    const inProject = root !== undefined && (path === root || path.startsWith(`${root}/`));
+    return { cwd: path, outside: !inProject && !insideTrust(path, trust, root) };
   }
   if (cwd.startsWith('/') || cwd.startsWith('~') || /^[A-Za-z]:[\\/]/.test(cwd)) {
-    check.fail(entry.value.line, `${at}: cwd must be relative to the project, never absolute and never "~"`);
-    return '.';
+    check.fail(entry.value.line, `${at}: cwd must be relative to the project, never absolute and never "~"${check.wordNodes.has(entry.value) ? ", or inside the entity's folders where it names {root} or {worktrees}" : ''}`);
+    return { cwd: '.', outside: false };
   }
   const path = normalize(cwd);
-  if (!insideProject(path) && !insideTrust(path, trust)) {
-    check.fail(entry.value.line, `${at}: cwd "${cwd}" is outside the project and matches no trust path`);
-  }
-  return path;
+  // An outside path no longer fails the file. The seat keeps it, marked, and up, add and check
+  // refuse that seat unless the path is the worktree recorded for it. Trust is matched from the
+  // team's own root, so a reader standing in another team's folder still sees this team's paths.
+  return { cwd: path, outside: !insideProject(path) && !insideTrust(path, trust, root) };
 }
 
 function reportCollisions(seats: DraftSeat[], field: 'name', check: Check): void {

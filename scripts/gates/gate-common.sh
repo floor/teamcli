@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Shared by push-gate.sh and light-check.sh: which test files a diff sends to the light check,
-# and which exit ids that diff touches. Sourced, never run on its own.
+# Shared by push-gate.sh and light-check.sh: which test files a diff sends to the light check.
+# Sourced, never run on its own.
 #
 # Test selection is dependency-aware: a changed src module sends the test files that import it
 # directly, plus the tests of every src module that imports it — a reverse-import graph over
@@ -31,20 +31,6 @@
 # number, never the matched text. push-gate.sh refuses on a hit; light-check.sh warns; a missing
 # file warns and never fails.
 #
-# Rule for test/exit-codes.test.ts (the one very large test file): a local run covers only the
-# scenes the diff touches. The ids come from the diff against origin/main:
-#   - the `//` … `exit: <id>` markers the src/ hunks carry (the changed lines and their context,
-#     so a change beside a marker counts), read the way scripts/exit-codes.ts reads them
-#     (MARKER = /\/\/\s*exit:\s*([a-z0-9]+(?:[.-][a-z0-9]+)*)\s*$/), so `//exit:x` counts too;
-#     the whole content of an untracked src file counts, since git diff cannot show it;
-#   - the ids of contract/exit-codes.json rows its hunks carry;
-#   - the scene names the hunks of test/exit-codes.test.ts carry — their lines and their
-#     headings (git prints the enclosing scope as the heading, which for an edit inside a scene
-#     body is the scene's own opener line) — so a filtered run keeps the scene an edit lands on.
-# The filter is dropped — the file runs whole — when the diff reaches the analyzer itself
-# (scripts/exit-codes.ts, scripts/contract.ts), or when a hunk of test/exit-codes.test.ts names
-# no scene at all (the imports, the harness): such an edit belongs to no one scene. A diff whose
-# hunks carry no id at all skips the file locally and says so. CI runs it in full either way.
 set -u
 
 # Hub threshold. A src module with more than this many direct test importers (after the exit-ids
@@ -169,8 +155,6 @@ gate_build_graph() {
 # overhead included, so it is a lower bound of what the file costs inside the light check. The
 # graph and the name conventions never pull one in; only a change that touches it does. The
 # hourly suite and CI run them otherwise. Add a line once a file measures over ~60 s alone.
-# (The sweep of all test files alone found exactly one other: test/exit-codes.test.ts, 153 s
-# unfiltered — the exit-ids rule's own, never selected here without its filter.)
 typeset -A heavy_tests=(
   test/broker.test.ts 963   # sized claim-lane stress (~2.5k real spawns): ~16 min alone
 )
@@ -183,7 +167,6 @@ typeset -A heavy_tests=(
 # other path that reaches it records the skip in `heavy_skipped` for the scripts' reasons.
 gate_add_test() {
   local t=$1 why=$2
-  [[ $t == test/exit-codes.test.ts && $why != "exit ids" && $why != touched ]] && return 0
   if [[ -n ${heavy_tests[$t]:-} && $why != touched ]]; then
     (( ${heavy_skipped[(Ie)$t]} )) || heavy_skipped+=($t)
     return 0
@@ -200,7 +183,6 @@ gate_hub_importers() {
   local t
   hub_it=()
   for t in ${(u)${=test_importers[$1]:-}}; do
-    [[ $t == test/exit-codes.test.ts ]] && continue
     [[ -n ${heavy_tests[$t]:-} ]] && continue
     hub_it+=($t)
   done
@@ -212,7 +194,6 @@ gate_hub_importers() {
 # The exit-ids file and heavy files keep their own accounting and are never sweep candidates.
 gate_hub_leave() {
   local t=$1 why=$2
-  [[ $t == test/exit-codes.test.ts ]] && return 0
   [[ -n ${heavy_tests[$t]:-} ]] && return 0
   (( ${hub_left[(Ie)$t]} )) || hub_left+=($t)
   [[ -n ${hub_left_why[$t]:-} ]] || hub_left_why[$t]=$why
@@ -231,72 +212,7 @@ gate_add_tail() {
   fi
 }
 
-# Appends to exit_ids every id the marker lines on stdin name. Feed it the grep -oE matches of
-# //[[:space:]]*exit:[[:space:]]*[A-Za-z0-9._-]+ — the analyzer's marker regex with a loose id.
-# A marker line with no id after it is ignored.
-gate_marker_ids() {
-  local m id
-  while IFS= read -r m; do
-    id=${m##*exit:}
-    id=${id//[[:space:]]/}
-    id=${id%%[^A-Za-z0-9._-]*}
-    [[ -n $id ]] && exit_ids+=($id)
-  done
-}
-
-# Sets `exit_ids` (the touched ids, possibly empty), `exit_full` (1 when the filter must not be
-# used) and `exit_full_why` (the reason, for the scripts' prints). Reads the changed-file list
-# from "$@".
-gate_exit_ids() {
-  typeset -g -aU exit_ids
-  typeset -g exit_full=0 exit_full_why=""
-  exit_ids=()
-  local f line id exit_file=0
-  for f in "$@"; do
-    case $f in
-      scripts/exit-codes.ts|scripts/contract.ts)
-        exit_full=1; exit_full_why="the analyzer itself changed" ;;
-      test/exit-codes.test.ts) exit_file=1 ;;
-    esac
-  done
-  gate_marker_ids < <(git diff -U3 ${GATE_BASE:-origin/main} -- src | grep -vE '^(\+\+\+|---)' | grep -oE '//[[:space:]]*exit:[[:space:]]*[A-Za-z0-9._-]+')
-  while IFS= read -r f; do
-    [[ -n $f ]] && gate_marker_ids < <(grep -oE '//[[:space:]]*exit:[[:space:]]*[A-Za-z0-9._-]+' -- "$f")
-  done < <(git ls-files --others --exclude-standard -- src)
-  while IFS= read -r line; do
-    id=${line#*'"id": "'}
-    [[ $id == $line ]] && continue
-    id=${id%%'"'*}
-    [[ -n $id ]] && exit_ids+=($id)
-  done < <(git diff -U3 ${GATE_BASE:-origin/main} -- contract/exit-codes.json | grep -vE '^(\+\+\+|---)' | grep -F '"id": "')
-  if (( exit_file )); then
-    local seen=0 cur_has=0 naked=0
-    while IFS= read -r line; do
-      case $line in
-        '@@'*)
-          # a new hunk: the one before it must have named a scene
-          if (( seen )) && (( ! cur_has )); then naked=1; fi
-          seen=1; cur_has=0 ;;
-        '+++'*|'---'*) continue ;;
-      esac
-      if [[ $line == *"scene('"* ]]; then
-        cur_has=1
-        id=${line#*scene\(}
-        id=${id#"'"}; id=${id%%"'"*}
-        id=${id%%[^A-Za-z0-9._-]*}
-        [[ -n $id ]] && exit_ids+=($id)
-      fi
-    done < <(git diff -U3 ${GATE_BASE:-origin/main} -- test/exit-codes.test.ts)
-    if (( seen )) && (( ! cur_has )); then naked=1; fi
-    if (( naked )) && (( ! exit_full )); then
-      exit_full=1
-      exit_full_why="a hunk of test/exit-codes.test.ts names no scene (the imports, the harness)"
-    fi
-  fi
-}
-
-# Sets `tests` (unique, in order) and `test_why` from the changed-file list in "$@", and with
-# them `exit_ids`, `exit_full` and `exit_full_why`. What lands:
+# Sets `tests` (unique, in order) and `test_why` from the changed-file list in "$@". What lands:
 #   - the test files the change touches;
 #   - for every changed src module: its direct test importers, its name/path files, and the same
 #     for every src module that imports it (depth 1) and every module that imports one of those
@@ -304,7 +220,6 @@ gate_exit_ids() {
 #     selection stays at or under `cap` files, else `depth2_capped` is set for the scripts' print;
 #   - the docs rule: a docs page, the READMEs or a src/commands change sends docs.test.ts,
 #     next.test.ts and every docs boundary test;
-#   - test/exit-codes.test.ts under the exit-ids rule above.
 gate_select_tests() {
   typeset -g -aU tests
   typeset -g -A test_why
@@ -419,10 +334,6 @@ gate_select_tests() {
         for d in test/docs/*.test.ts(N); do gate_add_test $d docs; done ;;
     esac
   done
-  gate_exit_ids "$@"
-  if (( exit_full )) || (( ${#exit_ids} )); then
-    gate_add_test test/exit-codes.test.ts "exit ids"
-  fi
   # The sweep's set: every hub candidate and every depth-1 tail overflow no other rule selected (a
   # touched file, the hub's own name-matched test, the docs or exit-ids rule). A file the depth-2
   # cap dropped stays here too — the background sweep covering it is never worse than the hourly
@@ -434,22 +345,17 @@ gate_select_tests() {
   done
 }
 
-# The TEAM_EXIT_IDS value for the selected work, or empty when the file runs unfiltered (or is
-# not selected at all).
-gate_exit_ids_env() {
-  if (( ! exit_full )) && (( ${#exit_ids} )); then
-    print -r -- "${(j:,:)exit_ids}"
-  fi
-}
-
 # Private name and phrase scan. The sources are the two external lists outside every repo
 # (`private-names.txt` and `private-phrases-prepush.txt`, never committed); the semantics, the
 # strict POSIX ERE subset, the scope headers, the non-comment prepush-only marker and the
 # cross-source dedupe all live in the repository's shared modules, not here. This wrapper calls
-# `scripts/check-private-diff.ts`, which reads every added line of the diff against GATE_BASE
+# `scripts/check-private-diff.ts`, which refuses dirty trees and requires GATE_BASE to be
+# origin/main or a v* tag whose commit is an ancestor of refs/remotes/origin/main.
+# It reads every added line of GATE_BASE..HEAD
 # and every line of every commit message on GATE_BASE..HEAD through `git grep -E` with the
-# pattern list on standard input. A hit prints its location, source, class and ordinal, never
-# the matched text.
+# pattern list on standard input. Byte-identical removed twins are consumed one-to-one;
+# the shared check prints the move count and locations. Commit messages are never moves.
+# A new hit prints its location, source, class and ordinal, never the matched text.
 #
 # Returns 0 clean or default lists absent (a visible skip is printed), 1 hits, 2 the scan could
 # not run (an explicitly named list is missing, or a list is unreadable, group-readable, empty

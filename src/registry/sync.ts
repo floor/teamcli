@@ -506,6 +506,8 @@ export type RunSeat = {
 export function registerRun(
   input: RegistryTeam,
   seats: ReadonlyArray<RunSeat>,
+  /** A partial automatic pass cannot infer that untouched seats stopped. */
+  options?: { preserveLifecycle?: boolean },
 ): string[] {
   const notes: string[] = [];
   let running = 0;
@@ -534,7 +536,7 @@ export function registerRun(
   }
   try {
     const teamId = teamIdOf(input.root);
-    if (running === 0 && getTeam(input.home, teamId)) setTeamLifecycle(input.home, teamId, 'stopped');
+    if (running === 0 && options?.preserveLifecycle !== true && getTeam(input.home, teamId)) setTeamLifecycle(input.home, teamId, 'stopped');
   } catch (error) {
     notes.push(noteOf(error));
   }

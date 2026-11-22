@@ -10,7 +10,10 @@ import { join } from 'node:path';
 import { daemonLogPath, daemonSocketPath } from '../src/daemon/paths.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { restoreSummaryOf } from '../src/launch/execute.ts';
-import type { RestoreSweepResult } from '../src/launch/restore-sweep.ts';
+import { runRestoreSweepForRoute, type RestoreSweepResult } from '../src/launch/restore-sweep.ts';
+import type { Launch } from '../src/commands/up.ts';
+import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
+import { emptySession, updateState } from '../src/state.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -120,6 +123,140 @@ describe('the daemon restores its routes at start', () => {
     } finally {
       await started.daemon.close();
     }
+  });
+
+  test.each(['stopped', 'defined'] as const)('a registered %s root stays hosted without scheduling a restore launch or typing', async (lifecycle) => {
+    const { root, home } = scratch();
+    upsertTeam(home, teamIdOf(root), { root, project: 'acme', session: 'acme', entity: null, lifecycle, by: 'owner' });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    let launches = 0; let typed = 0;
+    const started = await startMachineDaemon({ home, roots: [root], rootsFromRegistry: true, version: 'test', heartbeatMs: 10_000,
+      sendStart: async () => ({ kind: 'bind-failed', reason: 'synthetic' }),
+      initialBusStart: async () => ({ kind: 'bind-failed' }),
+      restoreSweep: async () => { launches++; typed++; return quiet; } });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(started.daemon.routes.map((one) => one.root)).toEqual([root]);
+      expect(started.daemon.roots.map((one) => one.root)).toEqual([root]);
+      expect(launches).toBe(0);
+      expect(typed).toBe(0);
+      expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+    } finally { await started.daemon.close(); }
+  });
+
+  test.each(['stopped', 'defined'] as const)('the restore child refuses a %s row with recorded seats and a live session before launch or typing', async (lifecycle) => {
+    const { root, home } = scratch();
+    upsertTeam(home, teamIdOf(root), { root, project: 'acme', session: 'acme', entity: null, lifecycle, by: 'owner' });
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    const result = await runRestoreSweepForRoute({ home, root, sources: { home, sessionRunning: () => true, agents: () => [], launch } });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining(`registry team is ${lifecycle}`) });
+    expect(operations).toEqual([]);
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+  });
+
+  test('a stopped team root cannot restore through a different declared session', async () => {
+    const { root, home } = scratch();
+    upsertTeam(home, teamIdOf(root), { root, project: 'acme', session: 'primary', entity: null, lifecycle: 'stopped', by: 'owner' });
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    const result = await runRestoreSweepForRoute({ home, root, sources: { home, sessionRunning: () => true, agents: () => [], launch } });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining('registry team is stopped') });
+    expect(operations).toEqual([]);
+  });
+
+  test('a pass told the hosted session refuses a team that now names another, before reading either session', async () => {
+    const { root, home } = scratch();
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    let sessionReads = 0;
+    const result = await runRestoreSweepForRoute({
+      home, root, expectedSession: 'watched-earlier',
+      sources: { home, sessionRunning: () => { sessionReads++; return true; }, agents: () => [], launch },
+    });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining('not the hosted "watched-earlier"') });
+    expect(sessionReads).toBe(0);
+    expect(operations).toEqual([]);
+  });
+
+  test('a team that changes session after the pass locked its own refuses in the run, with no operation on either session', async () => {
+    // Review round 2c: the run reloads the team under the pass's lock; a reload naming another
+    // session must never act there under this session's lock.
+    const { root, home } = scratch();
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    const file = join(root, '.agents', 'team.yaml');
+    const reads: string[] = [];
+    const result = await runRestoreSweepForRoute({
+      home, root, expectedSession: 'acme',
+      sources: {
+        home,
+        // The locked check reads the hosted session; the team file changes right after it.
+        sessionRunning: (name: string) => {
+          reads.push(name);
+          if (reads.length === 1) writeFileSync(file, readFileSync(file, 'utf8').replace('session: acme\n', 'session: other\n'));
+          return true;
+        },
+        agents: () => [], launch,
+      },
+    });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining('not the locked "acme"') });
+    expect(reads).toEqual(['acme']);
+    expect(operations).toEqual([]);
+  });
+
+  test('the restore child rechecks lifecycle under the run lock before launching', async () => {
+    const { root, home } = scratch();
+    const id = teamIdOf(root);
+    upsertTeam(home, id, { root, project: 'acme', session: 'acme', entity: null, lifecycle: 'running', by: 'owner' });
+    updateState(join(root, '.agents'), (state) => {
+      const session = state.sessions.acme = emptySession();
+      session.seats.clerk = { stage: 'ready', pane: 'fixture-pane-1' };
+    });
+    const operations: string[] = [];
+    const launch = new Proxy({} as Launch, { get: (_target, name) => () => { operations.push(String(name)); throw new Error('unexpected launch operation'); } });
+    const result = await runRestoreSweepForRoute({ home, root, sources: { home,
+      sessionRunning: () => { upsertTeam(home, id, { lifecycle: 'stopped' }); return true; }, agents: () => [], launch } });
+    expect(result).toMatchObject({ kind: 'refused', detail: expect.stringContaining('registry team is stopped') });
+    expect(operations).toEqual([]);
+  });
+
+  test('a running route that becomes stopped is excluded from restore retries', async () => {
+    const { root, home } = scratch();
+    const id = teamIdOf(root);
+    upsertTeam(home, id, { root, project: 'acme', session: 'acme', entity: null, lifecycle: 'running', by: 'owner' });
+    let calls = 0;
+    const started = await startMachineDaemon({ home, roots: [root], rootsFromRegistry: true, version: 'test', heartbeatMs: 10_000,
+      sendStart: async () => ({ kind: 'bind-failed', reason: 'synthetic' }), initialBusStart: async () => ({ kind: 'bind-failed' }),
+      restoreRetryInitialDelayMs: 10, restoreRetryMaxDelayMs: 10, restoreRetryBudgetMs: 50,
+      restoreSweep: async () => { calls++; upsertTeam(home, id, { lifecycle: 'stopped' }); return { kind: 'not-running', state: 'stopped' }; } });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      await waitFor(() => calls > 0);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      expect(calls).toBe(1);
+      expect(started.daemon.roots.map((one) => one.root)).toEqual([root]);
+    } finally { await started.daemon.close(); }
   });
 
   test('restoreSweep: false schedules no pass', async () => {

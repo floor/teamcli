@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 
 const ROOT = join(import.meta.dir, '..');
 const SCRIPT = join(ROOT, 'scripts', 'check-public-names.ts');
-const TEAM_FILE = join(ROOT, '.github', 'team.yaml');
+const TEAM_FILE = join(ROOT, '.github', 'policy.yaml');
 
 /** A ticket id no policy names, built from parts so this file never matches its own check. */
 const TICKET = ['FL', 'O-', '77', '0'].join('');
@@ -123,7 +123,7 @@ test('a synthetic pane id in public test data is not a content hit', () => {
 });
 
 test('the policy file does not match the patterns it declares', () => {
-  const root = tree({ '.github/team.yaml': readFileSync(TEAM_FILE, 'utf8') });
+  const root = tree({ '.github/policy.yaml': readFileSync(TEAM_FILE, 'utf8') });
   const result = run(root);
   expect(result.status).toBe(0);
 });

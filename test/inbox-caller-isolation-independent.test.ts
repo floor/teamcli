@@ -49,10 +49,13 @@ afterAll(() => {
   if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
   discardFixtures([suiteHome]);
 });
-function epoch(value: string) {
+/** A claim; `at` defaults to one written before any server here starts. A relaunch's claim, written
+ *  after the server under test started, takes LATER. */
+const LATER = '2099-01-01T00:00:00Z';
+function epoch(value: string, at = '2026-11-02T09:00:00Z') {
   updateState(dir, state => {
     const s = state.sessions['session-b']!;
-    (s.briefs ??= {}).reader = { id: '36f8f09e-2eb5-4814-a905-e8a9dfc702e8', at: '2026-11-02T09:00:00Z',
+    (s.briefs ??= {}).reader = { id: '36f8f09e-2eb5-4814-a905-e8a9dfc702e8', at,
       incarnation: 'inc_111111111111', epoch: value, sha256: 'a'.repeat(64), stage: 'ready', attempt: 0 };
   });
 }
@@ -148,7 +151,7 @@ test('managed Codex app-server ancestry outside herdr still proves the seat', as
   expect(existsSync(join(drop, id + '.read.json'))).toBe(true);
 });
 test('correct placement with a stale epoch refuses before opening or writing', async () => {
-  message(); epoch(newEpoch); const before = snapshot(rootB);
+  message(); epoch(newEpoch, LATER); const before = snapshot(rootB);
   expect((await serve(ownOptions(), ioFor().io)).code).toBe(2); expect(snapshot(rootB)).toEqual(before);
 });
 test('a correctly placed server with no epoch binds to the current claim, and a later generation refuses', async () => {
@@ -158,7 +161,7 @@ test('a correctly placed server with no epoch binds to the current claim, and a 
   expect(bound.code, caller.error()).toBe(0);
   expect(JSON.stringify(bound.replies)).toContain('private synthetic body');
   expect(existsSync(join(drop, id + '.read.json'))).toBe(true);
-  epoch(newEpoch);
+  epoch(newEpoch, LATER);
   const before = snapshot(rootB);
   const later = ioFor();
   expect((await serve(ownOptions(), later.io)).code).toBe(2);
@@ -175,7 +178,10 @@ test('an unreadable state refuses without repeating synthetic secret-like conten
   writeFileSync(join(dir, 'team.state.json'), '{' + secret);
   const before = snapshot(rootB), caller = ioFor();
   const result = await serve(ownOptions(), caller.io);
-  expect(result.code).toBe(2); expect(result.replies).toEqual([]);
+  // An unreadable state is waited for while the client is answered: every reply is a refusal,
+  // and neither the replies nor the refusal repeat the state's content.
+  expect(result.code).toBe(2); expect(result.replies.every(reply => reply.result?.isError === true)).toBe(true);
+  expect(JSON.stringify(result.replies)).not.toContain(secret);
   expect(caller.error()).not.toContain(secret); expect(caller.error()).not.toContain('private synthetic body');
   expect(snapshot(rootB)).toEqual(before);
 });
@@ -263,7 +269,10 @@ for (const change of ['stopped', 'dropped', 'moved-session'] as const) test(`a d
 test('a declaration stopped before startup refuses without a listener or state writes', async () => {
   message(); changeDeclaration('stopped'); const before = snapshot(rootB);
   const result = await serve(ownOptions(), ioFor().io);
-  expect(result.code).toBe(2); expect(result.replies).toEqual([]); expect(snapshot(rootB)).toEqual(before);
+  // A team file that cannot be read yet is waited for while the client is answered: every reply
+  // is a refusal, and nothing is opened or written.
+  expect(result.code).toBe(2); expect(result.replies.every(reply => reply.result?.isError === true)).toBe(true);
+  expect(snapshot(rootB)).toEqual(before);
 });
 for (const loss of ['parent', 'declaration'] as const) test(`channel push refuses after ${loss} loss with no new marker or receipt`, async () => {
   writeFileSync(file, readFileSync(file, 'utf8').replace('    launch: claude', '    launch: claude --dangerously-load-development-channels server:team-inbox'));

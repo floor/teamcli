@@ -25,6 +25,7 @@ import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
 import { recordSignedModel, runningModel, seatModel } from '../status/statusline.ts';
 import { liveDisplayAgent } from './seat-label.ts';
+import { seatCanWork, type SeatWorkRestart } from './seat-can-work.ts';
 import {
   ALWAYS_ON,
   type Attention,
@@ -40,6 +41,7 @@ import {
 } from './check.ts';
 import { minutes } from './check.ts';
 import { attention } from './checks/attention.ts';
+import { outOfTokens } from './checks/out-of-tokens.ts';
 import { providerError } from './checks/provider-error.ts';
 import { approval } from './checks/approval.ts';
 import { budget } from './checks/budget.ts';
@@ -158,9 +160,23 @@ export type MailboxWaiting = {
    *  `team messages`, not for the drop read, so it can raise the owner's waiting note but is
    *  never rung: the line would name a read that serves nothing, and it would fire every pass. */
   served: boolean;
+  /** Whether the record is a file in the seat's own drop folder. A record that is not served and
+   *  is there has been settled by its drop receipt; one that is not there waits in the older
+   *  mailbox store for `team messages`. Absent reads as in the drop folder. */
+  inDrops?: boolean;
+  /** The seat's current launch brief: it waits on the seat's own turn-start read, so it is rung
+   *  like any served record but never makes the seat "unable to work". Absent reads as false. */
+  brief?: boolean;
   /** The line the ring types: the record's message-display header, then the fixed read hint.
    *  Absent, the shipped nameless ring. */
   text?: string;
+  /** The wake this record has had (src/watch/wake-attempt.ts): none at all, one refused before
+   *  any key reached the pane, or one actually submitted. The watch's reader always sets it;
+   *  absent reads as submitted, the reading callers before this field had. */
+  wake?: 'none' | 'refused' | 'submitted';
+  /** The route the seat's wake takes, in plain words (`typed wake`, `webhook`, `pull on turn`),
+   *  for the line that says no wake was tried yet. */
+  route?: string;
 };
 
 export type PassResult = {
@@ -184,13 +200,24 @@ export type PassResult = {
   // Liveness words the chain set aside, each with the rule it broke. Not reports: they are
   // configuration facts, said once by the command, never nudged into a seat.
   refusals: ThresholdRefusal[];
+  /** Seats the detector says cannot take work. Absent when every seat can. The command
+   *  restarts, tells the lead, and retries from these plans. */
+  cantWork?: SeatCantWork[];
+};
+
+export type SeatCantWork = {
+  seat: string;
+  line: string;
+  tellLead: boolean;
+  retry: boolean;
+  restart?: SeatWorkRestart;
 };
 
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
 // run, except the six that can't be turned off.
-export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, unsent, idle];
+export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, modelRule, attention, providerError, outOfTokens, unsent, idle];
 export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
@@ -314,6 +341,16 @@ export type PassInput = {
    * team's pause, when it stands too, is still the one notice every seat gets.
    */
   seatPauses?: Readonly<Record<string, PauseRecord>> | null;
+  /** Seats with a drop still queued. The unsent-input state needs this and the held-text clock. */
+  queued?: ReadonlySet<string>;
+  /** The first instant a seat's box held unsent text, or null once it does not. The caller
+   *  persists it; the pass itself only reports the reading. */
+  onUnsent?(name: string, since: number | null): void;
+  /**
+   * The team's `.agents` folder. Set, the out-of-tokens check records and clears the
+   * unavailable mark there. Omitted, that check only reports.
+   */
+  agentsDir?: string;
 };
 
 // One pass of the watch. Pure: it reads what it is handed and changes only `memory`.
@@ -348,6 +385,9 @@ export function pass({
   pause,
   seatPauses = null,
   modelRule: rule = null,
+  queued,
+  onUnsent,
+  agentsDir,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -455,11 +495,14 @@ export function pass({
         lead,
         parked,
         stopped,
+        ...(agentsDir === undefined ? {} : { agentsDir }),
+        ...(seat?.role === undefined ? {} : { role: seat.role }),
         attention: null,
         dialogText: null,
         model: null,
         history: { lastWorking: undefined, idleSince: undefined },
         liveness,
+        queued: false,
       });
       continue;
     }
@@ -480,7 +523,19 @@ export function pass({
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
     const prompt = screen.kind === 'permission' || screen.kind === 'plan approval' || screen.kind === 'confirmation' || screen.kind === 'login' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
-    if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
+    const holding = quiet && !working && !prompt && screen.kind === 'unsent';
+    const clock = (memory.slots['unsent'] ??= {}) as Record<string, number>;
+    if (!holding) {
+      delete clock[name];
+      onUnsent?.(name, null);
+    } else {
+      clock[name] ??= now;
+      onUnsent?.(name, clock[name] as number);
+    }
+    const blockedUnsent = holding
+      && queued?.has(name) === true
+      && now - (clock[name] as number) >= watch.unsentAfter * 1000;
+    if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt && !blockedUnsent });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet
     // with no work behind it was already idle when the watch started, and counts from then. A
@@ -527,7 +582,10 @@ export function pass({
       prompt,
       lead,
       parked,
+      blocked: blockedUnsent,
       stopped,
+      ...(agentsDir === undefined ? {} : { agentsDir }),
+      ...(seat?.role === undefined ? {} : { role: seat.role }),
       attention: attentionOf(screen, agent.status, quiet, theirWord),
       dialogText: questionText(cli, pane),
       // The observation is read off the pane, except for a wrapper: Claude Code prints its own
@@ -543,6 +601,7 @@ export function pass({
         : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
+      queued: queued?.has(name) === true,
     });
     if (seat) labels.push(...labelOf(seat, agent.pane, agent.workspace, live.screens[agent.pane], memory, continuity === 'restored'));
   }
@@ -718,6 +777,12 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
+  // A paused team, or a seat paused on its own, is not working on purpose: its seats are left
+  // out of the can't-work detector, so the lead is not woken for a seat the pause stopped.
+  const cantWork = seatWorkPlans(
+    pause ? [] : observations.filter((obs) => seatPauses?.[obs.name] === undefined),
+    state, processes, mailbox, now, memory, reports, once, keep,
+  );
   return {
     reports,
     ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}),
@@ -728,7 +793,117 @@ export function pass({
     machineReadings,
     labels,
     refusals: refused,
+    ...(cantWork.length > 0 ? { cantWork } : {}),
   };
+}
+
+/** The detector's plans for this pass. A seat that can work clears its episode. The lead is
+ *  told once, inside three minutes of the first sighting, and that report follows the pass's
+ *  once-mark: a later pass of the same episode does not say it again. A reading herdr cannot
+ *  give is no change — it neither fires nor clears the mark. A missing CLI is restarted once,
+ *  and that mark is set by the command only when the restart runs: a held pass can tell the
+ *  lead and still restart after the hold lifts. An unread drop that the screen has not taken
+ *  is a wake to retry. The line is the watch's own: nothing was being delivered, so it says
+ *  the seat can't work. `not delivered` stays the send's sentence. */
+function seatWorkPlans(
+  observations: SeatObservation[],
+  state: SessionState,
+  processes: PassInput['processes'],
+  mailbox: readonly MailboxWaiting[],
+  now: number,
+  memory: Memory,
+  reports: Report[],
+  once: (key: string, text: string, to?: Report['to']) => Report | null,
+  keep: (key: string) => void,
+): SeatCantWork[] {
+  const episodes = (memory.slots['seat-cant-work'] ??= {}) as Record<string, { since: number; told: boolean; restarted: boolean; open: boolean }>;
+  for (const episode of Object.values(episodes)) episode.open = false;
+  // A seat waits on a wake only for mail its own drop read would serve: a record in the older
+  // mailbox store, or one a drop receipt already settled, waits on nothing this seat's wake could
+  // take, and counting it flagged seats with an empty inbox as unable to work.
+  // The seat's current launch brief alone never makes it unable to work (2026-11-15: an idle
+  // Claude seat's eleven-day-old launch brief raised "wake not taken").
+  const waiting = new Set(mailbox.filter((record) => record.served && record.brief !== true).map((record) => record.to));
+  // Mail in the older store is not lost either: the lead is told once per seat how many records
+  // wait there and which reader serves them, and the seat is not called unable to work.
+  const olderStore = new Map<string, number>();
+  for (const record of mailbox) {
+    if (record.served || record.inDrops !== false) continue;
+    olderStore.set(record.to, (olderStore.get(record.to) ?? 0) + 1);
+  }
+  // Said once per seat and count, held in the watch's own memory: the pass's once-marks are
+  // already settled when this runs, so they cannot hold it.
+  const toldOlder = (memory.slots['older-store'] ??= {}) as Record<string, number>;
+  for (const seat of Object.keys(toldOlder)) if (!olderStore.has(seat)) delete toldOlder[seat];
+  for (const [seat, count] of olderStore) {
+    if (toldOlder[seat] === count) continue;
+    toldOlder[seat] = count;
+    reports.push({
+      key: `older-store:${seat}`,
+      text: `${seat}: ${String(count)} message(s) wait in the older mailbox store; \`team messages\` serves them, a wake does not`,
+      to: 'orchestrator',
+    });
+  }
+  const plans: SeatCantWork[] = [];
+  for (const obs of observations) {
+    if (!obs.agent || obs.lead) continue;
+    const key = `cant-work:${obs.name}`;
+    const pane = processes?.[obs.agent.pane];
+    if (pane == null || pane.foreground.length === 0) {
+      keep(key);
+      continue;
+    }
+    const prior = episodes[obs.name];
+    const unread = waiting.has(obs.name) && obs.screen.kind !== 'working';
+    // "Wake not taken" is a claim about a wake: it stands only when one was tried for a record
+    // this seat still has not read. A record with no attempt yet is queued, and the lead is told
+    // that instead, with the route its wake will take.
+    const mine = mailbox.filter((record) => record.to === obs.name && record.served && record.brief !== true);
+    const tried = mine.some((record) => (record.wake ?? 'submitted') === 'submitted');
+    if (unread && !tried) {
+      const route = mine.find((record) => record.route !== undefined)?.route ?? 'unknown';
+      const refused = mine.some((record) => record.wake === 'refused');
+      const key = `queued:${obs.name}`;
+      const text = refused
+        ? `${obs.name}: queued, the wake was refused before any key reached the pane (route: ${route})`
+        : `${obs.name}: queued, no wake tried (route: ${route})`;
+      const queued = once(key, text, 'orchestrator');
+      if (queued) reports.push(queued);
+      else keep(key);
+    }
+    const found = seatCanWork({
+      seat: obs.name,
+      cli: obs.cli,
+      screen: obs.screen,
+      recorded: state.seats[obs.name]?.launched,
+      processes: pane,
+      elapsedMs: prior === undefined ? 0 : now - prior.since,
+      told: prior?.told === true,
+      restarted: prior?.restarted === true,
+      ...(unread && tried ? { wake: { submitted: false, working: false, receipt: false } } : {}),
+    });
+    if (found.ok) {
+      delete episodes[obs.name];
+      continue;
+    }
+    const note = found.restart === undefined ? '' : ` — ${found.restart.audit}`;
+    const line = `can't work: ${found.reason}${note}`;
+    const episode = (episodes[obs.name] ??= { since: now, told: false, restarted: false, open: false });
+    episode.open = true;
+    const announced = found.tellLead ? once(key, `${obs.name}: ${line}`, 'orchestrator') : null;
+    if (announced) {
+      reports.push(announced);
+      episode.told = true;
+    } else keep(key);
+    plans.push({
+      seat: obs.name,
+      line,
+      tellLead: announced !== null,
+      retry: found.retry,
+      ...(found.restart === undefined ? {} : { restart: found.restart }),
+    });
+  }
+  return plans;
 }
 
 /** Idle workers due a work drop this pass. Leads, parked and stopped seats, a seat whose pane is
@@ -751,7 +926,13 @@ function workDrops(
   const due: PassResult['work'] = [];
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
-    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
+    // A lead is not nudged in its pane: that would write over a draft. Its unread mail is the
+    // wake in wakeUnreadDrops, at lead_unread_after, which leaves a draft in place.
+    if (obs.lead) {
+      delete sent[obs.name];
+      continue;
+    }
+    if (obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
       delete sent[obs.name];
       continue;
     }
@@ -824,7 +1005,10 @@ function pauseDrops(
   const due: PassResult['work'] = [];
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
-    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
+    // A pause notice is typed too, and a lead's pane is not where it goes. The unread wake
+    // covers the lead.
+    if (obs.lead) continue;
+    if (obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
     // The pause's notice is typed too: a seat the native store holds is skipped and stays due
     // when the hold lifts, because no stamp is written for it here.
     if (nativeHeld?.has(obs.name) === true) continue;

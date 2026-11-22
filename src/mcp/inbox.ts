@@ -1,3 +1,5 @@
+import { copyFor, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 import type { KeyObject } from 'node:crypto';
 // The seat's inbox: the drop folder `team send` already writes, read from the seat's own side.
 //
@@ -18,7 +20,9 @@ import type { KeyObject } from 'node:crypto';
 // session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
 // build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
 // path; a drop or receipt that is a link is refused, never followed.
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync } from '../host/guarded-fs.ts';
+import { claimRead, ownerOfClaim, READ_CLAIMS } from '../send/read-claim.ts';
 import { join } from 'node:path';
 import {
   briefBindingOf,
@@ -33,17 +37,22 @@ import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
 import { dropMessage } from '../send/native.ts';
 import { attributedBody, attributeSenderClaim, type SenderAttribution } from '../send/sender-claim.ts';
+import { bodyWithReaderLine, existingRecordIdsIn, takesReaderLine } from '../send/frame.ts';
 import { readState } from '../state.ts';
 import {
   alreadyReadSentence,
   fileStatStamp,
   isRead,
   isReadOrCleared,
+  isStampedPayload,
+  readVerifiedReceipt,
+  stampedSettled,
   keyPrintForCache,
   leadAckReceiptAt,
   settledReadOf,
   readRecord,
   readSealedRecord,
+  recordFile,
   receiptFile,
   recordAuthOfSealed,
   signReceiptPayload,
@@ -56,6 +65,11 @@ import {
 import { messageKeyState } from '../store/keys.ts';
 import type { BuildIdentity } from '../version.ts';
 import { flushReceipt, publishReadReceipt } from './inbox-admission.ts';
+import { exposurePointer, isExposeOwner } from '../queue/exposure.ts';
+import { queuePlaceOf } from '../queue/append.ts';
+import { readerOrder } from '../queue/reader.ts';
+import { seatMailParts, stampedListing } from '../queue/mail-tree.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 /** The listener marker's name in the seat's own drop folder. */
 export const LISTENER_FILE = '.inbox-listener';
@@ -127,6 +141,9 @@ export type InboxListener = {
    *  epoch when the launch line named none. Absent when the claim holds no launch epoch, or the
    *  server started before a claim existed. Never a replacement for the server's live guards. */
   epoch?: string;
+  /** The fence capability level this server enforces (rfc-event-comms §3): 2 from E6. A marker
+   *  without it is a build before E6, whose level is unknown, and blocks activation. */
+  level?: number;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` is the sender the message's own signed
@@ -142,6 +159,10 @@ export type InboxMessage = {
   ts: string;
   bytes: number;
   sender_attribution: SenderAttribution;
+  /** A plain-text drop an earlier build wrote: listed only when the caller asks for them. */
+  legacy?: true;
+  /** The queue seq it is offered at, when the listing is in queue order (E7 reader switch). */
+  seq?: number;
 };
 
 export function listenerPath(dropDir: string): string {
@@ -161,7 +182,7 @@ export function receiptPath(dropDir: string, id: string): string {
  */
 export function inboxFolderHeld(root: string, session: string, seat: string): boolean {
   let at = root;
-  for (const part of ['.agents', 'send-drops', session, seat]) {
+  for (const part of seatMailParts(session, seat)) {
     at = join(at, part);
     if (heldAt(at).kind !== 'folder') return false;
   }
@@ -175,7 +196,7 @@ export function inboxFolderHeld(root: string, session: string, seat: string): bo
  */
 export function ensureInboxFolder(root: string, session: string, seat: string): string | null {
   let at = root;
-  for (const part of ['.agents', 'send-drops', session, seat]) {
+  for (const part of seatMailParts(session, seat)) {
     at = join(at, part);
     const held = heldAt(at);
     if (held.kind === 'folder') continue;
@@ -193,6 +214,7 @@ export function ensureInboxFolder(root: string, session: string, seat: string): 
 
 /** Writes the listener marker whole at 0600 by rename; false when it cannot be written. */
 export function writeListener(dropDir: string, listener: InboxListener): boolean {
+  hostedCommit('writeListener');
   try {
     dropMessage(dropDir, LISTENER_FILE, `${JSON.stringify(listener)}\n`);
     return true;
@@ -225,6 +247,7 @@ export function readListener(dropDir: string): InboxListener | null {
       ...(typeof parsed.head === 'string' ? { head: parsed.head } : {}),
       ...(parsed.channel === true ? { channel: true as const } : {}),
       ...(isBriefEpoch(parsed.epoch) ? { epoch: parsed.epoch } : {}),
+      ...(typeof parsed.level === 'number' && Number.isInteger(parsed.level) && parsed.level > 0 ? { level: parsed.level } : {}),
     };
   } catch {
     return null;
@@ -479,6 +502,10 @@ export function listUnread(
   home: string,
   records?: RecordReader,
   listed?: (names: readonly string[]) => void,
+  /** `include` lists plain-text drops an earlier build wrote, marked `legacy`. By default they
+   *  are left out: no reader can serve one, so they are not mail waiting, and a counter that
+   *  rang for them rang forever. */
+  options: { legacy?: 'include'; /** `skip`: no queue annotation (a read-only caller takes no lock). */ queue?: 'skip' } = {},
 ): InboxMessage[] {
   let names: string[];
   try {
@@ -486,11 +513,15 @@ export function listUnread(
   } catch {
     return [];
   }
+  // E7b revision 3: the seat's stamped folder is listed with it (src/queue/mail-tree.ts); one that
+  // stands but cannot be listed fails the listing as an unreadable legacy folder does.
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return [];
   // The listing as read, before any message rule narrows it: a dot-named marker beside the mail
   // is not a message, and a caller that shares one pass's reading takes its presence from here
   // rather than opening the folder again. A folder that could not be listed is never reported.
   listed?.(names);
-  const nameSet = new Set(names);
+  const folders = [{ folder: dropDir, names }, ...(stamped === null ? [] : [stamped])];
   const key = messageKeyState(home);
   const readRecordAt: RecordReader | null = key.kind !== 'key'
     ? null
@@ -498,47 +529,70 @@ export function listUnread(
   const claim = currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
-  for (const name of names) {
-    if (!messageNameOk(name)) continue;
-    if (superseded.has(name)) continue;
-    const at = join(dropDir, name);
-    if (heldAt(at).kind !== 'file') continue;
-    const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
-    // A message a lead cleared is settled exactly as one the seat read: it is not waiting mail.
-    if (key.kind === 'key' && hasReceiptFile && isReadOrCleared(dropDir, name, context, key.key, binding)) continue;
-    const payload = readRecordAt === null ? null : readRecordAt(at, name);
-    if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
-    let size = 0;
-    let mtime: number;
-    try {
-      const stat = lstatSync(at);
-      if (!stat.isFile()) continue;
-      size = stat.size;
-      mtime = stat.mtimeMs;
-    } catch {
-      continue;
+  for (const { folder, names: folderNames } of folders) {
+    const nameSet = new Set(folderNames);
+    for (const name of folderNames) {
+      if (!messageNameOk(name)) continue;
+      if (superseded.has(name)) continue;
+      const at = join(folder, name);
+      if (heldAt(at).kind !== 'file') continue;
+      const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
+      const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+      // A message a lead cleared is settled exactly as one the seat read: it is not waiting mail.
+      if (key.kind === 'key' && hasReceiptFile && isReadOrCleared(folder, name, context, key.key, binding)) continue;
+      const payload = readRecordAt === null ? null : readRecordAt(at, name);
+      if (payload !== null && supersededBrief(payload, name, context, claim)) continue;
+      let size = 0;
+      let mtime: number;
+      try {
+        const stat = lstatSync(at);
+        if (!stat.isFile()) continue;
+        size = stat.size;
+        mtime = stat.mtimeMs;
+      } catch {
+        continue;
+      }
+      const marker = nameSet.has(`${name}.pending`) ? markerOf(folder, name) : {};
+      // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
+      // dates only a record the key cannot vouch for. The sender follows the same rule: the
+      // record's own signed claim when it verifies, the marker's word only when it does not — and
+      // only the record's claim can be attributed to anything.
+      const legacy = payload === null && legacyDropAt(at);
+      if (legacy && options.legacy !== 'include') continue;
+      const signedAt = signedTimeOfPayload(payload);
+      const sender = payload !== null ? payload.from : marker.from;
+      const senderAttribution = payload === null
+        ? 'none' as const
+        : attributeSenderClaim(payload, { briefClaim: claim });
+      messages.push({
+        id: name,
+        ...(sender !== undefined ? { from: sender } : {}),
+        ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
+        bytes: size,
+        sender_attribution: senderAttribution,
+        ...(legacy ? { legacy: true as const } : {}),
+      });
     }
-    const marker = nameSet.has(`${name}.pending`) ? markerOf(dropDir, name) : {};
-    // A record this key signed is dated by its own `at`; an unsigned marker or the file's mtime
-    // dates only a record the key cannot vouch for. The sender follows the same rule: the
-    // record's own signed claim when it verifies, the marker's word only when it does not — and
-    // only the record's claim can be attributed to anything.
-    const signedAt = signedTimeOfPayload(payload);
-    const sender = payload !== null ? payload.from : marker.from;
-    const senderAttribution = payload === null
-      ? 'none' as const
-      : attributeSenderClaim(payload, { briefClaim: claim });
-    messages.push({
-      id: name,
-      ...(sender !== undefined ? { from: sender } : {}),
-      ts: signedAt ?? marker.ts ?? new Date(mtime).toISOString(),
-      bytes: size,
-      sender_attribution: senderAttribution,
-    });
   }
-  return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
+  // E7: the same set and the same (signed-time) order for every consumer; each message carries its
+  // queue seq when the reader switch holds for this seat. Time-driven consumers (the drops batch,
+  // wake ages, the wake picker) keep their own criteria; only the model-facing inbox listing is
+  // offered in seq order (`inQueueOrder`). The set never depends on the switch.
+  messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
+  if (options.queue !== 'skip' && messages.length > 0 && !messages.some(message => message.legacy === true)) {
+    const order = readerOrder(dropDir, { root: context.root, session: context.session, seat: context.to }, messages.map(message => message.id), home);
+    if (order.kind === 'queue') return messages.map(message => ({ ...message, seq: order.seq.get(message.id) as number }));
+  }
+  return messages;
 }
+
+/** The listing offered to the model in queue order: by seq when every message carries one (the
+ *  reader switch held for the whole listing), otherwise unchanged (signed-time order). */
+export function inQueueOrder(messages: readonly InboxMessage[]): InboxMessage[] {
+  if (messages.length === 0 || messages.some(message => message.seq === undefined)) return [...messages];
+  return [...messages].sort((a, b) => (a.seq as number) - (b.seq as number));
+}
+
 
 /** The text as JSON, or undefined when it is not JSON at all. */
 function parsedJson(text: string): unknown {
@@ -582,8 +636,11 @@ export type InboxRefusal = {
   path: string;
 };
 
+/** The folder of exclusive read claims inside a seat's drop folder (src/send/read-claim.ts). */
+export { READ_CLAIMS };
+
 export type InboxRead =
-  | { ok: true; body: string; seal?: () => boolean }
+  | { ok: true; body: string; seal?: () => boolean; release?: () => void }
   // `served` marks a race the gate decided without a body: `already-served` when a verifiable
   // receipt won the name. `busy` stays in the union for callers and fixtures that predate the
   // receipt-only gate; this version never emits it.
@@ -665,13 +722,22 @@ export type InboxTarget = {
  *  launch's own record is admitted only as the seat's current brief, resolved again after the
  *  signature so a delivery that landed during the read is noticed. Nothing is written here: this
  *  is the check a read and a peek both make before a body is shown. */
+/** E7b revision 3: the target re-pointed at the seat folder of the tree that holds `id`
+ *  (src/queue/mail-tree.ts), so every sidecar, receipt and folder fsync follows the record. The
+ *  seat's identity (its queue, its binding) is the same from either folder. */
+function atRecordTree(target: InboxTarget, id: string): InboxTarget {
+  const dropDir = seatFolderOf(target.dropDir, id);
+  return dropDir === target.dropDir ? target : { ...target, dropDir };
+}
+
 function openInboxMessage(
   target: InboxTarget,
   id: string,
   home: string,
   brief: BriefRead | undefined,
 ): OpenedMessage {
-  const at = join(target.dropDir, id);
+  target = atRecordTree(target, id);
+  const at = recordFile(target.dropDir, id);
   const refused = (rule: InboxRefusal['rule'], reason: string): OpenedMessage => ({
     ok: false,
     reason,
@@ -749,10 +815,14 @@ export function readMessage(
   guard?: () => string | null,
   /** `after` writes no receipt before the body is returned. The caller seals once the body has
    *  been handed over, and a hand-over that never returns leaves the message unread. */
-  handover?: { receipt: 'after' },
+  /** `owner` names the relayed operation that will hand the body over; `adopt` is that
+   *  operation's recovery taking back the claim it left (src/send/read-claim.ts), so a recovered
+   *  read seals the same receipt, brief binding included, that the live read would have. */
+  handover?: { receipt: 'after'; owner?: string; adopt?: boolean },
 ): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const at = join(target.dropDir, id);
+  target = atRecordTree(target, id);
+  const at = recordFile(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const atReceipt = heldAt(receiptPath(target.dropDir, id));
   if (atReceipt.kind !== 'missing' && atReceipt.kind !== 'file') {
@@ -772,7 +842,12 @@ export function readMessage(
     session: target.session,
     ...(target.lead === undefined ? {} : { lead: target.lead }),
   };
-  const receiptHeldNow = (): boolean => isRead(target.dropDir, id, context, key, binding);
+  // E7b: a stamped record is settled only by its recipient's confirmation (the strict rule), so an
+  // exact-id read of one with a plain read standing is served again, numbered.
+  const stampedRecord = isStampedPayload(payload);
+  const receiptHeldNow = (): boolean => stampedRecord
+    ? stampedSettled(target.dropDir, id, context, key)
+    : isRead(target.dropDir, id, context, key, binding);
   // A lead's clearance holds the one read name without being the seat's read: the id is served
   // and no body follows. A brief's own delivery never takes this path — only a seat reads it.
   const clearedNow = (): boolean =>
@@ -792,8 +867,12 @@ export function readMessage(
   });
   if (receiptHeldNow()) return alreadyServed();
   const atRead = heldAt(readName);
-  if (atRead.kind === 'file') return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
-  if (atRead.kind !== 'missing') {
+  // E7b: a stamped record is settled only by its recipient. A verifying writer-side read that
+  // already holds the read name (a copy receipt an earlier build wrote) is passed over: the body
+  // is served again, numbered.
+  const reuse = stampedRecord && atRead.kind === 'file' && readVerifiedReceipt(readName, id, 'read', context, key, binding) !== null;
+  if (atRead.kind === 'file' && !reuse) return receiptHeldNow() ? alreadyServed() : clearedNow() ? alreadyServed() : occupied();
+  if (atRead.kind !== 'missing' && !reuse) {
     return { ok: false, reason: 'the receipt path is held by something that is not a file' };
   }
   const atReplied = heldAt(repliedName);
@@ -844,18 +923,22 @@ export function readMessage(
   // or — for a manual read — the claim it served. It is never the key's own generation.
   const writerEpoch = brief?.epoch ?? binding?.epoch;
   const signedReceipt = signReceiptPayload(receipt, home, writerEpoch === undefined ? undefined : { epoch: writerEpoch });
-  const body = attributedBody(payload.body, payload.from, {
+  const attributed = attributedBody(payload.body, payload.from, {
     record: payload,
     home,
     root: target.root,
     rule: payload.rule,
   });
+  const body = takesReaderLine(payload, isGeneralBriefRecord(payload)) ? bodyWithReaderLine(attributed, id, existingRecordIdsIn(target.dropDir)) : attributed;
   // The inbox server publishes the receipt before it returns the body: a receipt that cannot be
   // made durable shows nothing, and a seat that loses its place during the write shows nothing
   // either. The receipt stands — that path is at-most-once. The CLI mailbox reader asks for the
   // body first and seals only after the hand-over returns, so a hand-over that throws leaves the
   // message unread.
   const publish = (): InboxRead | true => {
+    // E7b: a stamped record's read is an unconfirmed copy: its copy number is its trace, and only
+    // its recipient's confirmation writes a receipt (one receipt per read).
+    if (reuse || stampedRecord) return true;
     const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
     if (published === 'exists') {
       // A rival won the name between the check and this link. Its receipt is the single serving of
@@ -871,21 +954,124 @@ export function readMessage(
     }
     return true;
   };
+  // E7b: every copy of a stamped record names its message and its delivery number, taken durably
+  // immediately before the body is handed back. A history that cannot be written returns nothing
+  // now; the message stays unread and due.
+  const numberedCopy = (): string | null => {
+    if (!stampedRecord) return body;
+    const n = takeCopyNumber(target.dropDir, id, 'read');
+    return n === null ? null : wrapCopy(body, id, n);
+  };
+  const historyUnwritable = (): InboxRead => ({
+    ok: false,
+    reason: `message ${JSON.stringify(id)} was not returned: its delivery history cannot be written now; read it again in a moment`,
+    served: 'busy',
+  });
+  // The exclusive read claim (rfc-event-comms E5, review round 3): one reader holds the id from
+  // before its body is handed over until its receipt is sealed or it gives up. A rival that finds a
+  // live claim gets no body; a claim whose holder died is taken over (the seat lock's rule).
+  // A relayed hand-over names its owning operation: the claim is then durable before any output,
+  // and a cut-off run's claim belongs to its recovery alone (src/send/read-claim.ts).
+  const claim = claimRead(target.dropDir, id, handover?.receipt === 'after' ? handover.owner : undefined, handover?.adopt === true);
+  if (!claim.ok) {
+    // rfc-event-comms §3 (E6): a leg's owned exposure claim means another hand-over carries or
+    // carried this body; an automatic read answers with a pointer and writes no read.
+    if (claim.why === 'recovering' && isExposeOwner(ownerOfClaim(target.dropDir, id))) {
+      return { ok: false, reason: exposurePointer(id, queuePlaceOf(target.dropDir, id)?.seq ?? null), served: 'already-served' };
+    }
+    const reason = claim.why === 'recovering'
+      ? `message ${JSON.stringify(id)} is being recovered from an interrupted read`
+      : claim.why === 'busy'
+        ? `message ${JSON.stringify(id)} is being read by another reader`
+        : claim.why === 'durable' || claim.why === 'unwritable'
+          ? `message ${JSON.stringify(id)} was not read: its read claim could not be written`
+          : `message ${JSON.stringify(id)} was not read: its read claim cannot be read now`;
+    return { ok: false, reason, served: 'busy' };
+  }
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    claim.release();
+  };
+  // A rival that sealed while this reader waited for the claim already served the id.
+  if (receiptHeldNow()) {
+    release();
+    return alreadyServed();
+  }
   if (handover?.receipt === 'after') {
+    // A named owner's claim is never removed by the reader: it stays the relayed read's through its
+    // seal, its saved output's discard, and its removal, which the relay does last
+    // (src/send/confined-outbox.ts `finishTake`). The reader only lets go of the lock.
+    const owned = handover.owner !== undefined;
+    const done = (): void => {
+      if (!owned) {
+        release();
+        return;
+      }
+      if (released) return;
+      released = true;
+      claim.keep();
+    };
+    const copy = numberedCopy();
+    if (copy === null) {
+      done();
+      return historyUnwritable();
+    }
     return {
       ok: true,
-      body,
-      seal: () => publish() === true,
+      body: copy,
+      seal: () => {
+        try {
+          return publish() === true;
+        } finally {
+          done();
+        }
+      },
+      release: done,
     };
   }
-  const wrote = publish();
+  let wrote: InboxRead | true;
+  try {
+    wrote = publish();
+  } finally {
+    release();
+  }
   if (wrote !== true) return wrote;
   // The declaration is looked at once more after the receipt is durable and before the body is
   // handed back: a seat that lost its place during the write shows nothing. The receipt stands —
   // this is the at-most-once side — and the caller returns this refusal instead of the body.
   const lostAfterReceipt = guard?.();
   if (lostAfterReceipt !== undefined && lostAfterReceipt !== null) return { ok: false, reason: lostAfterReceipt };
-  return { ok: true, body };
+  const copy = numberedCopy();
+  if (copy === null) return historyUnwritable();
+  return { ok: true, body: copy };
+}
+
+/**
+ * A cut-off relayed read's recovery sealing one id whose body its saved output holds whole: the
+ * seat's own reader, adopting the claim `owner` left, so the receipt is the one the live read
+ * would have sealed, a launch brief's binding included. The body it returns is not shown again.
+ * True once the id is read (sealed now, or already served).
+ */
+export function sealRecoveredRead(
+  target: InboxTarget,
+  id: string,
+  home: string,
+  brief: BriefRead,
+  owner: string,
+  flush: (path: string, folder: string) => boolean = flushReceipt,
+): boolean {
+  target = atRecordTree(target, id);
+  const got = readMessage(target, id, home, brief, undefined, { receipt: 'after', owner, adopt: true });
+  if (got.ok) return got.seal?.() === true;
+  if (got.served !== 'already-served') return false;
+  // A receipt already stands: it may be this read's own whose flush failed. It counts only once it
+  // is durable, so it is flushed again here.
+  for (const name of [receiptPath(target.dropDir, id), receiptFile(target.dropDir, id, 'replied')]) {
+    if (heldAt(name).kind === 'file') return flush(name, target.dropDir);
+  }
+  return false;
 }
 
 /**
@@ -898,7 +1084,8 @@ export function readMessage(
  */
 export function peekMessage(target: InboxTarget, id: string, home: string, seats: readonly string[], brief?: BriefRead): InboxRead {
   if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  if (heldAt(join(target.dropDir, id)).kind !== 'file') {
+  target = atRecordTree(target, id);
+  if (heldAt(recordFile(target.dropDir, id)).kind !== 'file') {
     return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   }
   const key = messageKeyState(home);
@@ -912,12 +1099,16 @@ export function peekMessage(target: InboxTarget, id: string, home: string, seats
   const payload = opened.payload;
   return {
     ok: true,
-    body: attributedBody(payload.body, payload.from, {
-      record: payload,
-      home,
-      root: target.root,
-      rule: payload.rule,
-    }),
+    body: (() => {
+      const attributed = attributedBody(payload.body, payload.from, {
+        record: payload,
+        home,
+        root: target.root,
+        rule: payload.rule,
+      });
+      const shown = takesReaderLine(payload, isGeneralBriefRecord(payload)) ? bodyWithReaderLine(attributed, id, existingRecordIdsIn(target.dropDir)) : attributed;
+      return copyFor(shown, target.dropDir, id, isStampedPayload(payload), 'read');
+    })(),
   };
 }
 

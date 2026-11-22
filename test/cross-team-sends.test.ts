@@ -483,65 +483,51 @@ describe('cross-team --record', () => {
 });
 
 describe('a cross-team delivery reads the receiver’s runtime launch', () => {
-  test('a Claude lead relaunched with its own accepted settings takes the frame at its live socket', async () => {
-    // The file's launch carries no channel flag, and the settings file that launch would install
-    // declares nothing at all. The session is running under its own `--settings` file instead,
-    // which declares accept, and its socket is newer than that declaration: the walk must read
-    // the line the seat ran, never the row a later launch would install.
-    const runtime = join(world.base, 'api-lead-settings.json');
-    writeFileSync(runtime, JSON.stringify({ crossSessionInbound: 'accept' }));
-    const past = new Date(NOW.getTime() - 60_000);
-    utimesSync(runtime, past, past);
-    const sockets = join(world.base, 'sockets');
-    mkdirSync(sockets, { recursive: true });
-    // The socket's name carries the pid the host reports for a pane, so it is the pane's own
-    // address; it is written after the declaration, so the setting is in force in the session.
-    const socket = join(sockets, '2.sock');
-    writeFileSync(socket, '');
-    const record = findAgent(world.home, { team: teamIdOf(world.roots.api as string), seat: 'api-lead' });
-    if (record === null) throw new Error('the test world records no agent for api-lead');
-    recordAgentAddress(world.home, record.id, socket);
-    updateState(join(world.roots.api as string, '.agents'), (state) => {
-      const session = (state.sessions.api ??= emptySession());
-      session.seats['api-lead'] = {
-        stage: 'ready',
-        pane: paneOf('api', 'api-lead'),
-        workspace: 'fixture-workspace',
-        cli: 'claude-code',
-        launch_line: `claude --model test --settings ${runtime}`,
-      };
-    });
+});
 
-    // The live read proves the pane the socket belongs to: the seat stands on the pane the state
-    // records, and the socket's name carries that pane's own pid.
-    const reading = await sendForReal({ team: 'acme', seat: 'coord' }, 'api-lead@api', {
-      agents: (asked) => (asked === 'api' ? [{ name: 'api-lead', pane: paneOf('api', 'api-lead') }] : null),
-    });
+// The warm send host's first-effect check (rfc-bus-send-server §2.5; review round 1 F1): an
+// admitted real send whose client no longer holds at its first effect is handed back before any
+// record, drop, lock, history line or registry write exists, and no frame is taken. Every file and
+// folder of the world keeps its bytes, mode, size and mtime; in-process, the same send lands.
+describe('the hosted first-effect check', () => {
+  function tree(dir: string): Map<string, string> {
+    const { readdirSync, lstatSync } = require('node:fs') as typeof import('node:fs');
+    const out = new Map<string, string>();
+    const walk = (at: string): void => {
+      for (const name of readdirSync(at)) {
+        if (name === '.git') continue;
+        const path = join(at, name);
+        const stat = lstatSync(path);
+        const bytes = stat.isFile() ? readFileSync(path, 'base64') : '';
+        out.set(path, `${stat.isDirectory() ? 'd' : 'f'}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${bytes}`);
+        if (stat.isDirectory()) walk(path);
+      }
+    };
+    walk(dir);
+    return out;
+  }
 
-    expect(reading.code).toBe(0);
-    // The frame was taken at the socket: the seat reads it, and the one outcome line says so.
-    expect(reading.frames).toHaveLength(1);
-    expect(reading.frames[0]).toContain('a status line');
-    expect(reading.out).toContain('api-lead: delivered (socket)');
-    expect(reading.out.match(/api-lead/g)).toHaveLength(1);
-    expect(reading.err).toBe('');
-  });
-
-  test('a cross-team drop names the full address, and prints no second line for the same seat', async () => {
-    // No socket and no channel: the message waits in the receiver's drop folder. The console
-    // names the seat as the caller addressed it — seat@team — in the outcome line and in the
-    // class sentence alike; the bare `queued, no event adapter` line the drop leg printed beside
-    // it named the same seat a second time, by its resolved name alone.
-    const reading = await sendForReal({ team: 'acme', seat: 'coord' }, 'api-lead@api');
-
-    expect(reading.code).toBe(0);
-    expect(reading.frames).toEqual([]);
-    expect(withoutSendId(reading.out)).toBe(
-      'team api, session "api"\n' +
-      'api-lead@api: queued, not woken (drop, 0 ms); queued; api-lead@api reads it at its next turn, and nothing here gives it one (pull-only)\n',
-    );
-    // The bare resolved name never appears on its own: every mention is the full address.
-    expect(reading.out.match(/(?<!@)api-lead(?!@api)/)).toBeNull();
-    expect(reading.err).toBe('');
+  test('a send whose client changed before its first effect writes nothing and takes no frame', async () => {
+    const { armHostedGuard, disarmHostedGuard, HostedFallback, runAsHostedRequest } = await import('../src/host/request-scope.ts');
+    const before = tree(world.base);
+    armHostedGuard(() => 'the client is gone');
+    let error: unknown = null;
+    let reading: (Reading & { frames: string[] }) | null = null;
+    try {
+      reading = await runAsHostedRequest({ peerPid: 1, startPid: 1, currentParent: () => 1 }, () => sendForReal({ team: 'web', seat: 'web-lead' }, 'api-lead@api'));
+    } catch (thrown) {
+      error = thrown;
+    }
+    const guard = disarmHostedGuard();
+    expect(error === null || error instanceof HostedFallback).toBe(true);
+    expect(guard.fellBack).toContain('the client changed before the first effect');
+    expect(guard.first).toBeNull();
+    expect(reading?.frames ?? []).toEqual([]);
+    expect(tree(world.base)).toEqual(before);
+    // In-process, the same send is admitted and kept: its record exists (this world has no live
+    // route, so it waits in the inbox), which the hosted run never began.
+    const local = await sendForReal({ team: 'web', seat: 'web-lead' }, 'api-lead@api');
+    expect(local.err).toContain("kept in api-lead@api's inbox");
+    expect(tree(world.base)).not.toEqual(before);
   });
 });

@@ -147,8 +147,6 @@ describe('up and add under the entity model rule', () => {
   let base: string;
   let root: string;
   let home: string;
-  const WATCH = 'Watch · acme';
-
   function writeTeamYaml(text: string): void {
     // A team that declares an entity also trusts the entity's own lobby folder.
     const entityLobby = join(home, '.config', 'team', 'lobbies', 'lab');
@@ -286,7 +284,8 @@ describe('up and add under the entity model rule', () => {
     expect(live.code).toBe(1);
     expect(live.out).toContain(`worker: left out: refused: ${SENTENCE}\n`);
     expect(live.out).toContain('lead: ready\n');
-    expect(live.labels).toEqual(['lead', WATCH]);
+    // 1352 launches no watch pane.
+    expect(live.labels).toEqual(['lead']);
   });
 
   test('up launches a line the rule allows', async () => {
@@ -298,7 +297,8 @@ describe('up and add under the entity model rule', () => {
     const live = await up([], world());
     expect(live.code).toBe(0);
     expect(live.out).not.toContain('left out: refused');
-    expect(live.labels).toEqual(['lead', 'worker', WATCH]);
+    // 1352 launches no watch pane.
+    expect(live.labels).toEqual(['lead', 'worker']);
   });
 
   test('up judges the line a restored seat will run, not the file\'s own', async () => {

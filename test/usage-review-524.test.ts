@@ -5,8 +5,7 @@
 // not the project name it displays. Synthetic homes and approved teams only: nothing here touches
 // a real home, a pane or a CLI session.
 import { afterEach, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
@@ -15,16 +14,13 @@ import { machineUsage, reportOf, reportText, viewFor } from '../src/information/
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const NOW = Date.parse('2026-10-16T10:00:00Z');
 const bases: string[] = [];
 
-afterEach(() => {
-  for (const base of bases.splice(0)) {
-    if (process.platform === 'darwin') execFileSync('/usr/bin/trash', [base]);
-    else rmSync(base, { recursive: true, force: true });
-  }
-});
+// Fixture trash can outlast Bun's five-second hook budget under load.
+afterEach(() => discardFixtures(bases.splice(0)), 15_000);
 
 /** A synthetic home with the lobby folder the fixture files trust. */
 function syntheticHome(): { home: string; base: string } {

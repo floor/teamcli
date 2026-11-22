@@ -108,6 +108,13 @@ describe('the classes the guard denies', () => {
     ['launchctl stop com.example.job', 'persistent-job'],
     ['launchctl dumpstate', 'persistent-job'],
     ['crontab -e', 'persistent-job'],
+    ['systemctl --user enable --now x.service', 'persistent-job'],
+    ['systemctl --user start x.service', 'persistent-job'],
+    ['systemctl --user link /tmp/x.service', 'persistent-job'],
+    ['systemctl', 'persistent-job'],
+    ['systemctl --user -p MainPID show x.service', 'persistent-job'],
+    ['systemd-run --user sleep 999', 'persistent-job'],
+    ['loginctl enable-linger', 'persistent-job'],
     ['git clean -fdx', 'git-clean'],
     ['git clean -fd', 'git-clean'],
     ['git clean -fx', 'git-clean'],
@@ -178,6 +185,11 @@ describe('the classes the guard denies', () => {
     'launchctl list',
     'launchctl print gui/501/com.example.job',
     'launchctl blame gui/501/com.example.job',
+    'systemctl --user status x.service',
+    'systemctl --user show x.service -p MainPID',
+    'systemctl --user list-units',
+    'systemctl --user is-active x.service',
+    'loginctl show-user 1000 -p Linger',
     'git branch --delete merged-branch',
     'npm --prefix X install',
     'npm install',
@@ -354,7 +366,7 @@ describe('the settings file and the launch line', () => {
     expect(command).toContain(`--session ${SESSION}`);
     expect(command).toContain(`--seat ${SEAT}`);
     // The state and drop hooks are still there, unchanged beside the guard.
-    expect(Object.keys(settings.hooks).sort()).toEqual(['PreToolUse', 'Stop', 'UserPromptSubmit']);
+    expect(Object.keys(settings.hooks).sort()).toEqual(['PostModelSwitch', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   });
 
   test('the installed command itself answers a chmod with a deny in one shot: the pane never waits', () => {

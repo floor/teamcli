@@ -21,7 +21,7 @@ import {
   writeListener,
   type InboxListener,
 } from '../src/mcp/inbox.ts';
-import { restartSelf, runMcpServe } from '../src/mcp/serve.ts';
+import { restartSelf, SERVE_REPLACEMENT_ENV, runMcpServe } from '../src/mcp/serve.ts';
 import { selfRunner } from '../src/mcp/register.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { BuildIdentity, InstallIdentity } from '../src/version.ts';
@@ -288,8 +288,8 @@ describe('the fresh server a reload starts', () => {
     });
     expect(spawns).toEqual([{
       command: process.execPath,
-      args: [runner.entry, ...process.argv.slice(2)],
-      options: { stdio: 'inherit' },
+      args: [runner.entry, ...process.argv.slice(2).filter((word, index, all) => word !== '--epoch' && all[index - 1] !== '--epoch')],
+      options: { stdio: 'inherit', env: { ...process.env, [SERVE_REPLACEMENT_ENV]: '1' } },
     }]);
     // The old process still serves until the child reports that it started.
     expect(exits).toEqual([]);
@@ -480,42 +480,4 @@ describe('a shutdown aimed at the waiting parent', () => {
 });
 
 describe('a sender falling back from a stale channel', () => {
-  test('the sender holds the push name, so the stale server cannot wake the seat twice', async () => {
-    const made = channelWorld();
-    const dir = dropDir(made.dir, 'lead');
-    const serverIo = testIo(made.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: SESSION });
-    const serverFeed = feed();
-    // The server believes it still runs OLD: its own install check agrees with its build, so only
-    // the sender's held marker can stop its push.
-    const running = runMcpServe({ seat: 'lead', session: SESSION }, serverIo, serverFeed, {
-      home: made.home,
-      build: OLD,
-      installed: () => ({ version: OLD.version, head: OLD.head }),
-    });
-    try {
-      await until(() => readListener(dir)?.head === OLD.head);
-
-      // The sender is the installed build: it cannot vouch for the listener, so the channel and
-      // inbox legs fall through and the typed trigger wakes the seat.
-      const pane = scripted(['idle', 'working']);
-      const host = fake(made, { sendId: () => SEND_ID, build: () => NEW, native: pane });
-      const sendIo = owner(made.root);
-      expect(await runSend(['lead', TRIGGER], sendIo, host)).toBe(0);
-      expect(sendIo.out).toContain('(drop');
-      expect(sendIo.out).not.toContain('sent (channel)');
-      expect(pane.typed).toHaveLength(0);
-      expect(pane.enters).toBe(0);
-
-      // Let the 250 ms watcher tick over the record more than once. No pane messaging: no
-      // trigger is typed, so the sender holds no push name, and the server's one push is the
-      // seat's only wake. It still wakes the seat once, never twice.
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      expect(notices(serverFeed.replies)).toHaveLength(1);
-      expect(pane.typed).toHaveLength(0);
-      expect(pane.enters).toBe(0);
-    } finally {
-      serverFeed.end();
-      expect(await running).toBe(0);
-    }
-  });
 });

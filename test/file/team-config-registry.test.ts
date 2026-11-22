@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { runTeamImport as run } from '../../src/commands/migrate.ts';
+import { OWNER_ACTION_TTL_MS } from '../../src/client/owner-action.ts';
 import { readArgs } from '../../src/args.ts';
 const EXIT = { 'approval-requested': 0, 'approval-refused': 1, done: 0, detached: 1, 'not-owner': 1, 'already-migrated': 1, invocation: 2, invalid: 2, registry: 2, 'round-trip': 2 } as const;
 const runTeamImport = async (mode: 'migrate' | 'import', argv: string[], io: Parameters<typeof run>[3], sources: Parameters<typeof run>[4]) =>
@@ -17,6 +18,7 @@ import {
 import { teamConfigDir } from '../../src/registry/team-config-store.ts';
 import { testIo } from '../helpers.ts';
 import { unreadableFolder } from '../helpers/registry-team.ts';
+import { fakeOwnerStore } from '../helpers/owner-seat.ts';
 
 // Every scene builds its own home and its own repository under the system's temp folder: the
 // real ~/.config/team is never read or written. The registry is named explicitly (`env: {}`), so
@@ -219,10 +221,20 @@ describe('reading from the registry', () => {
 });
 
 describe('who may move the team', () => {
-  test('a seat is refused', async () => {
+  test('a seat without a signed answer is refused when its request expires', async () => {
     const { home, root } = scene();
-    const io = testIo(root, { kind: 'seat', session: 'acme', seat: 'lead', pane: 'p1' } as never);
-    expect(await runTeamImport('migrate', [], io, { home, now: NOW })).toBe(1);
+    const io = testIo(root, { kind: 'seat', session: 'acme', name: 'lead', pane: 'p1' });
+    // Migrate now waits for the owner's signature; advance its synthetic clock without signing.
+    let clock = NOW().getTime();
+    expect(await runTeamImport('migrate', [], io, {
+      home,
+      now: () => new Date(clock),
+      ownerSeatStore: fakeOwnerStore(),
+      sleep: async (ms) => { clock += OWNER_ACTION_TTL_MS + ms; },
+    })).toBe(1);
+    expect(io.out).toContain('waiting for the signed approval\n');
+    expect(io.err).toContain('expired');
     expect(existsSync(teamConfigDir(home))).toBe(false);
+    expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).toBe(TEAM);
   });
 });

@@ -151,6 +151,45 @@ describe('the workspace.sidebar.status_indicators entry', () => {
   });
 });
 
+describe('the workspace.sidebar.row_gap entry', () => {
+  test('refuses a negative or a non-integer, and the nearest level chooses', () => {
+    const spec = POLICY_CATALOGUE['workspace.sidebar.row_gap'];
+    expect(spec.defaultValue).toBe(0);
+    expect(spec.levels).toEqual(['entity', 'project', 'team']);
+    expect(spec.parseValue(0)).toBe(0);
+    expect(spec.parseValue(1)).toBe(1);
+    expect(spec.parseValue('2')).toBe(2);
+    expect(spec.parseValue(-1)).toBeNull();
+    expect(spec.parseValue(1.5)).toBeNull();
+    expect(spec.parseValue('1.5')).toBeNull();
+    expect(spec.parseValue('no')).toBeNull();
+    expect(spec.valueProblem?.(-1)).toBe('policy "workspace.sidebar.row_gap" needs a whole number from 0 up, such as 1');
+    expect(normalizePolicyName('sidebar-row-gap')).toBe('workspace.sidebar.row_gap');
+
+    const nearest = resolvePolicy('workspace.sidebar.row_gap', [
+      { name: 'workspace.sidebar.row_gap', value: 1, level: 'entity', setter: 'owner', date: '2026-11-04T10:00:00Z', kind: 'enforced' },
+      { name: 'workspace.sidebar.row_gap', value: 3, level: 'project', setter: 'owner', date: '2026-11-04T10:30:00Z', kind: 'enforced' },
+      { name: 'workspace.sidebar.row_gap', value: 2, level: 'team', setter: 'owner', date: '2026-11-04T11:00:00Z', kind: 'enforced' },
+    ]);
+    expect(nearest.ok).toBe(true);
+    if (nearest.ok) expect(nearest.effective.value).toBe(2);
+
+    const unset = resolvePolicy('workspace.sidebar.row_gap', []);
+    expect(unset.ok).toBe(true);
+    if (unset.ok) expect(unset.effective.level).toBe('default');
+  });
+
+  test('the reader leaves the catalogue default unset and reads a declared whole number', () => {
+    const world = makeWorld();
+    expect(sidebarPolicy({ home: world.home, root: world.root, team: world.team, now: NOW }).rowGap).toBeUndefined();
+    expect(writePolicySet(world.home, { level: 'team', target: world.root, teamRoot: world.root, name: 'workspace.sidebar.row_gap', value: 1 }, { now: NOW }).ok).toBe(true);
+    expect(sidebarPolicy({ home: world.home, root: world.root, team: world.team, now: NOW }).rowGap).toBe(1);
+    const refused = writePolicySet(world.home, { level: 'team', target: world.root, teamRoot: world.root, name: 'workspace.sidebar.row_gap', value: -1 }, { now: NOW });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.why).toContain('whole number from 0 up');
+  });
+});
+
 describe('the daemon.sidebar timing entries', () => {
   test('the ttl word has no ceiling at set; the host cap clamps at the reader', () => {
     const spec = POLICY_CATALOGUE['daemon.sidebar-ttl-ms'];

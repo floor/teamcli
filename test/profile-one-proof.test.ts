@@ -14,16 +14,17 @@ import { fileURLToPath } from 'node:url';
 // What they hold:
 //
 //   - every function in the launch readers (`src/profiles/profile.ts` and the line machinery it
-//     asks, `src/launch/cli-scope.ts`) that decodes a launch line with a tokenizer reaches
+//     asks, `src/launch/cli-scope.ts`, plus `src/launch/features.ts`) that decodes a launch line reaches
 //     `provenScriptWord`, or is named here with what it does instead;
 //   - every name on the exported reader set reaches it too, so a reader added later cannot skip
 //     it without failing here;
-//   - `shell-words.ts` is the one tokenizer, and the two reader modules are the ones that ask it
+//   - `shell-words.ts` is the one tokenizer, and the named reader modules are the ones that ask it
 //     for the words of a launch line;
-//   - the four files that split a launch line on whitespace are named with what each split is
-//     for, so a fifth one cannot appear unnoticed.
+//   - files that split a launch line on whitespace are named with what each split is
+//     for, so another cannot appear unnoticed.
 
-const SOURCE_FILES = ['../src/profiles/profile.ts', '../src/launch/cli-scope.ts'];
+// The retired-feature rewriter uses the same proved CLI bodies; keep it inside this guard's graph.
+const SOURCE_FILES = ['../src/profiles/profile.ts', '../src/launch/cli-scope.ts', '../src/launch/features.ts'];
 const SOURCES = SOURCE_FILES.map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'));
 
 /** The source without comments: a doc comment names functions too, and this scan reads code. */
@@ -74,10 +75,12 @@ const TOKENIZERS = new Set([
 const NOT_A_READER = new Map<string, string>([
   ['shellProgramOf', 'names the shell that parses the line: one program word, never a word or span of the CLI'],
   ['startsWithCli', "compares the first decoded word with the CLI's binary and returns a boolean, never a word or span"],
+  ['directConversationLaunch', "answers whether the line starts the CLI's own binary directly (the builder's literal marker allowed): a boolean, never a word or span"],
   ['launchWordScopes', "0.5.10's raw-line question: it may see more words than the CLI reads, and its answer only suppresses an addition"],
   ['splitAtDelimiter', 'splits a line at its delimiter word so a rewrite keeps the tail verbatim: source spans, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
   ['oneShellWord', 'asks how many shell words one vendor env fragment splits into, never reading a launch line: a boolean, never a word or span of the CLI'],
+  ['leadingAssignments', "returns the assignment words before the line's program, the shell's environment for it: never a word or span of the CLI"],
 ]);
 
 // The plain proof: a line with no script word names the CLI's own words only when a word written
@@ -98,6 +101,7 @@ const NOT_A_PLAIN_READER = new Map<string, string>([
   ['splitAtDelimiter', 'splits a line at its delimiter word for a rewrite: source spans only, never a word or span of the CLI'],
   ['lineDelimiterRisk', 'answers whether an unread line may hide the delimiter: a boolean, never a word or span'],
   ['oneShellWord', 'reads one vendor env fragment, never a whole launch line: a boolean, never a word or span of the CLI'],
+  ['leadingAssignments', "stops at the line's first word that sets no variable: the environment before the program, never a word or span of the CLI"],
 ]);
 
 
@@ -105,6 +109,7 @@ const NOT_A_PLAIN_READER = new Map<string, string>([
 // span into one. Each must reach the proof through the functions it calls.
 const READERS = [
   'launchCommand',
+  'currentCodexRecipe',
   'withLaunchSession',
   'withResume',
   'withoutResume',
@@ -159,7 +164,7 @@ function sourceFiles(folder: string): string[] {
 
 const SCANNED = ['src/profiles', 'src/launch', 'src/commands'].flatMap(sourceFiles);
 const TOKENIZER_FILE = 'src/launch/shell-words.ts';
-const READER_FILES = ['src/launch/cli-scope.ts', 'src/profiles/profile.ts'];
+const READER_FILES = ['src/launch/cli-scope.ts', 'src/profiles/profile.ts', 'src/launch/features.ts'];
 
 // A launch line split on whitespace, and what that split is for. `profile.ts` asks 0.5.10's
 // raw-line question so an option the line plainly sets is not added twice, and `line.ts` reads
@@ -169,9 +174,13 @@ const READER_FILES = ['src/launch/cli-scope.ts', 'src/profiles/profile.ts'];
 // takes a diagnostic's first word after `launchBinary` names none.
 const WHITESPACE_SPLITS = new Map<string, string>([
   ['src/profiles/profile.ts', "0.5.10's raw-line option question and the generous fallback of launchWordScopes"],
+  // The reviewed launcher-home guard only vetoes path metadata; it never records or rewrites CLI words.
+  ['src/launch/launcher-home.ts', 'metadata-only launcher path veto, without recording or rewriting launch words'],
   ['src/launch/line.ts', "team's historical split: the program word and relative-path arguments, for diagnostics"],
   ['src/launch/command-guard.ts', "the Bash tool's own command line, never a seat's launch line"],
   ['src/commands/doctor.ts', "a diagnostic's first word of a launch line"],
+  // Explicit migration replaces the whole legacy line with a declaration's canonical launch.
+  ['src/commands/launchers.ts', 'known/mapped legacy script lookup for explicit migration, never a word-preserving CLI rewrite'],
 ]);
 
 describe('every reader of a launch line asks the one proof', () => {
@@ -253,7 +262,11 @@ describe('every reader of a launch line asks the one proof', () => {
   });
 
   test('the whole-line body is built in one place, and that builder asks the plain proof', () => {
-    const builders = DECLS.filter((decl) => /start:\s*0\b/.test(decl.body)).map((decl) => decl.name).sort();
+    // Zero-width index placeholders do not construct a whole-line source body.
+    const builders = DECLS.filter((decl) => {
+      const body = decl.body.replace(/start:\s*0\s*,\s*end:\s*0\b/g, '');
+      return /start:\s*0\b/.test(body);
+    }).map((decl) => decl.name).sort();
     expect(
       builders,
       'a reader or rewriter built its own whole-line body: ask plainBodyOf instead, which asks the plain proof',

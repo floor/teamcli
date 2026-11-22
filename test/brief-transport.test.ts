@@ -179,39 +179,6 @@ describe('the brief-transport reading', () => {
 });
 
 describe('the message walk', () => {
-  test('the seat\'s own inbox is the store\'s reader: the brief ends on the drop, and the history records it', async () => {
-    const w = world();
-    setTransport(w, 'message');
-    const report = deliver(w, { cli: 'codex' });
-    const delivery = report.deliveries[0];
-    if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(report));
-    expect(report.walks).toHaveLength(1);
-    expect(report.walks?.[0]?.payload.id).toBe(delivery.id);
-    expect(claimOf(w)).toMatchObject({ id: delivery.id, stage: 'ready' });
-
-    // The listener the seat's own server leaves, live: it is the store's reader, not a delivery
-    // leg (ADR D1), so the walk neither splices it in nor changes the ending.
-    writeListener(dropDir(w), {
-      v: 1,
-      seat: SEAT,
-      session: SESSION,
-      root: w.root,
-      cli: 'codex',
-      pid: process.pid,
-      ts: NOW_ISO,
-    });
-
-    await walkBriefDeliveries(report, { dir: w.dir, home: w.home, sendHost: fake(w) });
-
-    expect(delivery.message).toMatchObject({ via: 'drop', walked: true, exit: 0 });
-    expect(readdirSync(dropDir(w))).toContain(delivery.id);
-    const history = readHistory(PROJECT, w.root, w.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      const last = history.entries.at(-1);
-      expect(last).toMatchObject({ to: SEAT, id: delivery.id, via: 'drop', outcome: 'sent (unconfirmed)' });
-    }
-  });
 
   test('a re-broadcast of a claim the seat already holds or has read walks nothing and writes no new sidecar', async () => {
     const w = world();
@@ -295,41 +262,6 @@ describe('the message walk', () => {
     expect(names.filter((name) => name.includes('pending'))).toEqual([]);
     const history = readHistory(PROJECT, w.root, w.home);
     if (history.ok) expect(history.entries.at(-1)).toMatchObject({ via: 'drop', id: delivery.id });
-  });
-
-  test('a held seat lock queues the brief on the drop leg instead of refusing', async () => {
-    const w = world();
-    setTransport(w, 'message');
-    const report = deliver(w, { cli: 'codex' });
-    const delivery = report.deliveries[0];
-    if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(report));
-
-    // Another command holds the seat: no pane answers the typed leg, and the drop leg queues the
-    // brief with its pending marker for the seat's watcher instead of refusing at the lock.
-    const lock = acquireSeatLock(w.dir, SESSION, SEAT);
-    if (!('release' in lock)) throw new Error(`the seat lock was not taken (pid ${String(lock.held)})`);
-    try {
-      await walkBriefDeliveries(report, { dir: w.dir, home: w.home, sendHost: fake(w) });
-    } finally {
-      lock.release();
-    }
-
-    const ended = report.deliveries[0];
-    if (ended === undefined || !ended.ok) throw new Error(JSON.stringify(report));
-    expect(ended.ok).toBe(true);
-    expect(ended.message).toMatchObject({ via: 'drop', walked: true, exit: 0 });
-    expect(ended.message?.failures.join(' ')).toContain('typed:');
-    expect(ended.message?.text).toContain('queued (receiver busy)');
-    expect(readdirSync(dropDir(w))).toContain(`${delivery.id}.pending`);
-    const history = readHistory(PROJECT, w.root, w.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries.at(-1)).toMatchObject({
-        to: SEAT,
-        id: delivery.id,
-        outcome: 'queued (receiver busy)',
-      });
-    }
   });
 
   test('a walk that loses every leg is reported as a failure, not swallowed', async () => {

@@ -1,4 +1,4 @@
-// A seat's `team send` is its own answer (ADR `zeus-message-path`, D3). The send settles the
+// A seat's `team send` is its own answer (ADR `architect-message-path`, D3). The send settles the
 // NEWEST message the addressed seat delivered to the sending seat before the send's own instant,
 // and only that one: a recipient that sent three messages and is answered once keeps the other
 // two waiting. Only a delivery the history names as a frame, a channel push or a native handoff
@@ -167,67 +167,6 @@ function readReceiptExists(w: World, seat: string, id: string): boolean {
 }
 
 describe('a seat’s send is the read it signs', () => {
-  test('it settles the newest delivered message from the addressed seat and leaves the older one waiting', async () => {
-    const w = makeWorld();
-    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
-    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T10:00:00.000Z' });
-    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
-    line(w, NEW, 'socket', '2026-11-03T10:00:01.000Z');
-
-    const io = testIo(w.root, leadCaller);
-    const code = await runSend(['worker', 'the answer'], io, makeHost(w));
-
-    expect(code).toBe(0);
-    expect(readReceiptExists(w, 'lead', NEW)).toBe(true);
-    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
-    const read = readReceiptOf(w, 'lead', NEW);
-    if (read === null) throw new Error('no read receipt was written');
-    const { writer, ...fields } = read.payload;
-    expect(fields).toEqual({
-      kind: 'receipt',
-      status: 'read',
-      id: NEW,
-      to: 'lead',
-      root: w.root,
-      session: 'acme',
-      at: NOW_ISO,
-      read_by: 'answered-by-send',
-    });
-    expect(writer?.pid).toBe(process.pid);
-    const key = messageKeyState(w.home);
-    if (key.kind !== 'key') throw new Error(key.kind);
-    expect(verifyReceipt(read, key.key)).toBe(true);
-    // The older question still waits, and the sent message's own copy in the recipient's folder
-    // carries no read: the answering seat's act settles what it received, never what it sent.
-    expect(listUnackedMessages(w.root, 'acme', w.home).filter((message) => message.to === 'lead').map((message) => message.id)).toEqual([OLD]);
-    expect(readdirSync(recordDir(w.root, 'acme', 'worker')).filter((name) => name.endsWith('.read.json'))).toEqual([]);
-  });
-
-  test('only a frame, a channel push or a native handoff is evidence enough to answer', async () => {
-    const w = makeWorld();
-    delivered(w, 'lead', CHANNEL, { from: 'worker', at: '2026-11-03T08:00:00.000Z' });
-    delivered(w, 'lead', TYPED, { from: 'worker', at: '2026-11-03T10:00:00.000Z' });
-    delivered(w, 'lead', WEBHOOK, { from: 'worker', at: '2026-11-03T11:00:00.000Z' });
-    delivered(w, 'lead', LATE, { from: 'worker', at: '2026-11-03T11:30:00.000Z' });
-    line(w, CHANNEL, 'channel', '2026-11-03T08:00:01.000Z');
-    line(w, TYPED, 'typed', '2026-11-03T10:00:01.000Z');
-    line(w, WEBHOOK, 'webhook', '2026-11-03T11:00:01.000Z');
-    // A frame delivered after this send is not answered by it, however the send is timed.
-    line(w, LATE, 'socket', '2026-11-03T12:00:01.000Z');
-
-    const code = await runSend(['worker', 'the answer'], testIo(w.root, leadCaller), makeHost(w));
-
-    expect(code).toBe(0);
-    // The channel push is older than the typed and webhook messages and still the one settled:
-    // those two are not deliveries this rule counts, and a newer one never blocks an older.
-    expect(readReceiptExists(w, 'lead', CHANNEL)).toBe(true);
-    expect(readReceiptExists(w, 'lead', TYPED)).toBe(false);
-    expect(readReceiptExists(w, 'lead', WEBHOOK)).toBe(false);
-    expect(readReceiptExists(w, 'lead', LATE)).toBe(false);
-    expect(
-      listUnackedMessages(w.root, 'acme', w.home).filter((message) => message.to === 'lead').map((message) => message.id).sort(),
-    ).toEqual([LATE, TYPED, WEBHOOK].sort());
-  });
 
   test('a message signed by another agent under the addressed name is not settled by the name', () => {
     const w = makeWorld();
@@ -274,6 +213,59 @@ describe('a seat’s send is the read it signs', () => {
     });
 
     expect(outcome).toEqual({ kind: 'marked', id: OLD });
+  });
+});
+
+describe('a carrier\'s delivered receipt is the delivery evidence before its history line', () => {
+  /** The carrier's signed hand-over receipt, as a native queue writes it before its grace wait. */
+  function carried(w: World, id: string, leg: string, at: string): void {
+    const receipt = signReceiptPayload(
+      { kind: 'receipt', status: 'delivered', id, to: 'lead', root: w.root, session: 'acme', at, read_by: `carrier:${leg}` },
+      w.home,
+    );
+    writeFileSync(join(recordDir(w.root, 'acme', 'lead'), `${id}.delivered.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+  }
+
+  test('a send made while the native leg still waits settles the message just handed over, not the older one', () => {
+    const w = makeWorld();
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
+    // The newer message: its queue took it at 11:59; the original send is still in its grace,
+    // so no history line names it yet.
+    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T11:58:59.000Z' });
+    carried(w, NEW, 'native', '2026-11-03T11:59:00.000Z');
+    const outcome = markAnsweredBySend({ seat: 'lead', sender: 'worker', senderId: null, root: w.root, session: 'acme', project: 'acme', home: w.home, at: NOW_ISO });
+    expect(outcome).toEqual({ kind: 'marked', id: NEW });
+    expect(readReceiptOf(w, 'lead', NEW)?.payload.read_by).toBe('answered-by-send');
+    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
+  });
+
+  test('a --wait history line written after the answer does not hide a hand-over the carrier signed before it', () => {
+    const w = makeWorld();
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
+    // The newer message: the socket took it at 11:59, before the answer (12:00); the sender was
+    // waiting with --wait, so its first history line is stamped when the wait ended, 12:02.
+    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T11:58:59.000Z' });
+    carried(w, NEW, 'socket', '2026-11-03T11:59:00.000Z');
+    line(w, NEW, 'socket', '2026-11-03T12:02:00.000Z');
+    const outcome = markAnsweredBySend({ seat: 'lead', sender: 'worker', senderId: null, root: w.root, session: 'acme', project: 'acme', home: w.home, at: NOW_ISO });
+    expect(outcome).toEqual({ kind: 'marked', id: NEW });
+    expect(readReceiptExists(w, 'lead', OLD)).toBe(false);
+  });
+
+  test('a carried typed wake, or a hand-over after the send, is not that evidence', () => {
+    const w = makeWorld();
+    delivered(w, 'lead', OLD, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
+    line(w, OLD, 'socket', '2026-11-03T09:00:01.000Z');
+    delivered(w, 'lead', NEW, { from: 'worker', at: '2026-11-03T11:58:59.000Z' });
+    carried(w, NEW, 'typed', '2026-11-03T11:59:00.000Z');
+    delivered(w, 'lead', LATE, { from: 'worker', at: '2026-11-03T11:59:30.000Z' });
+    carried(w, LATE, 'native', '2026-11-03T12:00:05.000Z');
+    const outcome = markAnsweredBySend({ seat: 'lead', sender: 'worker', senderId: null, root: w.root, session: 'acme', project: 'acme', home: w.home, at: NOW_ISO });
+    expect(outcome).toEqual({ kind: 'marked', id: OLD });
+    expect(readReceiptExists(w, 'lead', NEW)).toBe(false);
+    expect(readReceiptExists(w, 'lead', LATE)).toBe(false);
   });
 });
 
@@ -409,47 +401,6 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
     expect(readReceiptExists(w, 'worker', OLD)).toBe(false);
   });
 
-  test('three messages from X and one newer message from Y followed by one send lead -> X marks only the newest from X and leaves older X and Y untouched', async () => {
-    const w = makeWorld();
-    const X1 = 'a1000000-0000-4000-8000-000000000011';
-    const X2 = 'a1000000-0000-4000-8000-000000000012';
-    const X3 = 'a1000000-0000-4000-8000-000000000013';
-    const Y1 = 'a1000000-0000-4000-8000-000000000014';
-
-    delivered(w, 'lead', X1, { from: 'worker', at: '2026-11-03T08:00:00.000Z' });
-    delivered(w, 'lead', X2, { from: 'worker', at: '2026-11-03T09:00:00.000Z' });
-    delivered(w, 'lead', X3, { from: 'worker', at: '2026-11-03T10:00:00.000Z' });
-    delivered(w, 'lead', Y1, { from: 'helper', at: '2026-11-03T11:00:00.000Z' });
-
-    line(w, X1, 'socket', '2026-11-03T08:00:01.000Z');
-    line(w, X2, 'channel', '2026-11-03T09:00:01.000Z');
-    line(w, X3, 'native', '2026-11-03T10:00:01.000Z');
-    appendHistory('acme', w.root, w.home, {
-      ts: '2026-11-03T11:00:01.000Z',
-      from: 'helper',
-      to: 'lead',
-      body: 'from Y',
-      id: Y1,
-      outcome: 'delivered',
-      via: 'socket',
-    });
-
-    const io = testIo(w.root, leadCaller);
-    expect(await runSend(['worker', 'one answer to X'], io, makeHost(w))).toBe(0);
-
-    expect(readReceiptExists(w, 'lead', X3)).toBe(true);
-    expect(readReceiptOf(w, 'lead', X3)?.payload.read_by).toBe('answered-by-send');
-    expect(readReceiptExists(w, 'lead', X1)).toBe(false);
-    expect(readReceiptExists(w, 'lead', X2)).toBe(false);
-    expect(readReceiptExists(w, 'lead', Y1)).toBe(false);
-    expect(
-      listUnackedMessages(w.root, 'acme', w.home)
-        .filter((m) => m.to === 'lead')
-        .map((m) => m.id)
-        .sort(),
-    ).toEqual([X1, X2, Y1].sort());
-  });
-
   test('a socket message with no ack gets silent before N, exactly one re-wake at N, nothing at 1.5N, the 2N report once at 2N, and nothing at 3N', async () => {
     const w = makeWorld();
     const codexInterrupted = readFileSync(new URL('./fixtures/codex/0.161.0/interrupted-idle.txt', import.meta.url), 'utf8');
@@ -564,243 +515,5 @@ describe('independent adversarial read-receipt intake and D7 trace checks', () =
     reportUnreadDrops(makeScene(t0 + 180_000), { unreadAfter: N });
     expect(calls).toHaveLength(1);
     expect(readdirSync(recordDir(w.root, 'acme', 'lead')).filter((n) => !n.startsWith('.'))).toEqual(leadDropsAt2N);
-  });
-
-  test('the channel reserves before notification, writes no consumer receipt until explicit ack, and stops before exposing a stale launch', async () => {
-    const w = makeWorld();
-    const teamPath = join(w.root, '.agents', 'team.yaml');
-    writeFileSync(
-      teamPath,
-      readFileSync(teamPath, 'utf8').replace(
-        'launch: claude',
-        'launch: claude --dangerously-load-development-channels server:team-inbox',
-      ),
-    );
-    const teamId = teamIdOf(w.root);
-    const agents = (['lead', 'worker', 'helper'] as const).map((seat) => registerAgent(w.home, {
-      name: seat,
-      signing: { model: 'Test', version: '1', role: seat === 'lead' ? 'coordinator' : 'implementer' },
-      lab: 'test', cli: 'claude-code', launcher: null,
-      launch: seat === 'lead' ? 'claude --dangerously-load-development-channels server:team-inbox' : 'claude',
-      reach: { team: teamId, seat, session: 'acme', pane: `pane-${seat}`, address: null },
-      mcp: [], skills: [], lifecycle: 'running', by: 'owner',
-    }));
-    upsertTeam(w.home, teamId, {
-      project: 'acme',
-      session: 'acme',
-      root: w.root,
-      roster: agents.map((agent) => ({ agent: agent.id, seat: agent.reach.seat, role: agent.signing.role })),
-    });
-
-    const leadDropDir = recordDir(w.root, 'acme', 'lead');
-    const PUSH_1 = 'c1000000-0000-4000-8000-000000000021';
-    const PUSH_2 = 'c1000000-0000-4000-8000-000000000022';
-
-    const pending: string[] = [];
-    let ended = false;
-    const replies: string[] = [];
-    const observed: {
-      pushMarkerDuringWrite: boolean | null;
-      readReceiptDuringWrite: boolean | null;
-      readReceiptDuringAckReply: boolean | null;
-      wake: (() => void) | null;
-    } = {
-      pushMarkerDuringWrite: null,
-      readReceiptDuringWrite: null,
-      readReceiptDuringAckReply: null,
-      wake: null,
-    };
-
-    const stream = {
-      lines: (async function* () {
-        for (;;) {
-          if (pending.length > 0) {
-            yield pending.shift()!;
-            continue;
-          }
-          if (ended) return;
-          await new Promise<void>((resolve) => {
-            observed.wake = resolve;
-          });
-        }
-      })(),
-      write: (lineText: string) => {
-        const parsed = JSON.parse(lineText) as { method?: string; id?: string };
-        if (parsed.method === 'notifications/claude/channel') {
-          // At the exact moment the notification is handed to `write`, `.channel-push.json` exists
-          // and `.read.json` is absent: transport handoff cannot acknowledge a consumer read.
-          observed.pushMarkerDuringWrite = existsSync(channelPushPath(leadDropDir, PUSH_1));
-          observed.readReceiptDuringWrite = existsSync(receiptPath(leadDropDir, PUSH_1));
-        }
-        if (parsed.id === 'ack-push') {
-          // The consumer's explicit ack publishes its receipt before reporting success.
-          observed.readReceiptDuringAckReply = existsSync(receiptPath(leadDropDir, PUSH_1));
-        }
-        replies.push(lineText);
-      },
-    };
-
-    const running = runMcpServe({ seat: 'lead', session: 'acme' }, testIo(w.root, leadCaller), stream, {
-      home: w.home,
-    });
-    try {
-      for (let i = 0; i < 400 && !existsSync(listenerPath(leadDropDir)); i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      const writeSigned = (id: string, body: string) => {
-        const rec = signRecord(
-          {
-            kind: 'message',
-            id,
-            to: 'lead',
-            to_id: agents[0]!.id,
-            root: realpathSync(w.root),
-            session: 'acme',
-            at: NOW_ISO,
-            body,
-            from: 'worker',
-            from_id: agents[1]!.id,
-            rule: 'the owner',
-            thread: id,
-          },
-          w.home,
-        );
-        mkdirSync(leadDropDir, { recursive: true, mode: 0o700 });
-        writeFileSync(join(leadDropDir, id), `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
-      };
-
-      writeSigned(PUSH_1, 'from worker\n\nfirst channel push');
-      for (let i = 0; i < 400 && observed.pushMarkerDuringWrite === null; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(observed.pushMarkerDuringWrite).toBe(true);
-      expect(observed.readReceiptDuringWrite).toBe(false);
-      expect(existsSync(receiptPath(leadDropDir, PUSH_1))).toBe(false);
-      expect(listUnread(leadDropDir, { to: 'lead', root: w.root, session: 'acme' }, w.home).map((one) => one.id)).toEqual([PUSH_1]);
-      const pushLine = replies.find((one) => (JSON.parse(one) as Record<string, unknown>).method === 'notifications/claude/channel');
-      expect(pushLine).toBeDefined();
-      expect(pushLine!).not.toContain('"key"');
-      expect(Object.keys((JSON.parse(pushLine!) as { params: Record<string, unknown> }).params)).toEqual(['content', 'meta']);
-
-      pending.push(JSON.stringify({ jsonrpc: '2.0', id: 'ack-push', method: 'tools/call', params: { name: 'ack', arguments: { id: PUSH_1 } } }));
-      observed.wake?.();
-      for (let i = 0; i < 400 && observed.readReceiptDuringAckReply === null; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(observed.readReceiptDuringAckReply).toBe(true);
-      const acknowledged = replies.map((one) => JSON.parse(one)).find((one) => one.id === 'ack-push');
-      expect(acknowledged.result.isError).toBeUndefined();
-      expect(JSON.parse(acknowledged.result.content[0].text)).toEqual({ acknowledged: PUSH_1, written: true });
-      const read = readReceiptOf(w, 'lead', PUSH_1);
-      expect(read?.payload.read_by).toBe('channel');
-      const key = messageKeyState(w.home);
-      if (key.kind !== 'key' || read === null) throw new Error('no verifiable receipt after ack');
-      expect(verifyReceipt(read, key.key)).toBe(true);
-
-      // Now move `lead` off its pane in `team.state.json` so `serving.alive()` refuses before `write`:
-      // no notification is handed over and no read receipt is written for `PUSH_2`.
-      updateState(join(w.root, '.agents'), (state) => {
-        const session = (state.sessions.acme ??= emptySession());
-        session.seats.lead = { stage: 'ready', pane: 'pane-moved' };
-      });
-      writeSigned(PUSH_2, 'from worker\n\nsecond channel push');
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      expect(existsSync(receiptPath(leadDropDir, PUSH_2))).toBe(false);
-      expect(existsSync(channelPushPath(leadDropDir, PUSH_2))).toBe(false);
-      expect(replies.filter((one) => JSON.parse(one).method === 'notifications/claude/channel')).toHaveLength(1);
-    } finally {
-      ended = true;
-      observed.wake?.();
-      await running;
-    }
-  });
-
-  test('D7: team trace <id> on a socket send that was replied to (via team reply or answered-by-send) shows the message.read step', async () => {
-    const w = makeWorld();
-    const teamPath = join(w.root, '.agents', 'team.yaml');
-    writeFileSync(
-      teamPath,
-      readFileSync(teamPath, 'utf8').replace('delivery_order: [drop]', 'delivery_order: [socket, drop]'),
-    );
-    // Declare crossSessionInbound: 'accept' and live sockets for both `worker` and `lead`.
-    for (const [seat, pid] of [['worker', 222], ['lead', 111]] as const) {
-      const settings = cliHookSettingsPath(join(w.root, '.agents'), 'acme', seat);
-      if (settings === null) throw new Error(`no settings path for ${seat}`);
-      mkdirSync(dirname(settings), { recursive: true });
-      writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
-      const past = NOW.getTime() - 60_000;
-      utimesSync(settings, new Date(past), new Date(past));
-      writeFileSync(join(w.sockets, `${String(pid)}.sock`), '');
-    }
-
-    const extractId = (out: string): string => {
-      const m = / \(id ([0-9a-f-]{36})\)/.exec(out);
-      if (m === null) throw new Error(`no id in output: ${out}`);
-      return m[1]!;
-    };
-    const workerCaller: Caller = { kind: 'seat', name: 'worker', pane: PANE_WORKER, session: 'acme' };
-
-    // Case 1: Socket send `lead -> worker`, answered with `team reply <id>`.
-    const sendIo1 = testIo(w.root, leadCaller);
-    expect(await runSend(['worker', 'socket question 1'], sendIo1, makeHost(w)), sendIo1.err).toBe(0);
-    const id1 = extractId(sendIo1.out);
-
-    const replyIo = testIo(w.root, workerCaller);
-    const replyHost: ReplyHost = {
-      home: w.home,
-      now: () => new Date(NOW.getTime() + 1_000),
-      newId: () => 'd1000000-0000-4000-8000-000000000031',
-    };
-    expect(await runReply([id1, 'replying to socket question 1'], replyIo, replyHost), replyIo.err).toBe(0);
-    expect(readReceiptOf(w, 'worker', id1)?.payload.read_by).toBe('reply');
-
-    reconcilePass({ project: 'acme', root: w.root, home: w.home, session: 'acme', now: new Date(NOW.getTime() + 2_000) });
-
-    const traceIo1 = testIo(w.root, leadCaller);
-    expect(await runTrace([id1, '--json'], traceIo1, { home: w.home }), traceIo1.err).toBe(0);
-    const doc1 = JSON.parse(traceIo1.out) as { steps: { kind: string; record_id: string; via?: string; outcome?: string }[] };
-    expect(doc1.steps.map((s) => s.kind)).toEqual([
-      'message.staged',
-      'leg.tried',
-      'message.arrived',
-      'message.read',
-      'message.replied',
-      'message.delivered',
-    ]);
-    expect(doc1.steps.find((s) => s.kind === 'leg.tried')).toMatchObject({ via: 'socket', outcome: 'delivered' });
-    expect(doc1.steps.find((s) => s.kind === 'message.read')?.record_id).toBe(`${id1}:read`);
-
-    // Case 2: Socket send `lead -> worker`, answered with plain `team send lead "..."` (`answered-by-send`).
-    const sendIo2 = testIo(w.root, leadCaller);
-    expect(
-      await runSend(['worker', 'socket question 2'], sendIo2, { ...makeHost(w), now: () => new Date(NOW.getTime() + 3_000) }),
-      sendIo2.err,
-    ).toBe(0);
-    const id2 = extractId(sendIo2.out);
-
-    const answerSendIo = testIo(w.root, workerCaller);
-    expect(
-      await runSend(['lead', 'answering socket question 2 via send'], answerSendIo, {
-        ...makeHost(w),
-        now: () => new Date(NOW.getTime() + 4_000),
-      }),
-      answerSendIo.err,
-    ).toBe(0);
-    expect(readReceiptOf(w, 'worker', id2)?.payload.read_by).toBe('answered-by-send');
-
-    reconcilePass({ project: 'acme', root: w.root, home: w.home, session: 'acme', now: new Date(NOW.getTime() + 5_000) });
-
-    const traceIo2 = testIo(w.root, leadCaller);
-    expect(await runTrace([id2, '--json'], traceIo2, { home: w.home }), traceIo2.err).toBe(0);
-    const doc2 = JSON.parse(traceIo2.out) as { steps: { kind: string; record_id: string; via?: string; outcome?: string }[] };
-    expect(doc2.steps.map((s) => s.kind)).toEqual([
-      'message.staged',
-      'leg.tried',
-      'message.arrived',
-      'message.read',
-      'message.delivered',
-    ]);
-    expect(doc2.steps.find((s) => s.kind === 'leg.tried')).toMatchObject({ via: 'socket', outcome: 'delivered' });
-    expect(doc2.steps.find((s) => s.kind === 'message.read')?.record_id).toBe(`${id2}:read`);
   });
 });

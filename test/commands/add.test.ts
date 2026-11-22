@@ -112,6 +112,11 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function approve(text: string = FILE): void {
+  // Apply the local opt-out after each scene has selected its CLI/recipe.
+  text = text.split('\n  - role:').map((block) =>
+    /\n    name: worker\n/.test(block) && !/\n    channel:/.test(block)
+      ? block.replace('    label: worker\n', '    label: worker\n    channel: off\n') : block,
+  ).join('\n  - role:');
   const trustPath = project.startsWith(home) ? project.replace(home, '~') : project;
   const yaml = text.includes('trust:')
     ? text
@@ -439,6 +444,9 @@ describe('team add', () => {
       (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'synthetic-pane-lead' };
     });
     const made = world();
+    // This scene pins the dev-mode mark. `owner-asks` keeps that path; the default admits the lead with no mark.
+    const asked = writePolicySet(home, { level: 'team', target: project, teamRoot: project, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+    if (!asked.ok) throw new Error(asked.why);
     const io = testIo(project, { kind: 'seat', name: 'lead', pane: 'synthetic-pane-lead', session: 'acme' });
     io.env = { TEAMCLI_DEV_MODE: '1' };
     expect(await runAdd(['worker'], io, sources(made))).toBe(0);
@@ -1680,8 +1688,12 @@ describe('team add delegated', () => {
     // the widest reading of a delegated run — a verdict that passed — and the add still refuses
     // it, because the one seat a delegate may start is the live file's own stanza and
     // `worker` is stopped: starting it would edit the file. Nothing is written, signed or
-    // started, and the run is not attributed to the delegate.
+    // started, and the run is not attributed to the delegate. `owner-asks` keeps that premise:
+    // under the default the placed lead is admitted, which the catalogue's twin covers.
     approve(DELEGATE_FILE);
+    const asked = writePolicySet(home, { level: 'team', target: project, teamRoot: project, name: 'leads.authority', value: 'owner-asks' }, { now: NOW });
+    expect(asked.ok).toBe(true);
+    approve(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8'));
     updateState(join(project, '.agents'), (state) => {
       const session = state.sessions.acme ?? emptySession();
       session.seats.lead = { stage: 'ready', pane: 'w0:p1' };

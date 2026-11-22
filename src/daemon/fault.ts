@@ -10,7 +10,8 @@
 // unlinked, never replayed. The result file is written when the faulted run leaves its seam —
 // or `refused` when nothing was faulted — and a request still pending at close is answered
 // `not reached`, so a reader never waits past the daemon it asked.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { resolve, join } from 'node:path';
 import type { HostedWatchState } from '../watch/hosted.ts';
 import { machineConfigDir } from './paths.ts';

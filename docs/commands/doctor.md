@@ -40,6 +40,29 @@ Every line it prints is cleaned first: escape sequences, control characters and 
 characters carried by the team file, a pane or a CLI's own output are removed, so a value can
 never move the cursor, paint the terminal or open a second line.
 
+When the machine daemon runs, one line compares its temporary folder with the seats'. A Claude
+Code seat listens for cross-session sends on a socket under its own temporary folder, and the
+daemon looks for that socket under the daemon's folder alone. The daemon's folder is the one it
+recorded at its start; the seats' is read from doctor's own process when doctor runs in one of the
+terminal host's panes, and is otherwise the folder a pane started by `team up` gets (the terminal
+host's server starts with no temporary folder named). One folder is `ok`; two are a `warn`
+naming both, since the daemon's sends then reach such a seat by a later leg; a daemon that
+recorded none (an older build) is a `note`. On every platform. A focused report does not carry it.
+
+A value of the team's file that writes a full path inside its entity's projects root on this
+machine (`team config get <entity>.root`) is a `warn` naming the line and the field, since
+`{root}` reads the same there and on every other machine;
+[`team migrate --root`](migrate.md#rewriting-full-paths-as-root) shows the rewrite. The entity's
+or home project's rules that write `{root}` where this machine names no root for the entity are a
+`warn` too: seats would read the word as written. A team file that writes `{root}` with no root
+named does not load at all, and doctor exits 2 naming the line and `team config set
+<entity>.root <folder>`. Neither warning blocks `up` or `add`.
+
+A seat record of the team whose start folder is no path at all is a `warn`: while it stands, every
+client key's placement check on this machine refuses, so no client can send. `team restart <seat>`
+records the folder again. A relative folder an older version recorded is read against the team
+root and is not named.
+
 A hold on the team ([team hold](hold.md)) is the last `note` line before the summary:
 `hold: <reason>`, or `hold until <instant>: <reason>`, naming `team hold --release` as what clears
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`

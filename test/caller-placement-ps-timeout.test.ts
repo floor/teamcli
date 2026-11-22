@@ -3,10 +3,13 @@
 // is cut at the same bound — a sleeping ps refuses placement instead of holding it past the
 // bound.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { dirname, join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { placeCaller, readAncestors, readWithPs } from '../src/caller.ts';
+import * as processTools from '../src/process-tools-adapter.ts';
+import { createProcessToolsAdapter } from '../src/process-tools-adapter.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { setKernelProcessForTests } from '../src/process-kernel.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { fixtureBase } from './helpers.ts';
 
@@ -24,7 +27,14 @@ const KEEPER: HerdrAgent = {
 let scratchParent: string | undefined;
 const made: string[] = [];
 
+// These cases are about the `ps` table read; the macOS kernel reader that answers first when it
+// can is turned off for them (its own cases are in test/kernel-process-walk.test.ts).
+beforeEach(() => {
+  setKernelProcessForTests(null);
+});
+
 afterEach(() => {
+  setKernelProcessForTests(undefined);
   discardFixtures(made.splice(0), { roots: scratchParent === undefined ? [] : [scratchParent] });
 });
 
@@ -35,16 +45,17 @@ function withPs(body: string, timeoutMs: string | undefined, run: () => void): v
   const dir = join(base, 'bin');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'ps'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-  const path = process.env.PATH;
+  // Identity tools ignore PATH; inject only this owned fixture through the trusted adapter seam.
+  const ps = join(dir, 'ps');
+  const adapter = createProcessToolsAdapter({ ps: [ps] }, (candidate) => candidate === ps);
+  const tool = spyOn(processTools, 'execProcessToolSync').mockImplementation(adapter.execSync);
   const bound = process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
-  process.env.PATH = `${dir}${delimiter}${path ?? ''}`;
   if (timeoutMs === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
   else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = timeoutMs;
   try {
     run();
   } finally {
-    if (path === undefined) delete process.env.PATH;
-    else process.env.PATH = path;
+    tool.mockRestore();
     if (bound === undefined) delete process.env.TEAM_SYNC_CHILD_TIMEOUT_MS;
     else process.env.TEAM_SYNC_CHILD_TIMEOUT_MS = bound;
   }

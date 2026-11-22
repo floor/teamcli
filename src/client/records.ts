@@ -16,12 +16,13 @@
 // (`KEY_ISOLATION_LINE`); it is never called isolation or enforcement.
 
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, type KeyObject } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, fstatSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { declaredEntityClients, declaredRoots } from '../entities.ts';
 import { loadTeamText } from '../file/load.ts';
-import { withRecordedSession } from '../file/recorded-session.ts';
+import { withRecordedSession, withSessionOf } from '../file/recorded-session.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
@@ -29,9 +30,10 @@ import type { Fingerprints } from '../approve/fingerprint.ts';
 import { approvalStanding } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
-import { readStoredTeamConfig, TeamConfigStoreError } from '../registry/team-config-store.ts';
-import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { readStoredTeamConfig, teamConfigRecordPath, TeamConfigStoreError } from '../registry/team-config-store.ts';
+import { isTeamId, readTeams, teamIdOf, teamIdOfRealPath, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
+import { lobbyOf } from '../lobby/recorded.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { DAY_MS, GRANT_DURATION_DEFAULT_DAYS, endsAtMs } from './duration-policy.ts';
 import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
@@ -298,12 +300,68 @@ export function newClientKeyPair(): ClientKeyPair {
  * older record does not carry are the same value. A placement check must tell a broken record
  * from an old one, so it reads the raw record and refuses a present map of an unknown shape.
  */
+/**
+ * Whether `path` is genuinely not there: walking down from the filesystem root, the first missing
+ * component sits in a real folder that could be searched. A component that cannot be read, a link
+ * whose target is gone, or a file where a folder must be is not absence: the answer is why the
+ * path cannot be read, and the caller refuses rather than read it as missing.
+ */
+export type PathPresence = { kind: 'absent' } | { kind: 'present' } | { kind: 'unreadable'; why: string };
+
+export function pathPresence(path: string): PathPresence {
+  const parts = resolve(path).split('/').filter((part) => part !== '');
+  let at = '';
+  for (let index = 0; index < parts.length; index += 1) {
+    at = `${at}/${parts[index]}`;
+    let held: ReturnType<typeof lstatSync>;
+    try {
+      held = lstatSync(at);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable', why: `${at} cannot be read (${code ?? 'read error'})` };
+    }
+    if (held.isSymbolicLink()) {
+      try {
+        statSync(at);
+      } catch {
+        return { kind: 'unreadable', why: `${at} is a link to nothing` };
+      }
+    }
+    if (index < parts.length - 1) {
+      let folder = false;
+      try {
+        folder = statSync(at).isDirectory();
+      } catch {
+        folder = false;
+      }
+      if (!folder) return { kind: 'unreadable', why: `${at} is not a folder` };
+    }
+  }
+  return { kind: 'present' };
+}
+
 function readPlacementSessions(dir: string): Record<string, unknown> | null {
   const path = join(dir, STATE_FILE);
-  if (!existsSync(path)) return null;
+  // Read directly: only a file that is genuinely not there is an absent state. A folder on the
+  // way that cannot be searched, a link whose target is gone, or any other read error leaves
+  // every recorded seat folder unknown, and refuses rather than read as no record at all.
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') throw new Error(`${path} cannot be read (${code ?? 'read error'})`);
+    // Missing for sure, or only unreadable on the way (a dangling `.agents` link, a folder that
+    // cannot be searched): only the first is no state.
+    const presence = pathPresence(path);
+    if (presence.kind === 'unreadable') throw new Error(presence.why);
+    // There after all (it appeared between the reads): not an absence to trust.
+    if (presence.kind === 'present') throw new Error(`${path} could not be read`);
+    return null;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
+    parsed = JSON.parse(text);
   } catch {
     throw new Error(`${path} is not valid JSON`);
   }
@@ -328,24 +386,35 @@ type DeclaredTeam =
   | { kind: 'invalid' }
   | { kind: 'read'; team: TeamFile };
 
-function readDeclarations(root: string, home: string): DeclaredTeam {
+function readDeclarations(root: string, home: string, cached?: { id: string; session: string | null }): DeclaredTeam {
   // The registry's config record is this team's definition. The file at this root is only the
   // fallback, read by its own path: a team root that sits inside another checkout must not be
-  // replaced by that checkout's file.
+  // replaced by that checkout's file. A caller that already read the registry (the placement
+  // check, with the root's real path) passes the team's id and session: nothing here resolves the
+  // root's spelling again or looks the registry up a second time.
   const file = join(root, '.agents', 'team.yaml');
+  const id = cached?.id ?? teamIdOf(root);
+  const sessionOf = (team: TeamFile, text: string): TeamFile =>
+    cached === undefined ? withRecordedSession(team, text, home, root) : withSessionOf(team, text, cached.session);
   let stored: ReturnType<typeof readStoredTeamConfig>;
   try {
-    stored = readStoredTeamConfig(home, teamIdOf(root));
+    stored = readStoredTeamConfig(home, id);
   } catch (error) {
     if (error instanceof TeamConfigStoreError) return { kind: 'unreadable' };
     throw error;
   }
+  if (stored === null) {
+    // No registry record, for sure: a record path that only cannot be read is no absence.
+    if (pathPresence(teamConfigRecordPath(home, id)).kind !== 'absent') return { kind: 'unreadable' };
+  }
   if (stored !== null) {
     const loaded = loadTeamText(stored.text, root, file, { home, checkOnly: true });
-    if (loaded.ok) return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
+    if (loaded.ok) return { kind: 'read', team: sessionOf(loaded.team, loaded.text) };
     return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
   }
-  if (!existsSync(file)) return { kind: 'absent' };
+  const presence = pathPresence(file);
+  if (presence.kind === 'absent') return { kind: 'absent' };
+  if (presence.kind === 'unreadable') return { kind: 'unreadable' };
   let loaded: ReturnType<typeof readTeamConfig>;
   try {
     loaded = readTeamConfig(root, { file, home, checkOnly: true });
@@ -353,7 +422,7 @@ function readDeclarations(root: string, home: string): DeclaredTeam {
     return { kind: 'unreadable' };
   }
   if (!loaded.ok) return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
-  return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
+  return { kind: 'read', team: sessionOf(loaded.team, loaded.text) };
 }
 
 /** The folder a declaration launches its seat in, resolved from recorded and declared placement
@@ -397,6 +466,80 @@ function declaredLaunchFolder(
  * `.agents` tree and outside the OS temp directory, with no symbolic link on its path. This is a
  * placement refusal, not proof that another same-user process cannot read the key.
  */
+/**
+ * The seats of the team at `root` whose recorded start folder is no path at all: each one makes
+ * every client key's placement check refuse on this machine (`clientKeyPlacementProblem`), so
+ * `team doctor` names it before a client send does. A relative folder an older version wrote is
+ * not among them: the check reads it against the team root. A state that does not read is named
+ * once.
+ */
+export function startFolderProblems(root: string): string[] {
+  let sessions: Record<string, unknown> | null;
+  try {
+    sessions = readPlacementSessions(join(root, '.agents'));
+  } catch (error) {
+    return [`the team's recorded seat folders cannot be read (${error instanceof Error ? error.message : String(error)}): every client send on this machine is refused until it reads`];
+  }
+  const out: string[] = [];
+  for (const [sessionName, rawSession] of Object.entries(sessions ?? {})) {
+    const held = rawSession !== null && typeof rawSession === 'object' && !Array.isArray(rawSession) ? rawSession as { seats?: unknown; retained_start_cwd?: unknown } : undefined;
+    const recorded: Array<[string, unknown]> = [];
+    const seats = held?.seats;
+    if (seats !== null && typeof seats === 'object' && !Array.isArray(seats)) {
+      for (const [seatName, rawSeat] of Object.entries(seats as Record<string, unknown>)) {
+        if (rawSeat === null || typeof rawSeat !== 'object' || Array.isArray(rawSeat)) continue;
+        recorded.push([seatName, (rawSeat as { start_cwd?: unknown }).start_cwd]);
+      }
+    }
+    // The folder a relaunch carries for a seat whose record it dropped is read the same way.
+    const carried = held?.retained_start_cwd;
+    if (carried !== null && typeof carried === 'object' && !Array.isArray(carried)) recorded.push(...Object.entries(carried as Record<string, unknown>));
+    for (const [seatName, cwd] of recorded) {
+      if (cwd === undefined) continue;
+      if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
+        out.push(`${seatName} (session ${sessionName}): its recorded start folder is not a path, so every client send on this machine is refused; run \`team restart ${seatName}\``);
+      }
+    }
+  }
+  return out;
+}
+
+/** The refusal for a registry entry whose root does not resolve, with its repair. */
+function staleRootRefusal(teamId: string, project: string, root: string): string {
+  return `the team registry records team "${project}" (${teamId}) at ${root}, which cannot be read (a link to nothing, or an unreadable folder on the way): where its seats run cannot be checked, so client key placement cannot be checked; repair the folder, or remove the stale entry with \`team forget ${teamId}\``;
+}
+
+/**
+ * Every registry entry on this machine whose root does not resolve (or is not absolute): each one
+ * makes every client key's placement check refuse, so `team doctor` names it, with its repair,
+ * before a client send does. A registry that cannot be read is named once.
+ */
+export function staleRegistryRoots(home: string): string[] {
+  let teams: ReturnType<typeof readTeams>;
+  try {
+    teams = readTeams(home);
+  } catch {
+    return ['the team registry cannot be read: every client send on this machine is refused until it reads'];
+  }
+  const out: string[] = [];
+  for (const [teamId, team] of Object.entries(teams)) {
+    if (typeof team.root !== 'string' || !isAbsolute(team.root)) {
+      out.push(`the team registry records a root for team "${team.project}" (${teamId}) that is not an absolute path: every client send on this machine is refused; \`team forget ${teamId}\` removes the entry`);
+      continue;
+    }
+    try {
+      realpathSync(team.root);
+    } catch {
+      if (pathPresence(team.root).kind === 'absent') {
+        out.push(`the team registry records team "${team.project}" (${teamId}) at ${team.root}, which is not there: a client key's placement passes it over; restore the folder, or remove the stale entry with \`team forget ${teamId}\``);
+      } else {
+        out.push(`${staleRootRefusal(teamId, team.project, team.root)}; until then every client send on this machine is refused`);
+      }
+    }
+  }
+  return out;
+}
+
 export function clientKeyPlacementProblem(home: string, dir: string): string | null {
   if (!isAbsolute(dir)) return `the key directory "${dir}" is not absolute`;
   if (hasDotTraversal(dir)) return `the key directory "${dir}" walks through "." or ".."; name the real path`;
@@ -415,15 +558,57 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
   } catch {
     return 'the team registry cannot be read: client key placement cannot be checked';
   }
-  for (const team of Object.values(teams)) {
-    const root = canonical(team.root);
+  for (const [teamId, team] of Object.entries(teams)) {
+    // A registry root that is not absolute names no folder of its own: it would be read against
+    // the caller's working folder. Refused, as an unreadable registry is.
+    if (typeof team.root !== 'string' || !isAbsolute(team.root)) {
+      return `the team registry records a root for team "${team.project}" that is not an absolute path: client key placement cannot be checked`;
+    }
+    // The team root as it is on disk, read once: every folder this decision derives from it — the
+    // root itself, a recorded relative folder, a declared one — is read from this one path, never
+    // from the registry spelling, which a link could carry elsewhere.
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(team.root);
+    } catch {
+      // A root that is genuinely not there (its first missing part sits in a real folder that
+      // could be searched) holds no folder at all, so none of its seats' folders below it can
+      // hold the key folder being read: the team is passed over, its recorded lobbies still
+      // checked, and `team doctor` names the stale entry. A root that only cannot be read — a
+      // link to nothing, an unreadable folder on the way, a file where a folder must be — may
+      // lead anywhere, and refuses.
+      if (pathPresence(team.root).kind !== 'absent') return staleRootRefusal(teamId, team.project, team.root);
+      for (const lobby of Object.values(team.lobbies ?? {})) {
+        if (lobby && overlaps(canonical(lobby), target)) {
+          return `the key directory "${dir}" is inside a team lobby; a client key sits outside every lobby`;
+        }
+      }
+      continue;
+    }
+    const root = realRoot;
+    const againstRoot = (relativePath: string): string => resolve(realRoot, relativePath);
+    // One recorded start folder, the record's or the one a relaunch carries: no path is no
+    // evidence (refused, with its repair); a relative one is read against the real root.
+    const startFolderRefusal = (seatName: string, sessionName: string, cwd: unknown): string | null => {
+      if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) {
+        return `the recorded start folder of seat "${seatName}" of team "${team.project}" (session "${sessionName}", ${join(team.root, '.agents', 'team.state.json')}) is not a path: client key placement cannot be checked; \`team restart ${seatName}\` records it again`;
+      }
+      const startFolder = isAbsolute(cwd) ? cwd : againstRoot(cwd);
+      if (overlaps(canonical(startFolder), target)) {
+        return `the key directory "${dir}" is inside the folder seat "${seatName}" ran in; a client key sits outside every seat folder`;
+      }
+      return null;
+    };
     // The declarations are read once per team: the declared seats' own folders below, and the
     // launch folder a record an older version wrote falls back to when it carries no `start_cwd`.
     // A file that is present but does not read leaves the placement unknown, and so does a
     // missing declaration for a recorded seat: both refuse rather than skip the seat.
     let declarations: DeclaredTeam | undefined;
     const declaredTeam = (): DeclaredTeam => {
-      declarations ??= readDeclarations(team.root, home);
+      // Through the root's real path and the registry's own id and session for it, never the
+      // registry spelling resolved again.
+      // The registry's key when it is a team ID; else the ID of the real path, hashed as taken.
+      declarations ??= readDeclarations(realRoot, home, { id: isTeamId(teamId) ? teamId : teamIdOfRealPath(realRoot), session: team.session ?? null });
       return declarations;
     };
     if (overlaps(root, target)) return `the key directory "${dir}" is inside the team root "${team.root}"; a client key sits outside every checkout`;
@@ -441,7 +626,7 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
     // seat recorded as not yet ready.
     let sessions: Record<string, unknown> | null;
     try {
-      sessions = readPlacementSessions(join(team.root, '.agents'));
+      sessions = readPlacementSessions(join(realRoot, '.agents'));
     } catch {
       return `the recorded seat folders of team "${team.project}" cannot be read: client key placement cannot be checked`;
     }
@@ -498,7 +683,8 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
             if (declaration === undefined) {
               return `${absent} and the team file of "${team.project}" declares no seat by that name: client key placement cannot be checked`;
             }
-            const launch = declaredLaunchFolder(file.team, declaration, team.root, home, recordedLobby, team.project, sessionName);
+            // Resolved against the team root as it is on disk, as a recorded relative folder is.
+            const launch = declaredLaunchFolder(file.team, declaration, realRoot, home, recordedLobby, team.project, sessionName);
             if (!launch.ok) {
               return `${absent} and its declaration's launch folder cannot be resolved (${launch.why}): client key placement cannot be checked`;
             }
@@ -508,13 +694,25 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
           }
           continue;
         }
-        const cwd = seat.start_cwd;
-        if (typeof cwd !== 'string' || cwd === '' || !isAbsolute(cwd)) {
-          return `the recorded start folder of seat "${seatName}" is not an absolute path: client key placement cannot be checked`;
-        }
-        if (overlaps(canonical(cwd), target)) {
-          return `the key directory "${dir}" is inside the folder seat "${seatName}" ran in; a client key sits outside every seat folder`;
-        }
+        // A start folder an older version recorded as the declared relative cwd is read against the
+        // team root, exactly as the launch resolved it and as a legacy relative worktree path is
+        // read below: never against the caller's working folder. A value that is no path at all
+        // is no placement evidence, and the check still refuses rather than skip the seat: a key
+        // the check cannot place could sit inside that seat's folder, readable by it, so one bad
+        // record costs a refusal that names it and its repair, never a key placed blind.
+        const refused = startFolderRefusal(seatName, sessionName, seat.start_cwd);
+        if (refused !== null) return refused;
+      }
+      // A seat whose record a relaunch dropped while its pane may still run: the folder it ran in
+      // is held beside the session until the relaunch records the seat again, and is checked as
+      // the seat's own folder meanwhile.
+      const carried = (session as { retained_start_cwd?: unknown }).retained_start_cwd;
+      if (carried !== undefined && (carried === null || typeof carried !== 'object' || Array.isArray(carried))) {
+        return `the carried start folders of session "${sessionName}" cannot be read: client key placement cannot be checked`;
+      }
+      for (const [seatName, cwd] of Object.entries((carried ?? {}) as Record<string, unknown>)) {
+        const refused = startFolderRefusal(seatName, sessionName, cwd);
+        if (refused !== null) return refused;
       }
       if (session.worktrees !== undefined && (session.worktrees === null || typeof session.worktrees !== 'object' || Array.isArray(session.worktrees))) {
         return `the recorded worktrees of session "${sessionName}" cannot be read: client key placement cannot be checked`;
@@ -532,7 +730,7 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
         // an old record names its real worktree for the overlap check instead of blocking every
         // key directory. An absolute path is used as it is; both go through the same symlink-
         // aware canonical form, which stays lexical for a path that no longer exists.
-        const worktreePath = isAbsolute(recordedPath) ? recordedPath : resolve(team.root, recordedPath);
+        const worktreePath = isAbsolute(recordedPath) ? recordedPath : againstRoot(recordedPath);
         if (overlaps(canonical(worktreePath), target)) {
           return `the key directory "${dir}" is inside the recorded worktree "${branch}"; a client key sits outside every worktree`;
         }
@@ -549,10 +747,25 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
       return `the team file of "${team.project}" does not validate: client key placement cannot be checked`;
     }
     if (file.kind === 'read') {
+      // Read against the team root as it is on disk, the one path this decision took.
+      const base = realRoot;
       for (const seat of file.team.seats) {
-        const cwd = canonical(resolve(team.root, seat.cwd));
-        if (overlaps(cwd, target)) {
-          return `the key directory "${dir}" is inside the folder seat "${seat.name}" starts in; a client key sits outside every seat folder`;
+        // Every folder the seat may start in: its declared cwd, and for a lobby seat each lobby
+        // it can be given — the recorded lobbies, the declared one, the derived default — so
+        // a stale or missing registry lobby never hides one.
+        const folders = [resolve(base, seat.cwd)];
+        if (seat.cwd === '.' && !isLeadSeat(file.team, seat.name)) {
+          for (const lobby of Object.values(team.lobbies ?? {})) if (lobby) folders.push(lobby);
+          if (file.team.lobby !== null && file.team.lobby !== '') {
+            const expanded = file.team.lobby.replace(/^~(?=$|\/)/, home);
+            folders.push(isAbsolute(expanded) ? expanded : resolve(base, expanded));
+          }
+          folders.push(lobbyOf(home, base, file.team));
+        }
+        for (const folder of folders) {
+          if (overlaps(canonical(folder), target)) {
+            return `the key directory "${dir}" is inside the folder seat "${seat.name}" starts in; a client key sits outside every seat folder`;
+          }
         }
       }
     }
@@ -1231,8 +1444,9 @@ export function withClientGrantLock<T>(home: string, fn: () => T, waitMs: number
       fd = openSync(path, 'wx', 0o600);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw new Error(`the client grant lock "${path}" cannot be taken`);
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') {
+        throw new Error(`the client grant lock "${path}" cannot be taken (${code ?? 'unreadable'})`);
       }
       if (Date.now() >= deadline) {
         throw new Error(

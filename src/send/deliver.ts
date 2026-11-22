@@ -15,13 +15,15 @@ const NO_PANE_MESSAGING_ON = true;
 // greyed suggestion or placeholder is faint (SGR 2), the screen reads it `idle`, and so it counts
 // as an empty box — it is never text to wait for, never text to clear, and never a reason for an
 // Enter. Only text the CLI drew unstyled is in the box.
-import { readFileSync, unlinkSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { basename, dirname, join } from 'node:path';
 import { stripSgr } from '../ansi.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { profileFor, type InputBlock } from '../profiles/profile.ts';
 import { classify, classifyComposer, readBox, readFoldMark, readScreen } from '../watch/screen.ts';
 import { dropMessage, POLL_MS, SETTLE_MS, sawSubmission, type NativePane } from './native.ts';
+import { quotaOutOf } from './quota-out.ts';
 
 /** The most Enters one delivery presses. */
 export const MAX_TRIES = 3;
@@ -126,6 +128,10 @@ const HELD_FRAME_KIND = 'held message';
 export function dialogKind(profile: string, screen: string | null): string | null {
   if (screen === null) return null;
   const kind = classify(profile, screen.split('\n')).kind;
+  // History is the screen reader's decision, which quotaOutOf reports. A limit line above a
+  // readable prompt is not a wall when every window on the status row shows quota left. A
+  // rate-limit reading stands: a positive row with no current prompt does not clear it.
+  if (kind === 'rate limit' && quotaOutOf(profile, screen) === null) return null;
   return DIALOGS.has(kind) ? kind : null;
 }
 
@@ -283,7 +289,44 @@ export function draftCopyPath(dropPath: string): string {
  *  already there is reused only when it holds the same text; one holding different text is an
  *  earlier delivery's and is never overwritten. A delivery with no drop file has no place to
  *  keep the text and clears nothing. */
-function keepDraft(dropPath: string | null, text: string): { copy: string } | { why: string } {
+/** A draft that was not pasted back, kept under the seat directory and not beside a drop file.
+ *  The file is `<seat dir>/drafts/<iso time>.txt`, mode 0600. An identical file at that instant
+ *  is reused; a different one keeps its text and this draft takes the next free name. */
+export function keepSeatDraft(seatDir: string, text: string, at: Date): { copy: string } | { why: string } {
+  const folder = join(seatDir, 'drafts');
+  const stamp = at.toISOString();
+  try {
+    mkdirSync(folder, { recursive: true });
+    chmodSync(folder, 0o700);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { why: `the draft could not be kept (${message})` };
+  }
+  for (let n = 0; n < 100; n++) {
+    const name = n === 0 ? `${stamp}.txt` : `${stamp}-${String(n)}.txt`;
+    const copy = join(folder, name);
+    try {
+      writeFileSync(copy, text, { flag: 'wx', mode: 0o600 });
+      chmodSync(copy, 0o600);
+      return { copy };
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+      if (code === 'EEXIST') {
+        try {
+          if (readFileSync(copy, 'utf8') === text) return { copy };
+        } catch {
+          // Unreadable: try the next name rather than overwrite it.
+        }
+        continue;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return { why: `the draft could not be kept (${message})` };
+    }
+  }
+  return { why: 'the draft could not be kept (no free name)' };
+}
+
+export function keepDraft(dropPath: string | null, text: string): { copy: string } | { why: string } {
   if (dropPath === null) return { why: 'the delivery names no drop file to keep the text beside' };
   const copy = draftCopyPath(dropPath);
   try {

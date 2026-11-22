@@ -22,6 +22,7 @@
 // the owner and a lead peek, shown the body with nothing written, so the message still waits for
 // its seat, and the peek is logged with the reader, the seat and the ids. Any other caller is
 // refused before a record is read, so nothing is receipted for it.
+import { relayIfConfined } from '../send/confined-outbox.ts';
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
@@ -61,12 +62,20 @@ import {
   writeJson,
   writeJsonError,
 } from '../output/index.ts';
+import { listArchivedUnread, runInboxRetention, seatDropFolders } from '../send/inbox-retention.ts';
+import { legacySeatFolders, listLegacyArchivedUnread } from '../send/legacy-inbox-retention.ts';
 import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
-import { alreadyReadSentence, fileStatStamp, isReadOrCleared, keyPrintForCache, recordNameOk, settledReadOf, signedRecordOf, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { alreadyReadSentence, fileStatStamp, isRecordSidecarName, isReadOrCleared, keyPrintForCache, recordNameOk, recordStampAt, settledReadOf, signedRecordOf, type RecordPayload, type StatusContext, verifyRecord } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { LEGACY_TREE, seatMailDirIn, seatMailParts, stampedListing } from '../queue/mail-tree.ts';
+import { rereadDue } from '../queue/handover.ts';
+import { channelEmitted } from '../mcp/channel.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
 
 export const USAGE = `Usage: team drops [--follow] [--json]
-       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
+       team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>] [--due]
+       team drops archive [--dry-run] [--json]
+       team drops archive --unread [--seat <seat>] [--json]
 
 Lists the drop files waiting in the calling seat's own drop folder,
 .agents/send-drops/<session>/<seat>: one row each, with the sender the message
@@ -102,6 +111,30 @@ Options:
   --session  the launch's session, which must be the team file's own
   --epoch    the runtime epoch the launch started this reader under; when
              given, only a brief delivered under that epoch is served
+  --due      with --read, a stamped message already delivered is handed over
+             again only once its re-send step is due (60 s after its newest
+             copy, doubling, capped at 30 minutes); the turn-start hook reads
+             this way, so a run of prompts does not number a copy each time
+  archive    move settled mail into send-drops/<session>/<seat>/archive/<YYYY-MM>/
+             and mark unread drops delivered before the seat's channel started
+             as read. An acknowledged message moves at once. A read message
+             moves once its receipt is older than 2 days. Unread mail stays,
+             and nothing is deleted. --dry-run lists what would move and what
+             it would mark read, and writes nothing. Without it, the moves and
+             the marks are done and one audit line is written. The owner, the
+             orchestrator or the operator archives every seat; a seat archives
+             only its own folder.
+             The daemon runs the same moves once a day, off-peak (03:00-06:00
+             machine time), at most 256 a pass and not while the load per core
+             is above 3; it does not mark anything read. It also moves mail
+             still unread 14 days after it was sent, to a seat that is stopped
+             or retired, into archive/<YYYY-MM>/unread/, and tells the lead in
+             one line. A running seat's unread mail is never moved.
+  --unread   with archive, list the messages moved unread: one line each, the
+             seat, the month and the id. --read --seat <seat> --id <id> still
+             reads one. The owner and a lead list every seat folder, including
+             a retired seat's; a seat lists its own. --seat narrows the list.
+  --dry-run  with archive, list the moves and the marks and write nothing
   --id       read this one id. An id a receipt already settled prints
              \`<id>: already read at <time> (<reader>)\` and no body. The time
              is kept only when it is an ISO instant; the reader is a known
@@ -201,10 +234,10 @@ export const realSources: DropsSources = { home: homedir() };
 
 /** How many bodies one `--read` hands over. The newest are read first: a bounded batch keeps a
  *  turn from carrying an unbounded folder, and the newest mail is the mail the turn is for.
- *  Whatever is left waits for the next turn. A plain-text drop an earlier build wrote, a record
- *  that is otherwise malformed, or an earlier delivery of the general seat brief is not a body
- *  and does not use one of the ten. */
-export const DROP_READ_BATCH = 10;
+ *  Whatever is left waits for the next turn, and the read says how many. A plain-text drop an
+ *  earlier build wrote, a record that is otherwise malformed, or an earlier delivery of the
+ *  general seat brief is not a body and does not use one of the five. */
+export const DROP_READ_BATCH = 5;
 
 /** Whether every step down to the seat's drop folder is a real folder of this user's. A step
  *  that is missing is no fault — no send has written yet, and the read is empty; anything else
@@ -214,14 +247,28 @@ export function dropFolderReadable(dir: string, session: string, seat: string): 
   const ours = (held: { uid: number }): boolean => process.getuid === undefined || held.uid === process.getuid();
   const agents = heldAt(dir);
   if (agents.kind !== 'folder' || !ours(agents)) return false;
-  let at = dir;
-  for (const part of ['send-drops', session, seat]) {
-    at = join(at, part);
-    const held = heldAt(at);
-    if (held.kind === 'missing') return true;
-    if (held.kind !== 'folder' || !ours(held)) return false;
+  // E7b revision 3: both of the seat's folders (src/queue/mail-tree.ts) are held to the same rule.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    let at = dir;
+    for (const part of seatMailParts(session, seat, tree).slice(1)) {
+      at = join(at, part);
+      const held = heldAt(at);
+      if (held.kind === 'missing') break;
+      if (held.kind !== 'folder' || !ours(held)) return false;
+    }
   }
   return true;
+}
+
+/** The messages an older requester's relayed read may carry: those whose record is not stamped
+ *  (an unreadable record counts as stamped, so it is left out too). */
+export function withoutStamped<T extends { id: string }>(dropDir: string, messages: readonly T[]): T[] {
+  return messages.filter((message) => recordStampAt(dropDir, message.id) === false);
+}
+
+/** The one line an older requester's relayed read gets in place of stamped mail. */
+export function stampedLeftOut(count: number): string {
+  return `${String(count)} stamped message${count === 1 ? '' : 's'}: run the installed team drops`;
 }
 
 export const drops: Command = (argv, io) => runDrops(argv, io, realSources);
@@ -275,6 +322,42 @@ function legacyDropAt(path: string): boolean {
   }
 }
 
+/** The record id a `--id` word names in this seat's folders: the word itself when it is a whole
+ *  id or names no unique record, else the one record name (never a sidecar) that starts with a
+ *  prefix of at least 8 characters. An ambiguous prefix is left as given, so the read refuses it. */
+export function resolveDropId(dropDir: string, word: string): string {
+  if (word.length < 8 || DROP_RECORD_NAME.test(word)) return word;
+  // Every folder must list: a tree that cannot be read could hold a second match, so the word is
+  // left as given (the read then refuses it) rather than resolved against half the folders.
+  const folders: { folder: string; names: readonly string[] }[] = [];
+  try {
+    folders.push({ folder: dropDir, names: readdirSync(dropDir) });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return word;
+  }
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return word;
+  if (stamped !== null) folders.push({ folder: stamped.folder, names: stamped.names });
+  // Only a regular file with a record's own name is a candidate, as the inbox reader counts them:
+  // a sidecar, a folder, a link or any other entry never makes or breaks a match.
+  const matches = new Set<string>();
+  for (const { folder, names } of folders) {
+    for (const name of names) {
+      if (!name.startsWith(word) || !DROP_RECORD_NAME.test(name) || isRecordSidecarName(name)) continue;
+      try {
+        if (!lstatSync(join(folder, name)).isFile()) continue;
+      } catch {
+        return word;
+      }
+      matches.add(name);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : word;
+}
+
+/** A record's own file name: a lowercase UUID, or the `unread-<uuid>` an earlier build wrote. */
+const DROP_RECORD_NAME = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export type DropListing = { kind: 'ok'; rows: DropRow[] } | { kind: 'unreadable'; reason: string };
 
 /**
@@ -312,86 +395,92 @@ export function listDrops(dropDir: string, key?: KeyObject, context?: StatusCont
     if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'ok', rows: [] };
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
-  const nameSet = new Set(names);
   const rows: DropRow[] = [];
   // The claim this listing serves under. Without a context there is none, and every drop is
   // listed — the same "nothing can be proven" rule the receipt read follows above.
   const claim = context === undefined ? null : currentClaimIn(context.root, context.session, context.to);
   const superseded = new Set(claim?.superseded ?? []);
   const keyPrint = key === undefined ? 'none' : keyPrintForCache(key);
-  for (const name of names) {
-    if (name.includes('.')) continue;
-    if (superseded.has(name)) continue;
-    const path = join(dropDir, name);
-    let stat;
-    try {
-      stat = lstatSync(path);
-    } catch {
-      continue;
-    }
-    if (!stat.isFile()) continue;
-    // A verified read receipt means the drop was handed over: it is read, and this reading is
-    // done with it. The receipt is the signed `<id>.read.json` the inbox and `team messages` write;
-    // a file there that the message key did not sign proves nothing and leaves the drop waiting.
-    // At the current claim's id the receipt must bind that claim too: a read of an earlier
-    // delivery does not count for this one.
-    const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
-    const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
-    if (key !== undefined && context !== undefined && hasReceiptFile && isReadOrCleared(dropDir, name, context, key, binding)) continue;
-    const stamp = fileStatStamp(path);
-    let from: string | null = null;
-    let fromId: string | null = null;
-    let senderAttribution: SenderAttribution = 'none';
-    let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
-    const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
-    if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
-      from = cached.from;
-      fromId = cached.fromId;
-      launch = cached.launch;
-      senderAttribution = key !== undefined && cached.payload !== null
-        ? attributeSenderClaim(cached.payload, { briefClaim: claim })
-        : 'none';
-    } else {
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return { kind: 'unreadable', reason: 'the seat\'s stamped folder cannot be listed' };
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    const nameSet = new Set(names);
+    for (const name of names) {
+      if (name.includes('.')) continue;
+      if (superseded.has(name)) continue;
+      const path = join(dropDir, name);
+      let stat;
       try {
-        const text = readFileSync(path, 'utf8');
-        const record = signedRecordOf(parsedJson(text));
-        let verifiedPayload: RecordPayload | null = null;
-        if (record !== null) {
-          // The record names its sender in the payload. The key that verified it is the message
-          // key; when the folder is read with no key at all, the payload is still what is shown —
-          // a record that fails the key it was checked with leaves the sender unknown.
-          if (key === undefined || verifyRecord(record, key)) {
-            verifiedPayload = record.payload;
-            from = record.payload.from;
-            fromId = record.payload.from_id;
-            // Only a record this key verified can be attributed, and only the seat's current
-            // general seat brief rests on more than the shared key. A read with no key can show
-            // the payload but cannot attribute it.
-            senderAttribution = key === undefined
-              ? 'none'
-              : attributeSenderClaim(record.payload, { briefClaim: claim });
-            if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
-              launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
-            }
-          }
-        } else {
-          from = senderOf(text.split('\n', 1)[0] ?? '');
-        }
-        if (stamp !== null && keyPrint !== '') {
-          if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
-          dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch, payload: verifiedPayload });
-        }
+        stat = lstatSync(path);
       } catch {
-        // The file is still a drop; its sender is unknown.
+        continue;
       }
+      if (!stat.isFile()) continue;
+      // A verified read receipt means the drop was handed over: it is read, and this reading is
+      // done with it. The receipt is the signed `<id>.read.json` the inbox and `team messages` write;
+      // a file there that the message key did not sign proves nothing and leaves the drop waiting.
+      // At the current claim's id the receipt must bind that claim too: a read of an earlier
+      // delivery does not count for this one.
+      const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
+      const hasReceiptFile = nameSet.has(`${name}.read.json`) || nameSet.has(`${name}.replied.json`);
+      if (key !== undefined && context !== undefined && hasReceiptFile && isReadOrCleared(dropDir, name, context, key, binding)) continue;
+      const stamp = fileStatStamp(path);
+      let from: string | null = null;
+      let fromId: string | null = null;
+      let senderAttribution: SenderAttribution = 'none';
+      let launch: { sha256: string | undefined; incarnation: string | undefined } | null = null;
+      const cached = stamp !== null && keyPrint !== '' ? dropInspectCache.get(path) : undefined;
+      if (cached !== undefined && cached.stamp === stamp && cached.keyPrint === keyPrint) {
+        from = cached.from;
+        fromId = cached.fromId;
+        launch = cached.launch;
+        senderAttribution = key !== undefined && cached.payload !== null
+          ? attributeSenderClaim(cached.payload, { briefClaim: claim })
+          : 'none';
+      } else {
+        try {
+          const text = readFileSync(path, 'utf8');
+          const record = signedRecordOf(parsedJson(text));
+          let verifiedPayload: RecordPayload | null = null;
+          if (record !== null) {
+            // The record names its sender in the payload. The key that verified it is the message
+            // key; when the folder is read with no key at all, the payload is still what is shown —
+            // a record that fails the key it was checked with leaves the sender unknown.
+            if (key === undefined || verifyRecord(record, key)) {
+              verifiedPayload = record.payload;
+              from = record.payload.from;
+              fromId = record.payload.from_id;
+              // Only a record this key verified can be attributed, and only the seat's current
+              // general seat brief rests on more than the shared key. A read with no key can show
+              // the payload but cannot attribute it.
+              senderAttribution = key === undefined
+                ? 'none'
+                : attributeSenderClaim(record.payload, { briefClaim: claim });
+              if (record.payload.from === GENERAL_BRIEF_FROM && record.payload.rule === GENERAL_BRIEF_RULE) {
+                launch = { sha256: record.payload.brief_sha256, incarnation: record.payload.incarnation };
+              }
+            }
+          } else {
+            from = senderOf(text.split('\n', 1)[0] ?? '');
+          }
+          if (stamp !== null && keyPrint !== '') {
+            if (dropInspectCache.size >= DROP_INSPECT_CACHE_LIMIT) dropInspectCache.clear();
+            dropInspectCache.set(path, { stamp, keyPrint, from, fromId, launch, payload: verifiedPayload });
+          }
+        } catch {
+          // The file is still a drop; its sender is unknown.
+        }
+      }
+      // A launch record the current claim does not name cannot be served: it is an earlier
+      // delivery, or an old build's record carrying none of the fields a claim binds.
+      if (key !== undefined && context !== undefined && launch !== null
+        && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
+        continue;
+      }
+      rows.push({ id: name, from, from_id: fromId, sender_attribution: senderAttribution, received: stat.mtime.toISOString(), path });
     }
-    // A launch record the current claim does not name cannot be served: it is an earlier
-    // delivery, or an old build's record carrying none of the fields a claim binds.
-    if (key !== undefined && context !== undefined && launch !== null
-      && (claim === null || launch.sha256 !== claim.sha256 || launch.incarnation !== claim.incarnation)) {
-      continue;
-    }
-    rows.push({ id: name, from, from_id: fromId, sender_attribution: senderAttribution, received: stat.mtime.toISOString(), path });
   }
   return {
     kind: 'ok',
@@ -459,11 +548,17 @@ function settledFacts(dropDir: string, context: StatusContext, home: string): { 
     return [];
   }
   const facts: { id: string; at: string; readBy: string | undefined }[] = [];
-  for (const name of names) {
-    if (name.includes('.') || !recordNameOk(name)) continue;
-    const settled = settledReadOf(dropDir, name, context, key.key);
-    if (settled === null) continue;
-    facts.push({ id: name, at: settled.at, readBy: settled.readBy });
+  // E7b revision 3: the seat's stamped folder is read with it (src/queue/mail-tree.ts).
+  const stamped = stampedListing(dropDir);
+  if (stamped === 'unreadable') return [];
+  const seatFolders = [{ folder: dropDir, names: names }, ...(stamped === null ? [] : [stamped])];
+  for (const { folder: dropDir, names: names } of seatFolders) {
+    for (const name of names) {
+      if (name.includes('.') || !recordNameOk(name)) continue;
+      const settled = settledReadOf(dropDir, name, context, key.key);
+      if (settled === null) continue;
+      facts.push({ id: name, at: settled.at, readBy: settled.readBy });
+    }
   }
   return facts.sort((a, b) => (Date.parse(b.at) - Date.parse(a.at)) || a.id.localeCompare(b.id));
 }
@@ -474,13 +569,159 @@ function settledFacts(dropDir: string, context: StatusContext, home: string): { 
  * listing as one document; `--follow` prints each file that appears while it runs, and never
  * the ones already there, so a Monitor starts quiet.
  */
+async function runArchive(
+  args: { error?: string; rest: readonly string[]; flags: ReadonlySet<string>; values: { seat?: string; session?: string; epoch?: string; id?: string } },
+  io: Io,
+  sources: DropsSources,
+  json: boolean,
+): Promise<number> {
+  const listing = args.flags.has('unread');
+  const extra = args.rest.length > 1
+    || args.flags.has('follow')
+    || args.flags.has('read')
+    || (listing && args.flags.has('dry-run'))
+    || (!listing && args.values.seat !== undefined)
+    || args.values.session !== undefined
+    || args.values.epoch !== undefined
+    || args.values.id !== undefined;
+  if (args.error || extra) {
+    const problem = args.error ?? (args.rest.length > 1 ? `unexpected "${args.rest[1] ?? ''}"` : 'archive takes no other options');
+    if (json) writeJsonError(io, 'drops.invocation', problem, null);
+    else io.stderr(`team drops: ${problem}\n${USAGE}`);
+    // exit: drops.archive.invocation
+    return 2;
+  }
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
+  if (!loaded.ok) {
+    const message = loaded.errors[0]?.message ?? "the team file can't be read";
+    if (message.startsWith(NOT_A_REPO)) {
+      const shown = withoutFileOffer(message);
+      if (json) writeJsonError(io, 'drops.not-a-repo', shown, null);
+      else io.stderr(`team drops: ${shown}\n`);
+      // exit: drops.archive.not-a-repo
+      return 2;
+    }
+    if (json) writeJsonError(io, 'drops.file', message, null);
+    else io.stderr(`team drops: ${message}\n`);
+    // exit: drops.archive.file
+    return 1;
+  }
+  const dir = dirname(loaded.path);
+  const session = loaded.team.session;
+  const { caller, shown } = judgeCallerOf(io, session);
+  const names = loaded.team.seats.map((seat) => seat.name);
+  const standing = standingOf(dir, session, caller);
+  const lead = caller.kind === 'owner' || (caller.kind === 'seat' && mayChangeTeamVerdict(caller, loaded.team, standing).kind === 'ok');
+  const own = caller.kind === 'seat' && names.includes(caller.name) && callerVerdict(caller, caller.name, standing).kind === 'ok';
+  if (!lead && !own) {
+    refuse(io, json, `archive is the owner, a lead, or the seat itself; this call is ${describeCaller(shown)}`);
+    // exit: drops.archive.refused
+    return 1;
+  }
+  const seats = lead ? names : [caller.kind === 'seat' ? caller.name : ''];
+  if (listing) return listUnreadArchive(io, json, loaded.root, session, lead ? null : seats[0] ?? '', args.values.seat);
+  const key = messageKeyState(sources.home);
+  if (key.kind !== 'key') {
+    const why = key.kind === 'unreadable' ? key.why : 'no message key; nothing was archived';
+    refuse(io, json, why);
+    // exit: drops.archive.key
+    return 1;
+  }
+  const dryRun = args.flags.has('dry-run');
+  const now = new Date();
+  const report = runInboxRetention(loaded.root, { now, home: sources.home, dryRun, seats, session: loaded.team.session });
+  if (report.refused !== null) {
+    if (!json) {
+      const verbWord = dryRun ? 'would move' : 'moved';
+      const markWord = dryRun ? 'would mark read' : 'marked read';
+      for (const id of report.move) io.stdout(`${verbWord} ${id}\n`);
+      for (const id of report.markRead) io.stdout(`${markWord} ${id}\n`);
+      for (const id of report.partial) io.stdout(`partial ${id}\n`);
+    }
+    const why = report.partial.length === 0 ? report.refused : `${report.refused}; partial ${report.partial.join(' ')}`;
+    refuse(io, json, why);
+    // exit: drops.archive.migration
+    return 1;
+  }
+  if (json) {
+    writeJson(io, 'team.drops.archive', {
+      format: 1 as const,
+      dry_run: dryRun,
+      move: report.move,
+      mark_read: report.markRead,
+      partial: report.partial,
+      ...(report.busy === undefined ? {} : { busy: report.busy }),
+      ...(report.daemon === undefined ? {} : { messages_store: { by: 'daemon', daemon_running: report.daemon.running, due: report.daemon.due, stay: report.daemon.stay } }),
+    });
+  } else {
+    const verbWord = dryRun ? 'would move' : 'moved';
+    const markWord = dryRun ? 'would mark read' : 'marked read';
+    for (const id of report.move) io.stdout(`${verbWord} ${id}\n`);
+    for (const id of report.markRead) io.stdout(`${markWord} ${id}\n`);
+    for (const id of report.partial) io.stdout(`partial ${id}\n`);
+    for (const seat of report.busy ?? []) io.stdout(`busy ${seat}: another archive is working this mailbox; run again later\n`);
+    if (report.daemon !== undefined) {
+      for (const id of report.daemon.due) io.stdout(`daemon will move ${id}\n`);
+      io.stdout(
+        `older messages store: ${String(report.daemon.due.length)} due, ${String(report.daemon.stay)} stay; the daemon's nightly pass (03:00-06:00) moves them${report.daemon.running ? '' : '; no daemon running: start it with team daemon start'}\n`,
+      );
+    }
+  }
+  // exit: drops.archive.ok
+  return 0;
+}
+
+/** `team drops archive --unread`: the messages moved while unread, from the folder names alone.
+ *  `own` is the one seat a seat caller may list; null lists every seat folder under the root. */
+function listUnreadArchive(io: Io, json: boolean, root: string, session: string, own: string | null, wanted: string | undefined): number {
+  if (own !== null && wanted !== undefined && wanted !== own) {
+    refuse(io, json, `a seat lists only its own archive; ${wanted} is not this seat`);
+    // exit: drops.archive.unread-refused
+    return 1;
+  }
+  const rows: Array<{ store: typeof LEGACY_TREE | 'messages'; session: string; seat: string; month: string; id: string; path: string }> = [];
+  for (const folder of seatDropFolders(root)) {
+    if (own !== null && folder.seat !== own) continue;
+    if (wanted !== undefined && folder.seat !== wanted) continue;
+    for (const item of listArchivedUnread(folder.dropDir)) {
+      rows.push({ store: LEGACY_TREE, session: folder.session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
+    }
+  }
+  // The older `.agents/messages/<seat>` store: its archive holds only this session's records.
+  for (const folder of legacySeatFolders(root)) {
+    if (own !== null && folder.seat !== own) continue;
+    if (wanted !== undefined && folder.seat !== wanted) continue;
+    for (const item of listLegacyArchivedUnread(root, folder.seat)) {
+      rows.push({ store: 'messages', session, seat: folder.seat, month: item.month, id: item.id, path: item.path });
+    }
+  }
+  if (json) {
+    writeJson(io, 'team.drops.archive.unread', { format: 1 as const, unread: rows });
+  } else if (rows.length === 0) {
+    io.stdout('no messages were moved unread\n');
+  } else {
+    for (const row of rows) io.stdout(`${row.seat} ${row.month} ${row.id}\n`);
+  }
+  // exit: drops.archive.unread-ok
+  return 0;
+}
+
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read']);
+  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read', 'dry-run', 'unread', 'due']);
+  // `--read` writes the read receipts beside the records: a seat its sandbox confines hands it to
+  // its watch, which reads for it as that seat (rfc-event-comms E5, src/send/confined-outbox.ts).
+  if (args.flags.has('read') && args.error === undefined) {
+    const relayed = await relayIfConfined('drops', argv, io);
+    if (relayed !== null) return relayed;
+  }
+  const verb = args.rest[0];
+  if (verb === 'archive') return runArchive(args, io, sources, hasJsonFlag(argv) || args.flags.has('json'));
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
   const follow = args.flags.has('follow');
   const read = args.flags.has('read');
+  const due = args.flags.has('due');
   // A launch option names a seat without the reading that serves one: no `--read` uses it, so it
   // is an invocation error rather than a silent no-op.
   const stray = !read && args.values.seat !== undefined
@@ -489,12 +730,15 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       ? 'session'
       : !read && args.values.epoch !== undefined
         ? 'epoch'
-        : !read && args.values.id !== undefined ? 'id' : null;
+        : !read && args.values.id !== undefined ? 'id'
+          : !read && due ? 'due' : null;
   const epoch = args.values.epoch;
   const badEpoch = read && epoch !== undefined && !isBriefEpoch(epoch);
-  if (args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
+  if (args.flags.has('dry-run') || args.flags.has('unread') || args.error || args.rest.length || (follow && json) || (read && (follow || json || args.values.seat === undefined)) || stray !== null || badEpoch) {
     const problem = args.error
-      ?? (args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
+      ?? (args.flags.has('dry-run') ? 'unknown option --dry-run'
+        : args.flags.has('unread') ? 'unknown option --unread'
+        : args.rest.length ? `unexpected "${args.rest[0] ?? ''}"`
         : stray !== null ? `unknown option --${stray}`
           : badEpoch ? `--epoch ${JSON.stringify(epoch)} is not a runtime epoch`
             : read
@@ -577,7 +821,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     if (!dropFolderReadable(dir, readSession, seatName)) {
       return refuse(io, json, 'the drop folder is not a real folder: a link or a file stands in its path');
     }
-    const dropDir = join(dir, 'send-drops', readSession, seatName);
+    const dropDir = seatMailDirIn(dir, readSession, seatName);
     const context: StatusContext = { to: seatName, root: loaded.root, session: readSession, lead: loaded.team.orchestrator };
     // The launch's own brief is served under the claim the seat's state holds now. A reader the
     // launch started under an epoch serves only a brief delivered under that same runtime; a
@@ -590,8 +834,15 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
     };
     const brief: BriefRead = { claim: claimOf, ...(epoch === undefined ? {} : { epoch }) };
-    const asked = args.values.id;
+    // A short id, as the reader line and the event pointer print it, names the one record in this
+    // seat's folders that starts with it; a record's sidecars (`<id>.wake-try`, …) are never one.
+    const asked = args.values.id === undefined ? undefined : resolveDropId(dropDir, args.values.id);
     if (asked !== undefined) {
+      // E7b revision 3 (carrier 4): an older requester's relayed read never carries a stamped body.
+      if (io.legacyRelay === true && recordStampAt(dropDir, asked) !== false) {
+        io.stdout(`${stampedLeftOut(1)}\n`);
+        return readOk();
+      }
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const key = messageKeyState(sources.home);
       const settled = key.kind === 'key' ? settledReadOf(dropDir, asked, context, key.key) : null;
@@ -601,13 +852,24 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       }
       const got = peek
         ? peekMessage(target, asked, sources.home, seatNames, brief)
-        : readMessage(target, asked, sources.home, brief);
+        // The receipt follows the hand-over, as the batch read's does: a stdout that throws (a
+        // relayed read whose output could not be saved) leaves the message unread.
+        : readMessage(target, asked, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (!got.ok && got.served === 'already-served') {
         io.stdout(`${settled === null ? got.reason : alreadyReadSentence(asked, settled.at, settled.readBy, seatNames)}\n`);
         return readOk();
       }
       if (got.ok) {
-        io.stdout(`${got.body}\n`);
+        try {
+          if (!peek) io.handedIds?.([asked]);
+          io.stdout(`${got.body}\n`);
+          if (got.seal !== undefined && !got.seal()) {
+            io.stderr(`team drops: ${asked}: the read receipt could not be written after the body was handed over\n`);
+          }
+        } finally {
+          // A hand-over that throws leaves the message unread and its claim released.
+          got.release?.();
+        }
         if (peek) logLine(dir, 'peek', logTag(shown), `${seatName}: ${asked}`);
         return readOk();
       }
@@ -627,9 +889,15 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const settled = settledFacts(dropDir, context, sources.home);
     // Only a name the inbox lists is served. A file whose name is not a message id stays on the
     // folder listing and is not handed over here.
-    const waiting = listUnread(dropDir, context, sources.home);
+    const listed = listUnread(dropDir, context, sources.home, undefined, undefined, { legacy: 'include' });
+    // E7b revision 3 (carrier 4): an older requester's relayed read leaves stamped mail out and
+    // says, in one line with no body, how many it left.
+    const waiting = io.legacyRelay === true ? withoutStamped(dropDir, listed) : listed;
+    if (waiting.length < listed.length) io.stdout(`${stampedLeftOut(listed.length - waiting.length)}\n`);
     const bodies: string[] = [];
     const seals: Array<() => boolean> = [];
+    // Each deferred read holds the id's exclusive claim until its seal, or until this run gives up.
+    const releases: Array<() => void> = [];
     // The ids a peek showed: a peek writes no receipt, so the log line below is its only trace.
     const peeked: string[] = [];
     let superseded = 0;
@@ -643,17 +911,38 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     // its content, whether or not another body was served.
     const receiptRefusals: string[] = [];
     // Newest first: the turn reads what has just landed, and the tail of a backlog waits for the
-    // next turn. A file that is not a signed record never uses one of the ten: a plain-text drop
+    // next turn. A file that is not a signed record never uses one of the five: a plain-text drop
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
-    for (const message of [...waiting].reverse()) {
+    const newestFirst = [...waiting].reverse();
+    // The messages this run never reached: the rest of the backlog, counted below.
+    let reached = 0;
+    // The ids whose bodies this run hands over, named to a relay before the one stdout write.
+    const handedIds: string[] = [];
+    for (const message of newestFirst) {
       if (bodies.length >= DROP_READ_BATCH) break;
+      reached += 1;
+      if (message.legacy === true) {
+        // A drop an earlier build wrote, as the inbox classified it: never served, counted.
+        legacy += 1;
+        continue;
+      }
+      // The hook's read (`--due`): a stamped message already delivered waits for its ladder
+      // step, so a run of prompts does not hand it over, and number a copy, at every prompt.
+      if (due && !peek) {
+        const folder = seatFolderOf(dropDir, message.id);
+        if (recordStampAt(folder, message.id) === true && !rereadDue(folder, message.id, Date.now(), channelEmitted(folder, message.id))) {
+          continue;
+        }
+      }
       const target = { dropDir, root: loaded.root, seat: seatName, session: readSession, lead: loaded.team.orchestrator };
       const got = peek
         ? peekMessage(target, message.id, sources.home, seatNames, brief)
-        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after' });
+        : readMessage(target, message.id, sources.home, brief, undefined, { receipt: 'after', ...(io.handoverOwner === undefined ? {} : { owner: io.handoverOwner }) });
       if (got.ok) {
         bodies.push(got.body);
+        if (!peek) handedIds.push(message.id);
         if (got.seal !== undefined) seals.push(got.seal);
+        if (got.release !== undefined) releases.push(got.release);
         if (peek) peeked.push(message.id);
       } else if (got.served !== undefined) {
         // Another reader won the receipt name and served this message: there is no body for this
@@ -687,13 +976,28 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
         }
       }
     }
-    if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
+    // The rest of a backlog is a count, never more bodies: the turn hears how many older messages
+    // still wait and where they are listed, and reads them when it chooses.
+    const older = newestFirst.slice(reached).filter((one) => one.legacy !== true).length;
+    if (bodies.length > 0) {
+      const tail = older > 0
+        ? `\n\n${String(older)} older unread message(s) wait in this inbox; inbox_check or team drops --read lists them`
+        : '';
+      try {
+        io.handedIds?.(handedIds);
+        io.stdout(`${bodies.join('\n\n')}${tail}\n`);
+      } catch (error) {
+        for (const release of releases) release();
+        throw error;
+      }
+    }
     // The receipt follows the hand-over. A stdout that throws never reaches here, so the message
     // stays unread. A seal that loses the name, or cannot be flushed, is said with the other
     // receipt refusals; the body was already handed over.
     for (const seal of seals) {
       if (!seal()) receiptRefusals.push('the read receipt could not be written after the body was handed over');
     }
+    for (const release of releases) release();
     if (peeked.length > 0) {
       // The peek's one trace: who looked, whose mail, and the ids shown — names only, never a
       // body. A read needs none: its signed receipt is the record of what was served.
@@ -741,7 +1045,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     return refuse(io, json, `only a seat of this team reads its own drops; this call is ${describeCaller(shown)}`);
   }
   const seat = named.name;
-  const dropDir = join(dir, 'send-drops', session, seat);
+  const dropDir = seatMailDirIn(dir, session, seat);
   const keyState = messageKeyState(sources.home);
   const key = keyState.kind === 'key' ? keyState.key : undefined;
   const context: StatusContext = { to: seat, root: loaded.root, session, lead: loaded.team.orchestrator };

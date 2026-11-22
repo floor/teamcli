@@ -8,10 +8,11 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { writeStateFile } from '../file-write.ts';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { busListening, startBus, type BusHandle, type StartBusInput, type StartBusResult } from './server.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** How long to wait after `failures` starts that did not come up. The first wait is one second. */
 export function nextBackoffMs(failures: number): number {
@@ -84,6 +85,7 @@ export async function spawnInheritedBus(root: string, home?: string): Promise<'l
   writeStateFile(join(dir, 'bus.inherit'), `${nonce}\n`, { root });
   const here = fileURLToPath(import.meta.url);
   const entry = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  hostedCommit('node:child_process.spawn');
   const child = spawn(process.execPath, [entry, 'bus', '--inherited', nonce], {
     cwd: root,
     detached: true,

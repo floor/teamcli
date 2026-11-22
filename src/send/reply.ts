@@ -9,10 +9,12 @@
 // connection; a line that is not this channel's frame is kept whole as the reply.
 //
 // The socket is a measured observation, not a stable API (see uds.ts).
-import { existsSync, unlinkSync } from 'node:fs';
-import { createConnection, createServer, type Socket } from 'node:net';
+import { existsSync } from 'node:fs';
+import { unlinkSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import { FRAME_LIMIT } from './uds.ts';
+import { dialing, serving, socketRuntime, type Conn, type SocketError } from '../runtime/bun-socket.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The wait's ending: a reply line came back, or the window closed. */
 export type ReplyWait = { kind: 'answered'; line: string } | { kind: 'timeout' };
@@ -46,19 +48,18 @@ export async function openReplyListener(dir: string, pid: number): Promise<OpenR
       return { ok: false, reason: `${path} holds a dead socket file that cannot be removed; nothing was sent` };
     }
   }
-  const server = createServer();
-  const sockets = new Set<Socket>();
+  hostedCommit('Bun.listen');
+  const sockets = new Set<Conn>();
   let line: string | null = null;
   let waiter: ((outcome: ReplyWait) => void) | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let buffer = '';
 
-  server.on('connection', (socket) => {
+  const accept = (socket: Conn) => {
     sockets.add(socket);
-    socket.on('close', () => sockets.delete(socket));
-    socket.on('error', () => socket.destroy());
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
+    socket.onClose(() => sockets.delete(socket));
+    const text = (chunk: string): void => {
+      buffer += chunk;
       const end = buffer.indexOf('\n');
       if (end < 0) {
         // A sender that writes a line over the measured limit is not this channel; drop it.
@@ -69,8 +70,9 @@ export async function openReplyListener(dir: string, pid: number): Promise<OpenR
         return;
       }
       settle({ kind: 'answered', line: buffer.slice(0, end) });
-    });
-  });
+    };
+    return { text };
+  };
 
   const settle = (outcome: ReplyWait): void => {
     if (timer !== null) clearTimeout(timer);
@@ -82,20 +84,20 @@ export async function openReplyListener(dir: string, pid: number): Promise<OpenR
     } else line = outcome.kind === 'answered' ? outcome.line : null;
   };
 
-  const opened = new Promise<string | null>((resolve) => {
-    server.on('error', (error: NodeJS.ErrnoException) => {
-      resolve(error.code === 'EADDRINUSE' ? `a listener already answers at ${path}; nothing was sent` : `the reply listener could not be opened (${error.code ?? 'unknown error'})`);
-    });
-    server.listen(path, () => resolve(null));
-  });
-  const problem = await opened;
-  if (problem !== null) return { ok: false, reason: problem };
+  const Bun = socketRuntime();
+  let server: ReturnType<typeof Bun.listen>;
+  try {
+    server = Bun.listen(serving(path, accept));
+  } catch (error) {
+    const code = (error as SocketError).code;
+    return { ok: false, reason: code === 'EADDRINUSE' ? `a listener already answers at ${path}; nothing was sent` : `the reply listener could not be opened (${code ?? 'unknown error'})` };
+  }
 
   function close(): void {
     for (const socket of sockets) socket.destroy();
     sockets.clear();
-    server.close();
-    // `server.close()` removes the file (measured); this covers a path left by a race.
+    server.stop(true);
+    // Stopping removes the file (measured); this covers a path left by a race.
     try {
       if (existsSync(path)) unlinkSync(path);
     } catch {
@@ -126,20 +128,19 @@ export async function openReplyListener(dir: string, pid: number): Promise<OpenR
 /** Whether a socket at `path` answers a connection. Used before displacing anything. */
 function answers(path: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = createConnection({ path });
+    hostedCommit('Bun.connect');
+    let settled = false;
     const done = (live: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       socket.destroy();
       resolve(live);
     };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(path, { open: () => done(true), close: () => done(false) });
     const timer = setTimeout(() => done(true), PROBE_MS);
-    socket.on('error', () => {
-      clearTimeout(timer);
-      done(false);
-    });
-    socket.on('connect', () => {
-      clearTimeout(timer);
-      done(true);
-    });
+    Bun.connect(options).catch(refused);
   });
 }
 

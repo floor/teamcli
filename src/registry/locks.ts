@@ -1,4 +1,5 @@
-import { closeSync, mkdirSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, statSync } from 'node:fs';
+import { mkdirSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { dirname, join, resolve } from 'node:path';
 
 type Kind = 'teams' | 'projects';

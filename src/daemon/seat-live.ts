@@ -5,8 +5,7 @@
 // guards a caller reads are the same words and the same order wherever the walk runs. The daemon
 // keeps its own thin wrappers over these for its host shape; nothing here types.
 import { agentList, paneProcesses, type PaneProcesses } from '../herdr.ts';
-import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
-import { readState } from '../state.ts';
+import { paneHoldsOnlyShell } from '../launch/identity.ts';
 
 /** The session's live agents, or null when the session cannot be read. */
 export type SeatAgents = (session: string) => { name: string | null; pane: string }[] | null;
@@ -38,18 +37,12 @@ export function liveSeatAgents(session: string): { name: string | null; pane: st
 }
 
 /**
- * Checks whether the target pane is at a bare shell (`paneHoldsShell`) or its recorded process
- * exited (`seatProcessVerdict === 'gone'`).
+ * The pane is back at its shell only when the shell is the only process in front. A program
+ * beside the shell — a wrapper and the CLI — is the seat, not a bare shell, so a typed wake
+ * is not skipped for it. An unread table is not a shell.
  */
-export function isBareShellPane(dir: string, session: string, seatName: string, procs: PaneProcesses | null): boolean {
-  if (!procs) return false;
-  if (paneHoldsShell(procs)) return true;
-  try {
-    const state = readState(dir);
-    const recorded = state.sessions[session]?.seats[seatName]?.launched;
-    if (recorded && seatProcessVerdict(recorded, procs) === 'gone') return true;
-  } catch {}
-  return false;
+export function isBareShellPane(_dir: string, _session: string, _seatName: string, procs: PaneProcesses | null): boolean {
+  return paneHoldsOnlyShell(procs);
 }
 
 /** The real pane process table for one pane, shaped for `isBareShellPane`. */

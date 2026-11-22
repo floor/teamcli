@@ -47,9 +47,22 @@ export const watch: Section = {
         ...measureSchema(DURATION),
         description: 'how long a message may go without the seat\'s read receipt before the watch retries it once; the report to the sender and the lead follows at twice this window',
       },
+      lead_unread_after: {
+        ...measureSchema(DURATION),
+        description: 'how long a lead\'s own unread drop waits before the lead is woken; 3m when omitted, and a tempo scales it',
+      },
       stuck_after: {
         ...measureSchema(DURATION),
         description: 'how long a seat whose presence still says a turn is running may sit with unread mail before the lead is told it is stuck; 15m when omitted, never scaled by the tempo',
+      },
+      watch_start_limit: {
+        ...measureSchema(DURATION),
+        description: 'how long a hosted watch may stay in starting without reaching a watch work seam before the daemon stops and starts the child it started for that root; 120s when omitted',
+      },
+      child_late_limit: {
+        type: 'integer',
+        minimum: 1,
+        description: 'how many heartbeats a chores child may miss before the daemon stops and starts that root\'s child, even while it is still working; 30 when omitted',
       },
       nudge: {
         type: 'string',
@@ -91,7 +104,10 @@ export function defaultWatch(): TeamFile['watch'] {
     nudgeWait: 600,
     unsentAfter: 60,
     unreadAfter: 600,
+    leadUnreadAfter: 180,
     stuckAfter: 900,
+    watchStartLimit: 120,
+    childLateLimit: 30,
     quotaMarks: [50, 75, 90],
     checks: [],
   };
@@ -99,7 +115,7 @@ export function defaultWatch(): TeamFile['watch'] {
 
 function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
   const fields = check.fields(entry?.value, 'watch', [
-    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'unread_after', 'stuck_after', 'nudge', 'queue_dir', 'quota_marks', 'checks',
+    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'unread_after', 'lead_unread_after', 'stuck_after', 'watch_start_limit', 'child_late_limit', 'nudge', 'queue_dir', 'quota_marks', 'checks',
   ]);
   const time = (name: string, fallback: number) =>
     check.measure(fields.get(name), `watch.${name}`, DURATION, '120s or 10m') ?? fallback;
@@ -131,7 +147,10 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
       nudgeWait: time('nudge_wait', base.nudgeWait),
       unsentAfter: time('unsent_after', base.unsentAfter),
       unreadAfter: time('unread_after', base.unreadAfter),
+      leadUnreadAfter: time('lead_unread_after', base.leadUnreadAfter),
       stuckAfter: time('stuck_after', base.stuckAfter),
+      watchStartLimit: time('watch_start_limit', base.watchStartLimit ?? 120),
+      childLateLimit: check.whole(fields.get('child_late_limit'), 'watch.child_late_limit', 1) ?? base.childLateLimit ?? 30,
       quotaMarks,
       checks: readChecks(fields.get('checks'), check),
       ...(nudge !== undefined ? { nudge } : {}),

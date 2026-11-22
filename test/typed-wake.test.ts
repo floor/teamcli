@@ -21,7 +21,7 @@ import {
   watchWakeTriesKey,
 } from '../src/profiles/index.ts';
 import { readHistory } from '../src/send/history.ts';
-import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
+import { wakeAttemptOf } from '../src/watch/wake-attempt.ts';
 import { deliverTypedWake, type TypedWakeHost } from '../src/send/typed-wake.ts';
 import { readBox, readScreen, type Screen } from '../src/watch/screen.ts';
 import { fake, filed, owner, world } from './send-native-fixtures.ts';
@@ -42,15 +42,17 @@ const TRUST_149 = readFileSync(join(FIXTURES_149, 'trust.txt'), 'utf8');
 const QUESTION_149 = readFileSync(join(FIXTURES_149, 'model-picker.txt'), 'utf8');
 
 /** The captured idle frame with `text` drawn in its composer: the same rules and footer, one
- *  input row. Muse wraps a long row, so the scenes keep the line short enough to read back. */
+ *  input row. Muse wraps a long row, so the scenes keep the line short enough to read back.
+ *  A multiline wake draws its later rows at the composer's continuation column, two: the box
+ *  reader strips that indent row by row, exactly as the pane draws typed newlines. */
 function holding(text: string): string {
-  return IDLE.replace('❯\n', `❯ ${text}\n`);
+  return IDLE.replace('❯\n', `❯ ${text.replaceAll('\n', '\n  ')}\n`);
 }
 
 /** The captured working frame with `text` still in the composer. The spinner row keeps the
  *  screen working; the composer read is unsent while the line sits there. */
 function workingHolding(text: string): string {
-  return WORKING.replace('❯\n', `❯ ${text}\n`);
+  return WORKING.replace('❯\n', `❯ ${text.replaceAll('\n', '\n  ')}\n`);
 }
 
 const LINE = 'Read /t/mail/abc and do that.';
@@ -256,7 +258,7 @@ describe('the typed wake: one line into an empty idle box', () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
     expect(out.delivered).toBe(false);
-    expect(out.reason).toBe('the first read showed unsent, not an empty idle prompt; nothing was typed');
+    expect(out.reason).toBe('the box held a draft; it was kept in a file and no Enter was pressed');
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -367,7 +369,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 
       const firstRead = wakeFake(() => frame);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'muse', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -413,7 +415,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 
       const firstRead = wakeFake(() => draft);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'muse', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -466,7 +468,7 @@ describe('the typed wake: one line into an empty idle box', () => {
 
       const firstRead = wakeFake(() => workingFrame);
       const outFirst = await deliverTypedWake(firstRead.host, 'pane-1', LINE, 'muse', FAST);
-      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+      expect(outFirst).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
       expect(firstRead.typed).toEqual([]);
       expect(firstRead.enters).toBe(0);
 
@@ -602,7 +604,7 @@ describe('the typed wake: a line already in the box is pressed into, never typed
   test('a working screen holding the line on the first look is still refused, not pressed', async () => {
     const pane = wakeFake(() => workingHolding(LINE));
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'muse', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed working, not an empty idle prompt; nothing was typed' });
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the screen stayed working until the bound; nothing was typed' });
     expect(pane.enters).toBe(0);
   });
 
@@ -797,7 +799,7 @@ describe('the typed wake spaces its two opening reads by its own measured settle
 });
 
 describe('the typed wake is a profile word', () => {
-  test('the word is closed, and only Muse, Cursor, Antigravity, Grok and Codex declare it', () => {
+  test('the word is closed, and only Muse, Cursor, Antigravity, Grok, Codex and Gemini declare it', () => {
     expect(typedWakeKey('typed_wake: screen')).toBe('screen');
     expect(typedWakeKey('cli: muse')).toBeNull();
     expect(() => typedWakeKey('typed_wake: typing')).toThrow(/typed_wake/);
@@ -806,7 +808,8 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.typedWake).toBe('screen');
     expect(profileFor('grok')?.typedWake).toBe('screen');
     expect(profileFor('codex')?.typedWake).toBe('screen');
-    for (const cli of ['claude-code', 'gemini', 'jules']) {
+    expect(profileFor('gemini')?.typedWake).toBe('screen');
+    for (const cli of ['claude-code', 'jules']) {
       expect(profileFor(cli)?.typedWake, cli).toBeNull();
     }
   });
@@ -819,7 +822,8 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.watchWake).toBe(true);
     expect(profileFor('grok')?.watchWake).toBe(true);
     expect(profileFor('codex')?.watchWake).toBe(true);
-    for (const cli of ['claude-code', 'gemini', 'jules']) {
+    expect(profileFor('gemini')?.watchWake).toBe(true);
+    for (const cli of ['claude-code', 'jules']) {
       expect(profileFor(cli)?.watchWake, cli).toBe(false);
     }
     // The bound is the loader's default unless a profile names one, and the shipped ones name none.
@@ -829,6 +833,7 @@ describe('the typed wake is a profile word', () => {
     expect(profileFor('antigravity')?.watchWakeTries).toBe(3);
     expect(profileFor('grok')?.watchWakeTries).toBe(3);
     expect(profileFor('codex')?.watchWakeTries).toBe(3);
+    expect(profileFor('gemini')?.watchWakeTries).toBe(3);
   });
 
   test('the wake settle is a profile setting with a floor', () => {
@@ -857,13 +862,14 @@ describe('the typed wake is a profile word', () => {
     // call that lists the waiting messages: the typed line never carries the id `inbox_read`
     // takes, so the read is always reached through `inbox_check`.
     expect(profileFor('cursor')?.readHint).toBe('Read it with: call inbox_check now.');
+    expect(profileFor('gemini')?.readHint).toBe('Read it with: call inbox_check now.');
     // Antigravity has no inbox_check tool. Its wake names the drops read.
     expect(profileFor('antigravity')?.readHint).toBe('Read it with: run team drops --read');
     expect(profileFor('antigravity')?.wake).toBe('agent-prompt');
     expect(profileFor('grok')?.wake).toBe('agent-prompt');
     // Muse types too, but reads with the drops command: the shipped sentence stands, as it does
     // for a profile that declares no hint at all.
-    for (const cli of ['muse', 'claude-code', 'codex', 'grok', 'gemini', 'jules']) {
+    for (const cli of ['muse', 'claude-code', 'codex', 'grok', 'jules']) {
       expect(profileFor(cli)?.readHint, cli).toBeNull();
     }
   });
@@ -951,10 +957,14 @@ describe('team send: the typed wake', () => {
     const io = owner(made.root);
     expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: delivered (typed wake)\n');
-    // One line, one Enter, and the line is the trigger that reads the drop, never the body.
-    // Muse has no MCP inbox, so its profile declares no `read_hint` and the shipped sentence
-    // stands: the drop read is this seat's fastest path.
-    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: team drops --read.']);
+    // One wake, one Enter, and the wake is the readable body itself: the sender header, then the
+    // message, drawn across the composer's rows. Muse has no MCP inbox, so a body within the
+    // typed-wake bound is typed in full and the seat reads it without a drops call.
+    // It ends with the reader line: the record's id, which `team reply` and `team ack` take.
+    expect(pane.typed).toHaveLength(1);
+    // A typed wake keeps it on the body's last row: the composer draws a few rows only.
+    const id = /↩ team reply ([0-9a-f-]{36})$/.exec(pane.typed[0]!)?.[1] ?? 'none';
+    expect(pane.typed[0]).toBe(`the owner · 2026-10-05 04:00Z · admitted: owner\n\nhello ↩ team reply ${id}`);
     expect(pane.enters).toBe(1);
     // The record was written under the seat lock before the line was typed.
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');
@@ -971,7 +981,7 @@ describe('team send: the typed wake', () => {
     }
   });
 
-  test('a wake that cannot deliver leaves the message in the bus inbox, and the sender is told so', async () => {
+  test('a wake that cannot deliver leaves the message in the bus inbox, and the sender is told it was not delivered', async () => {
     const made = museWorld();
     const pane = wakeFake(() => UNSENT);
     const host = fake(made, {
@@ -979,18 +989,25 @@ describe('team send: the typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['muse', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nmuse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the first read showed unsent, not an empty idle prompt; nothing was typed); nothing wakes muse while it is idle except a send-time typed wake and the watch\'s typed retry once a message passes its unread window, into an empty composer; a person or a restart must give it a turn\n');
-    expect(io.err).toBe(queuedLine('muse', NO_EVENT_ADAPTER_TOOK_IT));
+    // The box holds a draft, so the wake types nothing. No leg behind the typed leg takes the
+    // send either: the record stays unread in the inbox and the sender is told it was not
+    // delivered, exit 1.
+    expect(await runSend(['muse', 'hello'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain("team send: muse: not delivered: no live route; kept in muse's inbox (id ");
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
+    const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    expect(existsSync(join(drops, `${records[0]}.read.json`))).toBe(false);
     const history = readHistory('acme', made.root, host.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
       expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'queued, not woken', via: 'drop' });
+      expect(history.entries[0]).toMatchObject({ to: 'muse', outcome: 'not delivered', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
-        'typed: the first read showed unsent, not an empty idle prompt; nothing was typed',
+        'typed: the box held a draft; it was kept in a file and no Enter was pressed',
       ]);
     }
   });
@@ -1006,19 +1023,24 @@ describe('team send: the typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    // A Claude Code seat has no typed wake at all: nothing is read or typed, the record stays
+    // unread in its inbox, and the sender is told it was not delivered.
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain("team send: lead: not delivered: no live route; kept in lead's inbox (id ");
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
     const history = readHistory('acme', made.root, host.home);
     expect(history.ok).toBe(true);
     if (history.ok) {
+      expect(history.entries[0]).toMatchObject({ to: 'lead', outcome: 'not delivered', via: 'drop' });
       expect(history.entries[0]?.failed).toEqual([
         "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
       ]);
     }
   });
 
-  test('a long summary and multi-line body on Muse truncates the header to fit <= 80 chars, keeps the drops hint whole, and never types the body', async () => {
+  test('a long summary and multi-line body on Muse keeps the typed line <= 80 chars, the too-long read hint whole, and never types the body', async () => {
     const made = museWorld();
     const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
     const host = fake(made, {
@@ -1031,15 +1053,60 @@ describe('team send: the typed wake', () => {
     expect(pane.typed).toHaveLength(1);
     const typedLine = pane.typed[0] as string;
     expect(typedLine.length).toBe(80);
-    expect(typedLine.endsWith(' Read it with: team drops --read.')).toBe(true);
-    expect(typedLine.startsWith('Message from owner (owner@acme): SUMMARY-')).toBe(true);
+    // A body over the typed-wake bound falls back to the sender line and the too-long sentence,
+    // which names the drops read whole: no body, and no summary excerpt either, is typed.
+    expect(typedLine.endsWith(' Body too long; read it with: team drops --read.')).toBe(true);
+    expect(typedLine.startsWith('Message from owner (owner@acme)…')).toBe(true);
     expect(typedLine).not.toContain('\n');
+    expect(typedLine).not.toContain('SUMMARY-');
     expect(typedLine).not.toContain('SECOND-LINE-BODY-SECRET');
     expect(typedLine).not.toContain('THIRD-LINE-BODY-SECRET');
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
     expect(recordBody(join(drops, records[0] as string))).toBe(filed(longBody));
+  });
+
+  test('a send-side typed wake that failed leaves its history line saying whether keys went in, and the next reading follows it', async () => {
+    // Keys went in and the line was not taken: submitted.
+    {
+      const made = museWorld();
+      const pane = wakeFake((read, enters, typed) => {
+        if (read < 2) return IDLE;
+        const line = typed[typed.length - 1] ?? '';
+        return enters === 0 ? holding(line) : workingHolding(line);
+      });
+      const host = fake(made, { agents: () => [{ name: 'muse', pane: 'pane-1' }], typedWake: () => pane.host });
+      expect(await runSend(['muse', 'check held'], owner(made.root), host)).toBe(1);
+      const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+      const msgId = readdirSync(drops).filter((name) => !name.includes('.'))[0]!;
+      const history = readHistory('acme', made.root, host.home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        const lines = history.entries.filter((entry) => entry.id === msgId);
+        expect(lines[lines.length - 1]?.wake_keys_sent).toBe(true);
+        expect(existsSync(join(drops, `${msgId}.wake`))).toBe(false);
+        expect(wakeAttemptOf(drops, msgId, () => lines)).toBe('submitted');
+      }
+    }
+    // The box held a draft, so the wake typed nothing: refused, not "no wake" and not submitted.
+    {
+      const made = museWorld();
+      const pane = wakeFake(() => holding('a draft of its own'));
+      const host = fake(made, { agents: () => [{ name: 'muse', pane: 'pane-1' }], typedWake: () => pane.host });
+      await runSend(['muse', 'check draft'], owner(made.root), host);
+      expect(pane.typed).toEqual([]);
+      const drops = join(made.dir, 'send-drops', 'acme', 'muse');
+      const msgId = readdirSync(drops).filter((name) => !name.includes('.'))[0]!;
+      const history = readHistory('acme', made.root, host.home);
+      expect(history.ok).toBe(true);
+      if (history.ok) {
+        const lines = history.entries.filter((entry) => entry.id === msgId);
+        expect(lines.length).toBeGreaterThan(0);
+        expect(lines[lines.length - 1]?.wake_keys_sent).toBe(false);
+        expect(wakeAttemptOf(drops, msgId, () => lines)).toBe('refused');
+      }
+    }
   });
 
   test('independent adversarial: line held while working through bound in send is not delivered, never retyped, and message stays unread; box cleared or partial line mid-poll refuses', async () => {
@@ -1055,8 +1122,10 @@ describe('team send: the typed wake', () => {
       typedWake: () => pane.host,
     });
     const io = owner(made.root);
-    expect(await runSend(['muse', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('muse: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
+    // 1345 never-drop: a typed wake that stays working through the bound is terminal — the
+    // record is kept in the inbox, the sender is told `not delivered: wake not taken`, exit 1.
+    expect(await runSend(['muse', 'check held'], io, host)).toBe(1);
+    expect(io.err).toContain('team send: muse: not delivered: wake not taken; kept in muse\'s inbox');
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(1);
     const drops = join(made.dir, 'send-drops', 'acme', 'muse');

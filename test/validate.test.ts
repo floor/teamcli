@@ -93,7 +93,7 @@ describe('the complete example of the RFC', () => {
   });
 
   test('values with units are read into seconds, percent and bytes', () => {
-    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 300, idleOwner: 900, blindAfter: 300, idleRepeat: 1200, unsentAfter: 60, unreadAfter: 600, quotaMarks: [50, 75, 90] });
+    expect(team.watch).toMatchObject({ interval: 120, idleFirst: 300, idleOwner: 900, blindAfter: 300, idleRepeat: 1200, unsentAfter: 60, unreadAfter: 600, leadUnreadAfter: 180, quotaMarks: [50, 75, 90] });
     expect(team.machine).toEqual({
       loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
       swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
@@ -362,7 +362,6 @@ const refusals: [string, string, RegExp][] = [
   ['a display without the version token', `${minimal}    display: Claude Opus 15.5\n`, /display must contain the version "5\.5" as a token/],
   ['an absolute cwd', `${minimal}    cwd: /srv/acme\n`, /cwd must be relative/],
   ['a home cwd', `${minimal}    cwd: ~/Code/acme\n`, /cwd must be relative/],
-  ['a cwd outside the project and trust', `${minimal}    cwd: ../other\n`, /outside the project and matches no trust path/],
   ['a parked flag that is not a boolean', `${minimal}    parked: "yes"\n`, /parked must be true or false/],
   ['a count below 1', `${minimal}    count: 0\n`, /count must be a whole number, 1 or more/],
   ['an unknown mode', change(minimal, 'mode: shared', 'mode: both'), /workspace.mode must be one of: worktree, shared/],
@@ -405,6 +404,12 @@ describe('every refusal of § 2 names its line', () => {
       for (const line of found) expect(line).toMatch(/^\d+: /);
     });
   }
+});
+
+test('a cwd outside the project and trust loads and marks only that seat', () => {
+  const loaded = valid(`${minimal}    cwd: ../other\n`);
+  expect(loaded.team.seats).toHaveLength(1);
+  expect(loaded.team.seats[0]).toMatchObject({ name: 'lead', cwd: '../other', cwdOutside: true });
 });
 
 describe('a relative entry in an otherwise migrated file', () => {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { activate } from '../src/queue/floor.ts';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -904,6 +905,34 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
     });
   });
 
+  test('the Claude adapter (F11): an E7b-active receiving root walks no socket route; the next route takes it with no dial', async () => {
+    const scene = createScene({ claudeInbound: 'accept' });
+    expect(activate(scene.root, { home: scene.home, build: 'b', actors: () => [{ kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 }] }).kind).toBe('activated');
+    const msgId = '55555555-6666-4777-8888-99999999aaaa';
+    const signed = makeSignedMessage(scene, msgId, 'worker-cursor', 'From lead@acme\n\nActive root relay test.');
+    const sockPath = createFreshSocketFile(scene, 'cursor-active.sock', NOW.getTime());
+    let dialCalls = 0;
+    const answer = await handleDaemonRelaySend(
+      {
+        route: scene.route, team: scene.team, home: scene.home, record: signed,
+        routes: ['socket', 'headless-resume', 'durable-copy'], socketPath: sockPath, socketRuntime: 'claude-code',
+        agentSession: CURSOR_SESSION, caller: { kind: 'seat', name: 'lead', pane: '%1' }, now: () => NOW,
+      },
+      {
+        dial: async () => {
+          dialCalls += 1;
+          return { ok: true } as never;
+        },
+        headlessSpawn: async () => ({ status: 0, stdout: '{"result":"ok"}\n', stderr: '' }),
+      },
+    );
+    expect(dialCalls).toBe(0);
+    expect(answer.ok).toBe(true);
+    if (!answer.ok) return;
+    expect(answer.attempts.map((a) => a.route)).not.toContain('socket');
+    expect(answer.deliveredRoute).toBe('headless-resume');
+  });
+
   test('skips would-hold Codex native route without spawning, falls through to durable-copy as held, and fires delayed escalation via sweepFallbackEscalations', async () => {
     const scene = createScene();
     const msgId = '66666666-7777-4888-8999-000000000000';
@@ -1228,7 +1257,8 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
     });
 
     // 4. The launch attests accept (the generated settings file is on its line) and team.yaml
-    //    omits inbound -> the launch is the authorization; the socket is eligible.
+    //    omits inbound -> the socket is an opt-in the team file declares (comms roadmap,
+    //    2026-11-17), so the launch alone authorizes nothing and the socket is not eligible.
     const missingTeamWordScene = createScene({
       claudeTeamInbound: null,
       claudeInbound: 'accept',
@@ -1242,8 +1272,8 @@ describe('daemon relay send handler and fallback walk (handleDaemonRelaySend)', 
     });
     expect(missingTeamSelect.ok).toBe(true);
     if (!missingTeamSelect.ok) return;
-    expect(missingTeamSelect.plan.socketEligible).toBe(true);
-    expect(missingTeamSelect.plan.socketIneligibleReason).toBeNull();
+    expect(missingTeamSelect.plan.socketEligible).toBe(false);
+    expect(missingTeamSelect.plan.socketIneligibleReason).toBe("the receiving seat's team file does not declare inbound accept");
 
     // 5. A launch this build did not write (a wrapper's own --settings, no generated file) is
     //    not attested: with team.yaml omitting inbound, the team file's word is still required.

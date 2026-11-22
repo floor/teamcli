@@ -2,6 +2,7 @@
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
 import { allDimAfter, colourAfter, dropPlainTail, hasSgr, stripSgr } from '../ansi.ts';
+import { figuresOf } from '../profiles/quota.ts';
 import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
@@ -403,6 +404,26 @@ function resetOf(lines: string[], region?: Set<number>): Reset | null {
   return null;
 }
 
+/** A usage-limit line above the current prompt is the transcript, not the seat's state, when
+ *  every window the status row shows has quota left. The row is repainted on every refresh,
+ *  so it is the newer reading. One window with none left keeps the wall, as does a row the
+ *  profile does not read. A prompt the composer cannot read leaves the wall too. */
+function limitAbovePromptIsHistory(
+  data: ScreenData,
+  plain: string[],
+  styled: string[],
+  tick: () => boolean,
+  expectedCwd?: string | null,
+  home?: string,
+): boolean {
+  const patterns = data.quota;
+  if (patterns === undefined || patterns.length === 0) return false;
+  const hit = compose(data, plain, styled, tick, expectedCwd, home);
+  if (hit.kind !== 'idle' && hit.kind !== 'unsent') return false;
+  const figures = figuresOf(patterns, statusRowOf(data, plain, { cwd: expectedCwd, home }));
+  return figures.length > 0 && figures.every((figure) => figure.left > 0);
+}
+
 function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>, reason?: string): Screen {
   if (kind === 'rate limit') return { kind, reset: resetOf(lines, region), ...(reason === undefined ? {} : { reason }) };
   return { kind };
@@ -456,7 +477,10 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       const fn = getProfileFn(data.profile, name);
       if (fn !== undefined) {
         const outcome = evalPredicate(fn, plain);
-        if (outcome === 'match') return asScreen(kind, plain, undefined, stage?.reason);
+        if (outcome === 'match') {
+          if (name === 'unknown') return { kind: 'unknown', provenance: 'profile' };
+          return asScreen(kind, plain, undefined, stage?.reason);
+        }
         if (outcome === 'fail') return { kind: 'unknown' };
       }
       if (stage) {
@@ -476,7 +500,12 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
               && working === 'cluster'
               && staleWorkingAboveIdle(data, plain, lines, tick, expectedCwd, home)
             ) continue;
+            // A limit line above a readable prompt is history when every window on the status
+            // row shows quota left. Any window with none left, or no readable prompt, keeps
+            // the wall.
+            if (name === 'rate_limit' && limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home)) continue;
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
+            if (name === 'unknown') return { kind: 'unknown', provenance: rule.added === true ? 'custom' : 'profile' };
             return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
         }
@@ -716,7 +745,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
           for (const rule of stage.rules) {
             const hit = ruleMatches(data, plain, rule, tick, live, edge);
             if (hit === 'stop') return { kind: 'unknown' };
-            if (hit) return { kind: 'unknown' };
+            if (hit && !(kind === 'rate_limit' && limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home))) return { kind: 'unknown' };
           }
         }
       }
@@ -752,13 +781,21 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         if (hit) return { kind: 'unknown' };
       }
     }
-    // A provider error or a rate limit above an idle box is not a free composer: the box read
-    // stays unknown, the same as a dialog, so nothing types from the composer alone.
-    for (const stage of [data.provider_error, data.rate_limit]) {
-      if (!stage) continue;
-      for (const rule of stage.rules) {
+    // A provider error above an idle box is not a free composer: the box read stays unknown,
+    // the same as a dialog, so nothing types from the composer alone. A rate-limit line above
+    // the current prompt is history when every window on the status row shows quota left,
+    // and the composer then reads as the prompt it is. Any window with none left leaves it.
+    if (data.provider_error) {
+      for (const rule of data.provider_error.rules) {
         const hit = ruleMatches(data, plain, rule, tick, live, edge);
         if (hit === 'stop' || hit) return { kind: 'unknown' };
+      }
+    }
+    if (data.rate_limit) {
+      for (const rule of data.rate_limit.rules) {
+        const hit = ruleMatches(data, plain, rule, tick, live, edge);
+        if (hit === 'stop') return { kind: 'unknown' };
+        if (hit && !limitAbovePromptIsHistory(data, plain, lines, tick, expectedCwd, home)) return { kind: 'unknown' };
       }
     }
 
@@ -794,7 +831,17 @@ export function composerBox(data: ScreenData, lines: string[], options?: ScreenO
   const suffix: RegExp | null | undefined = 'stripSuffix' in data.composer ? data.composer.stripSuffix : undefined;
   if (suffix) rest = rest.replace(suffix, '');
   const indent = found[0].length + rest.length - rest.trimStart().length;
-  const rows = hit.rows ?? [];
+  // A bordered box draws its side on every row it wraps the text onto, not only the input row:
+  // Grok Build 1.0.77 wraps a long line as `  │   more text` under `  │ ❯ text` (measured
+  // 2026-11-12 on a 300-byte line). The side is the box's frame, so it reads as the indent
+  // it stands in; the text after it is compared as before. A row without that side stays as it
+  // is, and the read-back refuses it.
+  const side = /^\s*[│┃|]/.exec(found[0])?.[0];
+  const rows = (hit.rows ?? []).map((row) => {
+    if (side === undefined || !row.startsWith(side)) return row;
+    const inner = ' '.repeat(side.length) + row.slice(side.length);
+    return suffix ? inner.replace(suffix, '') : inner;
+  });
   // The pane draws empty rows of its own under the text, inside the box's frame — the drop
   // before the status line, or before the closing rule. The captures name them per profile
   // (`frame_rows`), and only those are stripped: they are the box's frame, not its content.
@@ -1444,10 +1491,16 @@ function statusLast(
   const opensOnPrompt = input === 0 && /^ {2}→/u.test(lines[input] ?? '');
   let end = status;
   if (border && input > 0 && border.top.test(above)) {
-    if (status - 1 <= input) return { kind: 'unknown' };
-    const under = lines[status - 1] ?? '';
+    // The pane's own rows (`own_rows`: the background-task count) may stand between the frame's
+    // bottom row and the status row, as a finished turn with a task draws them: `▀…`, `  1 task`,
+    // then the status row. Nothing else may.
+    const ownBelow = 'ownRows' in composer ? composer.ownRows ?? [] : [];
+    let bottomAt = status - 1;
+    while (bottomAt > input && ownBelow.some((pattern) => pattern.test(lines[bottomAt] ?? ''))) bottomAt--;
+    if (bottomAt <= input) return { kind: 'unknown' };
+    const under = lines[bottomAt] ?? '';
     if (!border.bottom.test(under) || under.length !== above.length) return { kind: 'unknown' };
-    if ((lines[status - 2] ?? '').trim() === '') return { kind: 'unknown' };
+    if ((lines[bottomAt - 1] ?? '').trim() === '') return { kind: 'unknown' };
     const statusLine = lines[status] ?? '';
     if (under.length !== statusLine.length + 1) return { kind: 'unknown' };
     if (!composer.statusLine.some((re) => anchored(re.source) && re.test(statusLine))) {
@@ -1458,7 +1511,7 @@ function statusLast(
     for (let i = status + 2; i < lines.length; i++) {
       if ((lines[i] ?? '').trim() !== '') return { kind: 'unknown' };
     }
-    end = status - 1;
+    end = bottomAt;
   } else if (!opensOnPrompt && (input === 0 || above.trim() !== '')) {
     return { kind: 'unknown' };
   }
@@ -1684,7 +1737,9 @@ function floorLast(lines: string[], chrome: RegExp[], tick: () => boolean): fals
 /** The unknown screen a floor hit leaves. A budget stop carries no line: nothing was read to
  *  quote, and the screen is unknown all the same. */
 function floorScreen(marked: false | 'stop' | string): Screen {
-  return typeof marked === 'string' && marked !== 'stop' ? { kind: 'unknown', matched: marked } : { kind: 'unknown' };
+  return typeof marked === 'string' && marked !== 'stop'
+    ? { kind: 'unknown', matched: marked, provenance: 'floor' }
+    : { kind: 'unknown' };
 }
 
 /** A composer read that failed is unknown whatever the floor says. The floor is asked only for

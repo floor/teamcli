@@ -13,6 +13,10 @@ unattended:
   - --dangerously-skip-permissions
 rules:
   option: --append-system-prompt
+  # The rules as a file instead of their whole text on the line (Claude Code 2.1.322 takes it;
+  # measured 2026-11-12 with -p: the model answered from a rule only the file held). The file is
+  # named by the text's hash, under TeamCLI's machine folder (src/launch/rules-text.ts).
+  file_option: --append-system-prompt-file
 # The delivery class a run measured: the development channel (src/mcp/channel.ts) and the
 # cross-session socket (src/send/inbound.ts) each wake an idle seat. The settings hooks mark turn
 # boundaries, so a launch carrying neither adapter reads its inbox only when it takes a turn.
@@ -136,13 +140,15 @@ status_model:
 # credential item the machine must hold, and the model ids the provider offers. The naming of the
 # credential store belongs to this adapter and to no other part of the tool: a profile that does
 # not declare these blocks moves between providers only by copying a seat, and `team swap` says
-# so. `{model}` is the model id the swap runs, `{credential}` the item beside it.
+# so. `{model}` is the model id the swap runs, `{credential}` the item beside it. The key itself is
+# the word `{secret:<item>}`: the launch fills it with the machine's secret store's own lookup of
+# the item (src/launch/secret-words.ts), so a team file names the item and no store command.
 vendors:
   - name: deepseek
     credential: deepseek-api-key
     env:
       - 'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic'
-      - 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)'
+      - 'ANTHROPIC_AUTH_TOKEN={secret:{credential}}'
       - 'ANTHROPIC_MODEL={model}'
     models:
       - id: deepseek-flash
@@ -153,7 +159,7 @@ vendors:
     credential: glm-api-key
     env:
       - 'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic'
-      - 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)'
+      - 'ANTHROPIC_AUTH_TOKEN={secret:{credential}}'
       - 'ANTHROPIC_MODEL={model}'
     models:
       - id: glm-5.3
@@ -164,7 +170,7 @@ vendors:
     credential: kimi-api-key
     env:
       - 'ANTHROPIC_BASE_URL=https://api.kimi.ai/coding/'
-      - 'ANTHROPIC_AUTH_TOKEN=$(/usr/bin/security find-generic-password -s {credential} -a "$USER" -w)'
+      - 'ANTHROPIC_AUTH_TOKEN={secret:{credential}}'
       - 'ANTHROPIC_MODEL={model}'
     models:
       - id: kimi-k2.5

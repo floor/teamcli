@@ -1,7 +1,8 @@
 // The mailbox router child. It answers a tick with a heartbeat and then waits.
 // It holds no key and signs nothing: an ask is carried as a record the asking
 // principal already signed.
-import { readFileSync, unlinkSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { unlinkSync } from '../../host/guarded-fs.ts';
 import { createInterface } from 'node:readline';
 
 /** The child has no token it can prove was minted for this start: it refuses and says so. */

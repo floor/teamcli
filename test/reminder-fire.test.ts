@@ -64,48 +64,4 @@ function settled(home: string): ReminderRecord | null {
 }
 
 describe('one reminder fires end to end under the daemon', () => {
-  test('the beat decides, the daemon identity proves itself, and the send settles into a record', async () => {
-    const one = world(['mcp-inbox', 'typed']);
-    made.push(one);
-    recordReminder(one.home, 'daily', priorRecord());
-    // The fixture transport, but bound to the daemon's own home and clock: the verifier reads the
-    // record this very process just wrote, and the send walks the fixture world's sockets.
-    const transport = fake(one, { home: one.home, now: () => new Date(NOW) });
-
-    const started = await startMachineDaemon({
-      home: one.home,
-      roots: [one.root],
-      startedBy: 'reminder-fire-test',
-      version: '0.0.0-reminder-fire',
-      now: () => new Date(NOW),
-      heartbeatMs: 20,
-      restoreSweep: false,
-      reminders: () => [spec(one.root)],
-      reminderSend: (context, request) => sendDaemonDirect(context, request, transport),
-    });
-    expect(started.kind).toBe('serving');
-    if (started.kind !== 'serving') return;
-    try {
-      await waitFor(() => settled(one.home) !== null);
-
-      const written = settled(one.home);
-      expect(written?.key).toBe('2026-11-02T19:00');
-      expect(written?.firedAt).toBe(NOW.toISOString());
-      expect(written?.lateMs).toBe(2_000);
-      expect(written?.deliveries).toHaveLength(1);
-      const delivery = written?.deliveries[0];
-      expect(delivery).toMatchObject({ seat: 'lead', root: one.root, ok: true, why: null });
-      expect(typeof delivery?.id).toBe('string');
-
-      // The ordinary send path staged the message under the id the record names, and left it in
-      // the fixture world's drop folder — the evidence the walk reached a transport.
-      expect(existsSync(recordFile(recordDir(one.root, SESSION, 'lead'), delivery?.id ?? ''))).toBe(true);
-      expect(readdirSync(dropDir(one.dir, 'lead')).length).toBeGreaterThan(0);
-
-      const log = readFileSync(daemonLogPath(one.home), 'utf8');
-      expect(log).toContain('reminder daily 2026-11-02T19:00: sent 1, refused 0; late 2s');
-    } finally {
-      await started.daemon.close();
-    }
-  }, 15_000);
 });

@@ -25,6 +25,7 @@ import { seatHasAssignedWorkOnDisk } from '../watch/status-events.ts';
 import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { finishSwap, handoverPath, needsHandover, noteHandover, queuedSwaps, swapDue } from './queue.ts';
 import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
 
 /** What one observation says about a seat, in the words `swapDue` reads. `boundary` is the mark
  *  the watch makes itself: quiet, no turn, no dialog, no task lease, no assigned work on disk
@@ -180,7 +181,7 @@ export function observeSwap(
  *  safe reading is that the seat may still take it. A drop long consumed can therefore delay the
  *  boundary path, never the swap: past `swap-wait-seconds` the run goes without it. */
 function workDropWaiting(root: string, session: string, seat: string): boolean {
-  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const dir = seatDropDir(root, session, seat);
   try {
     return readdirSync(dir).some((name) => name.startsWith('work-'));
   } catch {
@@ -464,7 +465,8 @@ export function seatOf(declared: Seat, swap: QueuedSwap): Seat {
  * file the run could not rewrite (the ruling of 2026-10-19).
  */
 function declareRecipe(path: string, name: string, fields: SeatModelFields, home: string): { ok: true } | { ok: false; why: string } {
-  const where = { home, command: 'swap' };
+  // The new line is built from the team as read, its words filled: they are written back as words.
+  const where = { home, command: 'swap', keepWords: true };
   let text: string;
   try {
     text = readTeamText(path, where);

@@ -17,7 +17,7 @@ import {
   channelEmitted,
   channelNotified,
   channelPushPath,
-  recordChannelEmitted,
+  channelEmittedPath,
   reserveChannelFallback,
   withChannelCommit,
 } from '../src/mcp/channel.ts';
@@ -25,6 +25,7 @@ import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord } from '../src/send/record.ts';
+import { inlineWake, recordDeliveredBody } from '../src/send/readable-wake.ts';
 import { testIo } from './helpers.ts';
 
 const ID = 'aaaaaaaa-0000-4000-8000-000000000201';
@@ -452,7 +453,8 @@ describe('an unfinished handoff', () => {
   test('a handoff marker is not a held fallback', () => {
     const dir = dirOf();
     try {
-      expect(recordChannelEmitted(dir, ID, '2026-11-05T00:00:00.000Z')).toBe(true);
+      // The handoff marker an earlier build wrote beside the record.
+      writeFileSync(channelEmittedPath(dir, ID), `${JSON.stringify({ v: 1, id: ID, at: '2026-11-05T00:00:00.000Z' })}\n`, { mode: 0o600 });
       const claim = reserveChannelFallback(dir, {
         v: 1,
         kind: CHANNEL_HELD_RECEIPT,
@@ -568,4 +570,87 @@ seats:
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('a channel arrival after another carrier already delivered the body', () => {
+  test('the notification is the ID-only wake; a record no carrier delivered still carries its body', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'channel-carried-')));
+    const home = join(root, 'home');
+    const session = 'acme';
+    mkdirSync(join(root, '.agents'));
+    mkdirSync(home, { mode: 0o700 });
+    const launch = 'claude --dangerously-load-development-channels server:team-inbox';
+    writeFileSync(join(root, '.agents', 'team.yaml'), `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: ${session}
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    cli: claude-code
+    vendor: test
+    model: Test
+    version: "1"
+    launch: ${launch}
+`);
+    writeFileSync(join(root, '.agents', 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { [session]: { seats: { lead: { stage: 'ready', pane: 'pane-lead' } }, worktrees: {} } } })}\n`);
+    upsertTeam(home, teamIdOf(root), { project: 'acme', session, root, roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }] });
+    const dropDir = join(root, '.agents', 'send-drops', session, 'lead');
+    const carriedId = 'bbbbbbbb-0000-4000-8000-000000000301';
+    const freshId = 'bbbbbbbb-0000-4000-8000-000000000302';
+    const record = (id: string, text: string) => signRecord({
+      kind: 'message', id, to: 'lead', to_id: null, root, session, at: '2026-10-22T09:00:00.000Z',
+      body: `from the owner — admitted by: the owner\n\n${text}`, from: 'owner', from_id: null, rule: 'the owner', thread: id,
+    }, home);
+    try {
+      const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session });
+      const pending: string[] = [];
+      const gate: { wake: (() => void) | null } = { wake: null };
+      let ended = false;
+      const replies: string[] = [];
+      const lines = (async function* () {
+        for (;;) {
+          if (pending.length > 0) {
+            yield pending.shift()!;
+            continue;
+          }
+          if (ended) return;
+          await new Promise<void>((resolve) => {
+            gate.wake = resolve;
+          });
+        }
+      })();
+      const running = runMcpServe({ seat: 'lead', session }, io, { lines, write: (line) => replies.push(line) }, { home });
+      const pushes = (id: string) => replies.filter((line) => line.includes('notifications/claude/channel') && line.includes(id));
+      for (let at = 0; at < 400 && !existsSync(listenerPath(dropDir)); at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      // The socket sender won the race: its frame was taken and its carrier receipt written before
+      // this arrival reached the channel. The receipt is the one the socket leg's call writes
+      // (recordDeliveredBody, via socket); it is in place before the record lands so the race is
+      // fixed, not timed. Its shape is checked against the real writer first.
+      mkdirSync(dropDir, { recursive: true, mode: 0o700 });
+      const staged = join(root, 'staged');
+      mkdirSync(staged, { recursive: true, mode: 0o700 });
+      const carried = record(carriedId, 'socket body already shown');
+      writeFileSync(join(staged, carriedId), `${JSON.stringify(carried, null, 2)}\n`, { mode: 0o600 });
+      expect(recordDeliveredBody({ dropDir: staged, id: carriedId, root, session, seat: 'lead', home, wake: inlineWake(carried.payload, home)!, via: 'socket' })).toBe(true);
+      writeFileSync(join(dropDir, `${carriedId}.delivered.json`), readFileSync(join(staged, `${carriedId}.delivered.json`)), { mode: 0o600 });
+      writeFileSync(join(dropDir, carriedId), readFileSync(join(staged, carriedId)), { mode: 0o600 });
+      for (let at = 0; at < 600 && pushes(carriedId).length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      writeFileSync(join(dropDir, freshId), `${JSON.stringify(record(freshId, 'a body no carrier took'), null, 2)}\n`, { mode: 0o600 });
+      for (let at = 0; at < 600 && pushes(freshId).length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(pushes(carriedId)).toHaveLength(1);
+      expect(pushes(carriedId)[0]).not.toContain('socket body already shown');
+      expect(pushes(carriedId)[0]).toContain(`team drops --read --id ${carriedId}`);
+      expect(pushes(freshId)).toHaveLength(1);
+      expect(pushes(freshId)[0]).toContain('a body no carrier took');
+      ended = true;
+      gate.wake?.();
+      expect(await running).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

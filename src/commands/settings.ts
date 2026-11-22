@@ -23,6 +23,7 @@ import { agentIdOf, readSeatSettings } from '../config/read.ts';
 import { CONFIG_KEYS, getConfigSpec } from '../config/registry.ts';
 import type { ApplyKind, ConfigKey, ConfigValue } from '../config/registry.ts';
 import { planConfigSet, planConfigUnset, seatRecordForWrite, writeConfigSet, writeConfigUnset } from '../config/sources.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import type { SignedConfigRecord } from '../config/record.ts';
 import type { PlannedConfigSetting } from '../config/sources.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
@@ -120,7 +121,11 @@ function executeRead(
 
   const home = options.home ?? homedir();
   const now = options.now ?? new Date();
-  const current = currentTeam(io.cwd, owner ? args.values.file : undefined, now, home, owner);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, seatName, io);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
+    return refuseFile(io, json, { ok: false, errors: [{ line: 0, message: binding.message }] });
+  }
+  const current = currentTeam(binding.kind === 'bound' ? binding.team.root : io.cwd, owner ? args.values.file : undefined, now, home, owner);
   if (!owner) {
     if (!current.ok || !mayReadTeam(current, io, options.gate !== undefined ? { home, gate: options.gate } : { home })) {
       if (json) {
@@ -147,6 +152,7 @@ function executeRead(
     project: team.project,
     seat,
     teamDeliveryOrder: team.deliveryOrder,
+    teamDesktopControl: team.desktopControl ?? null,
     entity: team.entity,
   });
   if (!read.ok) return sourceExit(io, json, read.refusals.map((one) => one.why));
@@ -168,7 +174,7 @@ function executeRead(
     const style = ttyStyle(io, { json });
     const lines = renderTable({
       headers: ['KEY', 'VALUE', 'SOURCE', 'APPLIES'],
-      rows: rows.map((row) => [row.key, sayConfigValue(row.value), sayConfigOrigin(row.origin), sayApply(row.applies)]),
+      rows: rows.map((row) => [row.key, sayConfigValue(row.value), sayConfigOrigin(row.origin, row.key), sayApply(row.applies)]),
       style,
     });
     io.stdout(`${lines.join('\n')}\n`);
@@ -367,6 +373,7 @@ function readSeatRows(
     project: team.project,
     seat,
     teamDeliveryOrder: team.deliveryOrder,
+    teamDesktopControl: team.desktopControl ?? null,
     entity: team.entity,
   });
   if (read.ok) return { ok: true, rows: read.rows };
@@ -719,7 +726,7 @@ function executeWrite(
     // The audit and the team file's `last_valid` copy wait for the write below: this gate answers
     // before the request is validated, and a refused or dry run writes neither.
     const lift = file === undefined
-      ? devModeOwnerLiftAtCwd(io, { command: 'settings', refusal: message, home, now, audit: 'later' })
+      ? devModeOwnerLiftAtCwd(io, { command: 'settings', gate: verb, refusal: message, home, now, audit: 'later' })
       : null;
     if (lift === null || !lift.lifted) {
       if (json) {
@@ -738,7 +745,12 @@ function executeWrite(
     if (refusal !== undefined) return fileOwnerExit(io, json, refusal);
   }
 
-  const current = currentTeam(io.cwd, file, now, home, liftAudit === null);
+  const binding = file !== undefined ? { kind: 'unbound' as const } : addressedTeam(home, io.cwd, parsed.seat, io);
+  if (binding.kind === 'ambiguous' || binding.kind === 'unreadable') {
+    return refuseFile(io, json, { ok: false, errors: [{ line: 0, message: binding.message }] });
+  }
+  const boundCwd = binding.kind === 'bound' ? binding.team.root : io.cwd;
+  const current = currentTeam(boundCwd, file, now, home, liftAudit === null);
   if (!current.ok) return refuseFile(io, json, current);
   const { team } = current;
   // A lifted run's `last_valid` copy and audit line are written together, and only after a
@@ -747,7 +759,7 @@ function executeWrite(
   const recordAdmission = (): void => {
     if (liftAudit === null) return;
     liftAudit();
-    currentTeam(io.cwd, file, now, home, true);
+    currentTeam(boundCwd, file, now, home, true);
   };
   const seat = team.seats.find((one) => one.name === parsed.seat);
   if (seat === undefined) return noSeatExit(io, json, parsed.seat, team.project);

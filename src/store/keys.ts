@@ -1,3 +1,4 @@
+import { traceBeatWork } from '../diagnostics/beat-work.ts';
 // The signing key and the per-project generations, kept outside every store a
 // seat's rules mention, in a folder of their own. A seat runs as the owner's
 // user, so it can read this key as easily as the owner can: the signature is
@@ -8,7 +9,8 @@
 // own fingerprint. No key store of the system is touched — no Keychain, no
 // prompt — only these files, under the home `team` was given.
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from 'node:crypto';
-import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { linkSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { currentRunMemo } from '../run-memo.ts';
@@ -303,7 +305,7 @@ export function verifyPayload(payload: Json, signature: string, key: KeyObject):
   const publicKey = publicObjectOf(key);
   if (publicKey === null) return false;
   try {
-    return cryptoVerify(null, bytes, publicKey, raw);
+    return traceBeatWork('signature checks (sync)', () => cryptoVerify(null, bytes, publicKey, raw));
   } catch {
     return false;
   }
@@ -337,7 +339,7 @@ export function verifyDomain(domain: string, payload: Json, signature: string, k
   const publicKey = publicObjectOf(key);
   if (publicKey === null) return false;
   try {
-    return cryptoVerify(null, bytes, publicKey, raw);
+    return traceBeatWork('signature checks (sync)', () => cryptoVerify(null, bytes, publicKey, raw));
   } catch {
     return false;
   }

@@ -170,6 +170,10 @@ describe('handleNext, file and local sources', () => {
     expect(await call(callerOf('worker'))).toEqual({ ok: true, kind: 'claimed', record: { id: 'urgent', title: 'the time-bound title', deadline: '2026-12-31T00:00:00Z' } });
   });
 
+  /** The socket is an opt-in the team file declares (`inbound: accept` on the seat): a launch's
+   *  own accept authorizes nothing by itself, so the socket scenes declare it on the worker. */
+  const SOCKET_TEAM = FILE_TEAM.replace('    name: worker\n', '    name: worker\n    inbound: accept\n');
+
   /** The launch one socket seat leaves behind for the worker: generated settings that declare
    *  accept, a registry record naming a standing socket, and — when `held` — the box's mark left
    *  under the declaration now in force. Both folders are named the way the handler reads them:
@@ -209,7 +213,7 @@ describe('handleNext, file and local sources', () => {
   test('a socket seat whose box held the last frame is offered no time-bound record either', async () => {
     const urgent = '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n';
     // Control: the recorded address stands, so the seat is push-class and takes the record.
-    project(FILE_TEAM, urgent);
+    project(SOCKET_TEAM, urgent);
     const home = socketSeat(false);
     expect(await call(callerOf('worker'), 'claim', false, {}, home)).toEqual({
       ok: true,
@@ -218,7 +222,7 @@ describe('handleNext, file and local sources', () => {
     });
     // The same launch with the box's mark under the declaration in force: the walk would not
     // dial again, so the seat is pull-on-turn and the record is not offered to it.
-    project(FILE_TEAM, urgent);
+    project(SOCKET_TEAM, urgent);
     const heldHome = socketSeat(true);
     expect(await call(callerOf('worker'), 'claim', false, {}, heldHome)).toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });
     expect(leaseNames()).toEqual([]);
@@ -232,13 +236,13 @@ describe('handleNext, file and local sources', () => {
     };
     // Control: the host's reading of the claimed pane carries the pid the record names, so the
     // recorded socket is the pane's own and the seat is push-class.
-    project(FILE_TEAM, urgent);
+    project(SOCKET_TEAM, urgent);
     const home = socketSeat(false, pid);
     expect(await call(callerOf('worker'), 'claim', false, {}, home, { shell: pid + 1, foreground: [pid] })).toEqual(expected);
     // The pane has been relaunched: the old file still stands, but the host's reading of the
     // claimed pane proves the address is not its own, so the walk would not dial it, the class
     // is pull-on-turn, and the time-bound record is not offered.
-    project(FILE_TEAM, urgent);
+    project(SOCKET_TEAM, urgent);
     const staleHome = socketSeat(false, pid);
     expect(await call(callerOf('worker'), 'claim', false, {}, staleHome, { shell: pid + 1, foreground: [pid + 7] }))
       .toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });

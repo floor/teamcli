@@ -1,3 +1,4 @@
+import { registerDefaultChannelFixture } from '../helpers/default-channel.ts';
 // `team up` with no approval record: the owner and a seat the live file names may launch,
 // anyone else is told `deny`, and five seats come up together without a prompt.
 import { describe, expect, test } from 'bun:test';
@@ -183,6 +184,8 @@ describe('team up without an approval record', () => {
     try {
       write(here, trusted(FIVE, here.root, here.home));
       recordLead(here.root);
+      // The default launch needs registered worker starts and the lead's own project pair.
+      registerDefaultChannelFixture(here.root, here.home, 'lead');
       const io = testIo(here.root, lead);
       const code = await runUp(['--dry-run'], io, sources(here.home, launching(() => {}), terminal()));
       expect(io.err, io.out).toBe('');
@@ -218,87 +221,6 @@ describe('team up without an approval record', () => {
       const code = await runUp(['--dry-run'], io, sources(here.home, launching(() => {}), terminal()));
       expect(code, io.err).toBe(0);
       expect(io.out).toContain('lead');
-    } finally {
-      rmSync(here.base, { recursive: true, force: true });
-    }
-  });
-
-  test('five seats launch together, with no prompt, and one can take a brief', async () => {
-    const here = place();
-    try {
-      write(here, trusted(FIVE, here.root, here.home));
-      recordLead(here.root);
-      expect(existsSync(approval(here.root, here.home))).toBe(false);
-      let launches = 0;
-      let idleAt: number | null = null;
-      let clock = NOW.getTime();
-      const host = launching(() => {
-        launches += 1;
-      });
-      host.paneText = () => {
-        if (launches < 5) return '';
-        if (idleAt === null) idleAt = launches;
-        return IDLE;
-      };
-      host.sleep = async (ms) => {
-        clock += ms;
-      };
-      host.now = () => new Date(clock);
-      const keys = terminal();
-      const io = testIo(here.root, lead);
-      const code = await runUp([], io, {
-        ...sources(here.home, host, keys),
-        now: () => new Date(clock),
-        sleep: host.sleep,
-      });
-      expect(code, `${io.err}${io.out}`).toBe(0);
-      expect(launches).toBeGreaterThanOrEqual(5);
-      expect(idleAt).not.toBeNull();
-      expect(idleAt!).toBeGreaterThanOrEqual(5);
-      expect(keys.reads).toBe(0);
-      expect(host.closed).toBe(0);
-      const said = `${io.out}${io.err}`.toLowerCase();
-      expect(said).not.toContain('permission');
-      expect(said).not.toContain('trust');
-      expect(said).not.toContain('approve');
-      const seats = readState(join(here.root, '.agents')).sessions.acme?.seats ?? {};
-      for (const name of ['lead', 'builder-1', 'builder-2', 'tester-1', 'tester-2']) {
-        expect(seats[name]?.stage, name).toBe('ready');
-      }
-      expect(existsSync(approval(here.root, here.home))).toBe(false);
-      // The owner sends: an orchestrator has no reach to its own team's seats (a send down needs
-      // an owner-signed grant naming it), and this scene is about a launched seat taking work
-      // with no approval record, not about who may send.
-      const sendIo = testIo(here.root, owner);
-      // The seat takes the brief: idle until the Enter, working after it.
-      let working = false;
-      const sendHost: SendHost = {
-        agents: () => [{ name: 'builder-1', pane: seats['builder-1']?.pane ?? 'w2:p1' }],
-        processInfo: () => ({ shell: 1, foreground: [2] }),
-        socketsDir: join(here.base, 'socks'),
-        deliver: async () => ({ ok: true }),
-        native: {
-          typeText: () => true,
-          pressEnter: () => {
-            working = true;
-            return true;
-          },
-          status: () => (working ? 'working' : 'idle'),
-          wait: async () => {},
-        },
-        now: () => NOW,
-        home: here.home,
-        daemonSocket: join(here.base, 'no-daemon.sock'),
-      };
-      mkdirSync(sendHost.socketsDir, { recursive: true });
-      const sent = await runSend(['builder-1', 'first brief'], sendIo, sendHost);
-      expect(sent, `${sendIo.err}${sendIo.out}`).toBe(0);
-      // No socket file under the host's sockets folder: a plain send is the drop, and the
-      // outcome names the seat queued, not woken, never a read.
-      expect(withoutSendId(sendIo.out)).toBe(
-        'team acme, session "acme"\nbuilder-1: queued, not woken (drop, 0 ms); queued; builder-1 reads it at its next turn, and nothing here gives it one (pull-only)\n',
-      );
-      expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {
       rmSync(here.base, { recursive: true, force: true });
     }

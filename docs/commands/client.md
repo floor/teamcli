@@ -11,6 +11,15 @@ folder, is refused, as is a symbolic link anywhere on it. This is where a same-u
 still read the key, and the command says so rather than implying otherwise:
 `key isolation: enforced against team panes (key file still readable by same-user processes)`.
 
+What the check reads, and where it stops. It reads every registered team's root, recorded seat
+folders, worktrees and lobbies as they are on disk, each team's root resolved once. A seat folder
+that is no path, a state or root it cannot read (a link to nothing, an unreadable folder on the
+way) refuses, naming the record and its repair; `team doctor` names the same records first. A
+registered root that is genuinely not there is passed over — no folder below it exists to hold the
+key — and `team doctor` warns about the stale entry. The check runs when the key is read, so
+it does not cover a folder created at a missing root between the check and the send, nor any
+other change a process of the same account makes in between.
+
 A key pair alone admits nothing. The owner issues a grant for it with
 [`team grant`](grant.md) `--client`, bound to the client id, the entity and the key's directory,
 expiring in at most seven days unless the owner's `client-grant-max-duration` policy says otherwise

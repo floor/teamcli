@@ -86,11 +86,11 @@ function makeFakeWakeHost(
 
 type World = { root: string; dir: string; home: string };
 
-function museTeamYaml(root: string, lobby: string, webhookExtra = ''): string {
+function museTeamYaml(root: string, lobby: string, webhookExtra = '', operator = 'helper'): string {
   return `format: 1
 project: acme
 coordinator: lead
-operator: helper
+operator: ${operator}
 session: acme
 workspace:
   mode: shared
@@ -123,7 +123,8 @@ function makeWorld(webhookExtra = ''): { made: World; team: ReturnType<typeof pa
   mkdirSync(home, { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
-  const yaml = museTeamYaml(root, lobbyDir(home), webhookExtra);
+  // These are the generic worker typed-wake scenes, not the lead/operator wake path.
+  const yaml = museTeamYaml(root, lobbyDir(home), webhookExtra, 'lead');
   writeFileSync(join(root, '.agents', 'team.yaml'), yaml);
   return {
     made: { root, dir: join(root, '.agents'), home },
@@ -387,7 +388,8 @@ describe('1. busy Muse seat going idle with a declared-grey /goal placeholder wa
         delivered: false,
         typed: false,
         tries: 0,
-        reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed',
+        // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+        reason: 'the box held a draft; it was kept in a file and no Enter was pressed',
       });
       expect(fake.typed).toEqual([]);
       expect(fake.enters).toBe(0);
@@ -650,7 +652,8 @@ describe('4. webhook seat with .posted and via: webhook is re-posted once with t
       id: MSG_A,
       to: 'helper',
       via: 'webhook',
-      outcome: 'delivered',
+      // The operator's post is a wake attempt; only its read receipt proves delivery.
+      outcome: 'awaiting receipt',
     });
 
     // Second & third unread passes: .wake marker stops dueForWake, so the webhook is never posted a third time.

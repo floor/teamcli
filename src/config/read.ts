@@ -38,6 +38,8 @@ export type SeatSettingsInput = {
   project: string;
   seat: ConfigSeatInput & { name: string };
   teamDeliveryOrder: readonly OrderWord[] | null;
+  /** The team file's own `desktop_control`, when it writes one. */
+  teamDesktopControl?: boolean | null;
   /** The loaded declaration's `entity:`, when it names one. It is the entity a team file
    *  declares, which a registry that names no entity must not hide: the entity source is still
    *  read, and one that does not verify refuses the read instead of being skipped. */
@@ -50,17 +52,25 @@ export type SeatSettingsInput = {
  *  context: the team record can carry a roster and still name no entity or project, and the
  *  project registry is then the declaration the signed sources need. */
 export function agentIdOf(home: string, root: string, seatName: string): { agentId: string | null; entity: string | null; projectId: string | null } {
+  return seatAgentOf(home, teamContextOf(home, root), seatName);
+}
+
+/** What `agentIdOf` reads for the team alone, whatever the seat: its stable ID, the entity and
+ *  project the signed sources need, and the record's roster. A caller reading many seats of one
+ *  team reads this once. */
+export type TeamContext = { teamId: string; entity: string | null; projectId: string | null; roster: readonly { seat: string; agent: string }[] };
+
+export function teamContextOf(home: string, root: string): TeamContext {
   const teamId = teamIdOf(root);
   let entity: string | null = null;
   let projectId: string | null = null;
-  let rosterAgentId: string | null = null;
+  let roster: readonly { seat: string; agent: string }[] = [];
   try {
     const record = getTeam(home, teamId);
     if (record !== null) {
       entity = record.entity;
       projectId = record.projectId;
-      const line = record.roster.find((entry) => entry.seat === seatName);
-      if (line !== undefined) rosterAgentId = line.agent;
+      roster = record.roster;
     }
   } catch {
     // A registry this build cannot read declares no entity, project or roster here; the
@@ -82,18 +92,25 @@ export function agentIdOf(home: string, root: string, seatName: string): { agent
       // single project here; the settings read reports the file it cannot read.
     }
   }
+  return { teamId, entity, projectId, roster };
+}
+
+/** The seat's agent within a team context: the roster's line, else the registry's agent. */
+export function seatAgentOf(home: string, team: TeamContext, seatName: string): { agentId: string | null; entity: string | null; projectId: string | null } {
+  const { entity, projectId } = team;
   // The roster is the team record's own word for this seat, so it wins over the registry's
   // newest agent once the project context has been resolved around it.
-  if (rosterAgentId !== null) return { agentId: rosterAgentId, entity, projectId };
+  const line = team.roster.find((entry) => entry.seat === seatName);
+  if (line !== undefined) return { agentId: line.agent, entity, projectId };
   // The agent registry knows an agent by the stable team ID, never by the team's own name.
-  const agent = findAgent(home, { team: teamId, seat: seatName });
+  const agent = findAgent(home, { team: team.teamId, seat: seatName });
   return { agentId: agent?.id ?? null, entity, projectId };
 }
 
 export function readSeatSettings(input: SeatSettingsInput): SeatSettingsRead {
   const home = input.home === undefined ? homedir() : input.home;
   if (home === null) {
-    return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder) };
+    return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder, {}, input.teamDesktopControl ?? null) };
   }
   const { agentId, entity, projectId } = agentIdOf(home, input.root, input.seat.name);
   // The declaration's own entity wins: a registry that names none must not turn the entity
@@ -111,5 +128,5 @@ export function readSeatSettings(input: SeatSettingsInput): SeatSettingsRead {
     if (source !== undefined) record.sourceFile = source;
     records[setting.key] = record;
   }
-  return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder, records) };
+  return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder, records, input.teamDesktopControl ?? null) };
 }

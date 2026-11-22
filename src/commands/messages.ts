@@ -1,3 +1,5 @@
+import { copyFor } from '../queue/handover.ts';
+import { isStampedPayload } from '../send/record.ts';
 // `team messages`: verify a record that is already waiting, publish the read receipt that proves
 // it was served, and only then print its body. The signed read receipt is the per-id gate every
 // reader shares — this command, `team drops --read` and `inbox_read` — so the receipt is written
@@ -14,8 +16,10 @@
 // it there. The older `.agents/messages/<seat>/<id>.json` store is still read, read-only, so a
 // record a previous build left verifies the same way; nothing writes it any more. The signature
 // is integrity: every seat runs as the owner-user, so it is not proof of who sent it.
+import { claimRead } from '../send/read-claim.ts';
 import { type KeyObject } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -71,8 +75,8 @@ import {
   type SignedRecord,
 } from '../send/record.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { noteUnread } from '../send/unread-hint.ts';
 import { attributedBody, attributeSenderClaim, senderReading, type SenderAttribution } from '../send/sender-claim.ts';
+import { seatDropDir, seatMailParts, sessionMailDir, type MailTree } from '../queue/mail-tree.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
@@ -141,7 +145,7 @@ export function receiptFile(root: string, seat: string, id: string): string {
 
 /** The folder a session's records live in: `<root>/.agents/send-drops/<session>/<seat>`. */
 export function recordDir(root: string, session: string, seat: string): string {
-  return join(root, '.agents', 'send-drops', session, seat);
+  return seatDropDir(root, session, seat);
 }
 
 /** One candidate file: a signed record in the transport tree, or a legacy message file. */
@@ -152,6 +156,8 @@ type Candidate = {
   path: string;
   /** The session directory the record was found under (records only). */
   session?: string;
+  /** The mail tree the record was found in (records only; src/queue/mail-tree.ts). */
+  tree?: MailTree;
 };
 
 export type Unacked = { id: string; to: string; at: string };
@@ -261,18 +267,21 @@ const WORK_PREFIX = 'work-';
  *  report marker, a receipt publisher's `.new` temp, a work nudge — is not a candidate. The names
  *  alone are returned here; whether a regular file at one is JSON is read by each caller. */
 function recordNames(root: string, session: string): Candidate[] {
-  const dir = join(root, '.agents', 'send-drops', session);
-  if (!isDir(dir)) return [];
   const out: Candidate[] = [];
-  for (const seat of readdirSync(dir).sort(compareSeatNames)) {
-    if (!NAME.test(seat)) continue;
-    const seatDir = join(dir, seat);
-    if (!isDir(seatDir)) continue;
-    for (const name of readdirSync(seatDir).sort()) {
-      if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith(WORK_PREFIX)) continue;
-      const path = join(seatDir, name);
-      if (!isFile(path)) continue;
-      out.push({ store: 'record', seat, id: name, path, session });
+  // E7b revision 3: both trees (src/queue/mail-tree.ts), legacy first.
+  for (const tree of ['legacy', 'stamped'] as const) {
+    const dir = sessionMailDir(root, session, tree);
+    if (!isDir(dir)) continue;
+    for (const seat of readdirSync(dir).sort(compareSeatNames)) {
+      if (!NAME.test(seat)) continue;
+      const seatDir = join(dir, seat);
+      if (!isDir(seatDir)) continue;
+      for (const name of readdirSync(seatDir).sort()) {
+        if (!NAME.test(name) || isRecordSidecarName(name) || name.startsWith(WORK_PREFIX)) continue;
+        const path = join(seatDir, name);
+        if (!isFile(path)) continue;
+        out.push({ store: 'record', seat, id: name, path, session, ...(tree === 'stamped' ? { tree } : {}) });
+      }
     }
   }
   return out;
@@ -342,6 +351,7 @@ export function listUnackedMessages(
   home: string,
   records?: RecordReader,
   lead?: string,
+  measure?: (source: 'drops' | 'messages', ms: number, count: number) => void,
 ): UnackedMessage[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
@@ -354,7 +364,15 @@ export function listUnackedMessages(
     realRoot = root;
   }
   const out: UnackedMessage[] = [];
-  for (const candidate of [...recordNames(root, session), ...legacyCandidates(root)]) {
+  let began = performance.now();
+  const drops = recordNames(root, session);
+  measure?.('drops', performance.now() - began, 0);
+  began = performance.now();
+  const messages = legacyCandidates(root);
+  measure?.('messages', performance.now() - began, 0);
+  for (const candidate of [...drops, ...messages]) {
+    const started = performance.now();
+    try {
     if (candidate.store === 'legacy') {
       if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
       const stamp = fileStatStamp(candidate.path);
@@ -415,6 +433,9 @@ export function listUnackedMessages(
       unackedStampCache.set(candidate.path, { stamp, scope, value: entry });
     }
     if (entry !== null) out.push(entry);
+    } finally {
+      measure?.(candidate.store === 'record' ? 'drops' : 'messages', performance.now() - started, 1);
+    }
   }
   return out;
 }
@@ -471,9 +492,6 @@ export function plantRecord(
   mkdirSync(dir, { recursive: true });
   const path = recordFile(dir, id);
   writeAtomic(path, `${JSON.stringify(record, null, 2)}\n`);
-  // The helper writes what a send writes: the record and the recipient's unread index entry
-  // naming it, so a fixture reads exactly as a landed drop does.
-  noteUnread(dir, payload.from, id, at);
   return path;
 }
 
@@ -609,17 +627,36 @@ function openRecord(
   lead?: string,
 ): ReadGate {
   const recordSession = candidate.session ?? session;
-  const outcome = publishRecordRead({
-    dropDir: recordDir(root, recordSession, candidate.seat),
-    id: candidate.id,
-    to: candidate.seat,
-    root,
-    session: recordSession,
-    home,
-    key,
-    at,
-    ...(lead === undefined ? {} : { lead }),
-  });
+  // The one read claim every body-serving reader takes (src/send/read-claim.ts): a reader that is
+  // handing this id over, or a cut-off read its recovery owns, keeps this run from serving it too.
+  const claim = claimRead(recordDir(root, recordSession, candidate.seat), candidate.id);
+  if (!claim.ok) {
+    return {
+      kind: 'refused',
+      what: `${candidate.seat}/${candidate.id} was not shown: ${claim.why === 'recovering'
+        ? 'it is being recovered from an interrupted read'
+        : claim.why === 'busy' ? 'another reader is handing it over'
+          : claim.why === 'unwritable' ? 'the read receipt could not be written (its read claim could not be taken)'
+            : 'its read claim cannot be taken now'}`,
+      repair: 'run team messages again in a moment',
+    };
+  }
+  let outcome: ReturnType<typeof publishRecordRead>;
+  try {
+    outcome = publishRecordRead({
+      dropDir: recordDir(root, recordSession, candidate.seat),
+      id: candidate.id,
+      to: candidate.seat,
+      root,
+      session: recordSession,
+      home,
+      key,
+      at,
+      ...(lead === undefined ? {} : { lead }),
+    });
+  } finally {
+    claim.release();
+  }
   if (outcome.kind === 'published') return { kind: 'shown' };
   if (outcome.kind === 'served') return { kind: 'served' };
   if (outcome.kind === 'held') return heldReceipt(candidate, outcome.status, outcome.entry);
@@ -695,7 +732,7 @@ type MailboxRow = {
 /** The record's path as the caller reads it in the refusal's repair. */
 function mailboxPath(candidate: Candidate): string {
   if (candidate.store === 'record') {
-    return `.agents/send-drops/${candidate.session ?? ''}/${candidate.seat}/${candidate.id}`;
+    return [...seatMailParts(candidate.session ?? '', candidate.seat, candidate.tree), candidate.id].join('/');
   }
   return `.agents/messages/${candidate.seat}/${candidate.id}.json`;
 }
@@ -761,6 +798,7 @@ function waitingRow(
             root,
             ...(fields.from_id === null ? {} : { fromId: fields.from_id }),
             ...(fields.rule === undefined ? {} : { rule: fields.rule }),
+            at: fields.at,
           }),
         }
       : {}),
@@ -788,7 +826,7 @@ function repairOf(candidate: Candidate, problem: Problem, payload: MessagePayloa
   const path = mailboxPath(candidate);
   const moveTarget = (seat: string, id: string): string =>
     candidate.store === 'record'
-      ? `.agents/send-drops/${candidate.session ?? ''}/${seat}/${id}`
+      ? [...seatMailParts(candidate.session ?? '', seat, candidate.tree), id].join('/')
       : `.agents/messages/${seat}/${id}.json`;
   switch (problem.kind) {
     case 'id':
@@ -1091,10 +1129,11 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
       status: 'shown',
       body: result.body,
       sender_attribution: senderAttribution,
-      renderedBody: attributedBody(result.body, result.from ?? candidate.seat, {
+      renderedBody: copyFor(attributedBody(result.body, result.from ?? candidate.seat, {
         record: recordPayload, home: sources.home, root,
         ...(recordPayload?.rule === undefined ? {} : { rule: recordPayload.rule }),
-      }),
+        at: result.at,
+      }), dirname(candidate.path), candidate.id, recordPayload !== null && recordPayload !== undefined && isStampedPayload(recordPayload), 'read'),
     };
     rows.push(row);
     shownCount += 1;
@@ -1191,7 +1230,8 @@ function renderMailbox(
 }
 
 /**
- * `team messages --client … --follow`: the same signed, replay-checked client read, repeated,
+ * `team messages --client … --follow`: the same signed, verified client read, repeated (a plain
+ * read takes no lock and claims no request id),
  * printing each reply on the client's thread once, as soon as a read finds it. Every read is an
  * ordinary `runClientMessages` call with its own request id and `--since` the last reply printed,
  * so the follow mode admits nothing a single read would not. A refused read ends the follow with

@@ -7,17 +7,24 @@
 // `notifications/claude/channel` per message that arrives after it starts. The body and the
 // meta travel together; the signed record stays in the inbox for `inbox_read` and for every later
 // reader, untouched. The server leaves a `<id>.channel-push.json` reservation beside the record,
+// or, for a stamped copy, its delivery history entry (`.exposures/<id>/<n>`, src/queue/handover.ts),
 // which the sender reads to end its walk as `sent (channel)`. Stdio handoff is not a read: the
 // signed receipt waits for explicit client acknowledgement, inbox read or reply.
 //
 // A pushed message with no signed `read` receipt after the confirmation window is the one case
 // the watch redelivers. It redelivers exactly once (`redelivered: channel unconfirmed`), and only
 // for an id with no receipt: an acknowledged message is never touched again.
+import { hostedCommit } from '../host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { closeSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { closeSync, fstatSync, fsyncSync, readFileSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { basename, join } from 'node:path';
+import { cliWordListOf, provenScriptWord, shellScriptWordOf } from '../launch/cli-scope.ts';
+import { flockBound, flockExclusive } from '../lock/flock.ts';
+import { shellWords } from '../launch/shell-words.ts';
+import { seatFolderOf } from '../send/drop-folder.ts';
+import { liveChannelCopy, retireChannelCopy } from '../queue/handover.ts';
 
 /** The launch flag that loads a development channel, and the value that names this server. */
 export const CHANNEL_FLAG = '--dangerously-load-development-channels';
@@ -30,7 +37,6 @@ export const CHANNEL_METHOD = 'notifications/claude/channel';
 /** The server's reservation beside a pushed record. It is not a read receipt: only a signed
  *  consumer receipt proves a read. */
 export const CHANNEL_PUSH_RECEIPT = 'channel-push';
-export const CHANNEL_PUSH_STATUS = 'sent (channel)';
 
 /** The marker a sender leaves at the push marker's name when its own walk already wakes the seat
  *  through another leg. Any marker-aware serving server treats a marker for the id as a push and
@@ -39,12 +45,26 @@ export const CHANNEL_PUSH_STATUS = 'sent (channel)';
  *  honor it. It is not a push, and the sender's own wait never reads it as one. */
 export const CHANNEL_HELD_RECEIPT = 'channel-held';
 
-/** How long a send waits for the server's push marker: the server polls its inbox on a short
- *  timer, so this is several polls, never a wait on the seat. */
+/** How long a send waits for the server's push marker. The server pushes when the drop folder
+ *  changes, so this still covers a watch event that was missed, and the sender's own steps stay
+ *  on `CHANNEL_LOOK_MS`. */
 export const CHANNEL_PUSH_GRACE_MS = 2_000;
 
-/** How often the serving inbox looks for a record it has not pushed yet when no bus is running. */
+/** How often a sender looks for the push marker it is waiting on: one marker read and one
+ *  listing per look. The server pushes about 10 ms after the bus hears of the record, so a 10 ms
+ *  look added up to half the push again; a 2 ms look costs a few small reads per send. A folder
+ *  watch is no faster here: Bun on macOS holds back an event that follows another by ~50 ms. */
+export const CHANNEL_LOOK_MS = 2;
+
+/** How often a serving inbox lists its folder by name, for a record its watch did not name. */
 export const CHANNEL_TICK_MS = 250;
+
+/** How often a serving inbox with no bus still reads its folder whole. A few seconds, so an
+ *  idle server does not scan the inbox several times a second. A new record is pushed from the
+ *  folder watch or from a bus event, not from this pass. */
+export const CHANNEL_IDLE_MS = 2_000;
+/** How often the channel server looks for stamped records due another copy (E7b). */
+export const CHANNEL_REDELIVER_MS = 30_000;
 
 /** How often a serving inbox with a live bus subscription still reads its inbox whole: the bus
  *  carries each arrival at once, and this slow pass catches a sender that could not reach it. */
@@ -68,7 +88,124 @@ export const CHANNEL_READ_BY = 'channel';
 /** The one sentence the server gives its client when the channel is on. The model acknowledges
  *  the id from the notification's meta in the same turn, before it reads or acts on anything. */
 export const CHANNEL_INSTRUCTIONS =
-  'When a channel notification arrives, call the ack tool with the id from its meta in the same handling turn, before you read the message or act on it.';
+  'When a channel notification arrives, call the ack tool with the id and offer from its meta in the same handling turn, before you read the message or act on it.';
+
+type ChannelSpan = { start: number; end: number };
+
+/** Remove this team's channel option by its shell-word spans. Every byte outside the
+ *  option stays as written, including quoted rules, newlines and unrelated spacing. */
+export function withoutChannel(launch: string, server: string = CHANNEL_SERVER): string {
+  // The same scope proof as option placement: prompt text, shell syntax and unproved scripts
+  // cannot lend a substring the meaning of a CLI option.
+  if (cliWordListOf('claude', launch) === null) return launch;
+  return eraseChannelSpans(launch, channelSpans(launch, `server:${server}`));
+}
+
+function channelSpans(command: string, chosen: string): ChannelSpan[] {
+  const script = shellScriptWordOf(command);
+  if (script !== null) {
+    const proof = provenScriptWord(command, script.word);
+    if (proof === null) return [];
+    const spans = literalWordSpans(command.slice(script.word.start, script.word.end));
+    if (spans === null || spans.length !== proof.body.length) return [];
+    // Project deletions through the original quoted word, including quote splices. Re-encoding
+    // the whole script would change unrelated source bytes; erasing its emitted characters
+    // leaves those bytes and all surrounding quote delimiters in place.
+    return channelSpans(proof.body, chosen).flatMap((span) => spans.slice(span.start, span.end).map((source) => ({
+      start: script.word.start + source.start, end: script.word.start + source.end,
+    })));
+  }
+  const words = shellWords(command);
+  if (words === null) return [];
+  const removals: ChannelSpan[] = [];
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at]!;
+    if (word.text === '--') break;
+    // These options carry prompt text, even when that text is exactly a flag-shaped word.
+    if (word.text === '--append-system-prompt' || word.text === '--system-prompt') {
+      at += 1;
+      continue;
+    }
+    if (word.expands) continue;
+    const attached = word.text.startsWith(`${CHANNEL_FLAG}=`);
+    if (word.text !== CHANNEL_FLAG && !attached) continue;
+    const value = attached ? word : words[at + 1];
+    if (value === undefined || value.expands) continue;
+    const names = (attached ? word.text.slice(CHANNEL_FLAG.length + 1) : value.text).split(',');
+    if (!names.includes(chosen)) continue;
+    if (names.every((name) => name === chosen || name === '')) {
+      removals.push({ start: word.start, end: value.end });
+    } else {
+      const raw = command.slice(value.start, value.end);
+      const spans = channelNameSpans(raw, names, chosen, attached);
+      const wanted = (attached ? `${CHANNEL_FLAG}=` : '') + names.filter((name) => name !== chosen && name !== '').join(',');
+      const read = shellWords(eraseChannelSpans(raw, spans));
+      if (read?.length !== 1 || read[0]!.expands || read[0]!.text !== wanted) continue;
+      removals.push(...spans.map((span) => ({ start: value.start + span.start, end: value.start + span.end })));
+    }
+    if (!attached) at += 1;
+  }
+  return removals;
+}
+
+/** Preserve every other identifier's spelling and quoting; discard only this server and
+ *  adjacent commas, retaining one existing comma between each pair of remaining names. */
+function channelNameSpans(raw: string, names: readonly string[], chosen: string, attached: boolean): ChannelSpan[] {
+  const keep: boolean[] = Array(attached ? CHANNEL_FLAG.length + 1 : 0).fill(true);
+  let kept = false;
+  for (const [index, name] of names.entries()) {
+    const retain = name !== chosen && name !== '';
+    if (index > 0) keep.push(retain && kept);
+    keep.push(...Array(name.length).fill(retain));
+    if (retain) kept = true;
+  }
+  const spans = literalWordSpans(raw);
+  return spans === null || spans.length !== keep.length ? [] : spans.filter((_span, index) => !keep[index]);
+}
+
+/** Source spans of a proved literal word's decoded characters. Quotes emit no character;
+ *  escapes emit their literal character, and line continuations emit nothing. The caller
+ *  checks this projection against the shared shell-word reader before accepting an edit. */
+function literalWordSpans(raw: string): ChannelSpan[] | null {
+  const spans: ChannelSpan[] = [];
+  let quote: "'" | '"' | null = null;
+  for (let at = 0; at < raw.length;) {
+    const char = raw[at]!;
+    if (quote === null && char === '$' && raw[at + 1] === "'") {
+      quote = "'";
+      at += 2;
+    } else if (char === quote) {
+      quote = null;
+      at += 1;
+    } else if (quote === null && (char === "'" || char === '"')) {
+      quote = char;
+      at += 1;
+    } else if (char === '\\' && quote !== "'") {
+      const next = raw[at + 1];
+      if (next === undefined) return null;
+      if (next === '\n') at += 2;
+      else if (quote === null || '$`"\\'.includes(next)) {
+        spans.push({ start: at, end: at + 2 });
+        at += 2;
+      } else {
+        spans.push({ start: at, end: at + 1 });
+        at += 1;
+      }
+    } else {
+      spans.push({ start: at, end: at + 1 });
+      at += 1;
+    }
+  }
+  return spans;
+}
+
+function eraseChannelSpans(command: string, spans: readonly ChannelSpan[]): string {
+  let result = command;
+  for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+    result = result.slice(0, span.start) + result.slice(span.end);
+  }
+  return result;
+}
 
 /**
  * Whether a launch line starts its CLI with the development channel naming this team server.
@@ -95,53 +232,55 @@ export function channelLaunchEnabled(launch: string | undefined | null, server: 
 
 /** The push marker's path: the record's own name, then the marker's suffix. */
 export function channelPushPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.${CHANNEL_PUSH_RECEIPT}.json`);
 }
 
-/** Whether a marker for exactly this id is present and readable. The marker is either the
- *  server's push or the sender's held marker; both say this id is not to be pushed. A file that
- *  does not parse, or that names another id, is no marker. */
-export function channelPushHeld(dropDir: string, id: string): boolean {
+/** The marker at `path` when it names exactly this id: a file that does not parse, or that names
+ *  another id, is no marker. */
+type Marker = { id?: unknown; kind?: unknown; notified?: unknown };
+function markerAt(path: string, id: string): Marker | null {
   try {
-    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Marker | null;
+    return parsed !== null && typeof parsed === 'object' && parsed.id === id ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Whether a marker for exactly this id is present and readable. The marker is either the
+ *  server's push (for a stamped copy, its live channel entry in the delivery history) or the
+ *  sender's held marker; both say this id is not to be pushed. */
+export function channelPushHeld(dropDir: string, id: string): boolean {
+  return markerAt(channelPushPath(dropDir, id), id) !== null || liveChannelCopy(seatFolderOf(dropDir, id), id) !== null;
 }
 
 /** Whether the server itself wrote the push marker for this id. The sender's held marker sits at
  *  the same name but is not a push: the channel leg has not delivered anything when only that one
  *  is there, and its walk goes on. */
 export function channelPushed(dropDir: string, id: string): boolean {
-  try {
-    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT;
-  } catch {
-    return false;
-  }
+  const marker = markerAt(channelPushPath(dropDir, id), id);
+  return (marker !== null && marker.kind !== CHANNEL_HELD_RECEIPT) || liveChannelCopy(seatFolderOf(dropDir, id), id) !== null;
 }
-
 
 /** Whether the server recorded a completed notification write for this id. A reservation, a held
  *  marker, or a marker left behind when the seat lost liveness is not a delivery. */
 export function channelNotified(dropDir: string, id: string): boolean {
-  try {
-    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown; notified?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT && parsed.notified === true;
-  } catch {
-    return false;
-  }
+  const marker = markerAt(channelPushPath(dropDir, id), id);
+  return (marker?.kind !== CHANNEL_HELD_RECEIPT && marker?.notified === true) || liveChannelCopy(seatFolderOf(dropDir, id), id)?.notified === true;
 }
 
 /** Records that the notification line was written. Never creates the marker and never turns a
- *  held marker into a delivery: only the server's own reservation can become a completed write. */
+ *  held marker into a delivery: only the server's own reservation (its marker, or a stamped
+ *  copy's live entry, rewritten whole with its offer kept) can become a completed write. */
 export function markChannelNotified(dropDir: string, id: string): boolean {
-  const path = channelPushPath(dropDir, id);
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
+  const live = liveChannelCopy(dropDir, id);
+  const path = live?.path ?? channelPushPath(dropDir, id);
   const tmp = `${path}.${process.pid}.tmp`;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { id?: unknown; kind?: unknown };
-    if (parsed === null || typeof parsed !== 'object' || parsed.id !== id || parsed.kind === CHANNEL_HELD_RECEIPT) return false;
+    const parsed = live === null ? markerAt(path, id) : JSON.parse(readFileSync(path, 'utf8')) as Marker;
+    if (parsed === null || parsed.kind === CHANNEL_HELD_RECEIPT) return false;
     const next = { ...parsed, notified: true };
     // A reader must see the previous marker or the completed one, never a truncated rewrite.
     writeFileSync(tmp, `${JSON.stringify(next)}\n`, { flag: 'wx', mode: 0o600 });
@@ -157,47 +296,33 @@ export function markChannelNotified(dropDir: string, id: string): boolean {
   }
 }
 
-/** Written inside the commit lock before the notification line. It means the line was about to
- *  leave or did leave, including when the completion flag could not be published. It is not
- *  itself a successful delivery, and it is not permission for another leg. */
+/** The handoff marker an earlier build wrote inside the commit lock before the notification line.
+ *  It means the line was about to leave or did leave, including when the completion flag could
+ *  not be published. It is not itself a successful delivery, and it is not permission for another
+ *  leg. This build's push marker, or a stamped copy's live entry, is written at that same point. */
 export function channelEmittedPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-emitted`);
 }
 
 export function channelEmitted(dropDir: string, id: string): boolean {
-  try {
-    const parsed = JSON.parse(readFileSync(channelEmittedPath(dropDir, id), 'utf8')) as { id?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id;
-  } catch {
-    return false;
-  }
-}
-
-export function recordChannelEmitted(dropDir: string, id: string, at: string): boolean {
-  try {
-    writeFileSync(channelEmittedPath(dropDir, id), `${JSON.stringify({ v: 1, id, at })}\n`, { flag: 'wx', mode: 0o600 });
-    return true;
-  } catch {
-    return false;
-  }
+  return markerAt(channelEmittedPath(dropDir, id), id) !== null || channelPushed(dropDir, id);
 }
 
 /** The sender's abort beside a reservation: an in-flight server must not write the notification
  *  after the sender has taken another leg. It is not a push and not a delivery. */
 export function channelAbortPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-abort`);
 }
 
 export function channelAborted(dropDir: string, id: string): boolean {
-  try {
-    const parsed = JSON.parse(readFileSync(channelAbortPath(dropDir, id), 'utf8')) as { id?: unknown };
-    return parsed !== null && typeof parsed === 'object' && parsed.id === id;
-  } catch {
-    return false;
-  }
+  return markerAt(channelAbortPath(dropDir, id), id) !== null;
 }
 
 export function recordChannelAbort(dropDir: string, id: string, at: string, reason: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
+  hostedCommit('recordChannelAbort');
   try {
     writeFileSync(channelAbortPath(dropDir, id), `${JSON.stringify({ v: 1, id, at, reason })}\n`, { flag: 'wx', mode: 0o600 });
     return true;
@@ -223,6 +348,8 @@ export type ChannelHeldReceipt = {
  * on either way; the marker only ever prevents a later push.
  */
 export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt): boolean {
+  dropDir = seatFolderOf(dropDir, receipt.id); // E7b revision 3: the record's own tree.
+  hostedCommit('recordChannelHeld');
   try {
     writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
     return true;
@@ -238,6 +365,7 @@ export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt):
  *  The lock name is published only after the owner record is durable. An empty or malformed
  *  name is not reclaimed: unknown ownership stays blocked. A time grace is not ownership. */
 export function channelCommitLockPath(dropDir: string, id: string): string {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   return join(dropDir, `${id}.channel-commit.lock`);
 }
 
@@ -270,15 +398,36 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-function pauseMs(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
 function discard(path: string): void {
   try {
     unlinkSync(path);
   } catch {
     // The private file is already gone.
+  }
+}
+
+/** Closes `fd` and removes `path` when that name still refers to the inode `fd` held. A name
+ *  someone else has replaced is left alone. A throw while releasing still closes the descriptor
+ *  and still removes the name we held. */
+function dropOwned(fd: number, path: string): void {
+  let held: { dev: number; ino: number } | null = null;
+  try {
+    const info = fstatSync(fd);
+    held = { dev: info.dev, ino: info.ino };
+  } catch {
+    held = null;
+  }
+  try {
+    closeSync(fd);
+  } catch {
+    // The descriptor is already closed.
+  }
+  if (held === null) return;
+  try {
+    const now = statSync(path);
+    if (now.dev === held.dev && now.ino === held.ino) unlinkSync(path);
+  } catch {
+    // The inode we held is already gone. A replacement at this path belongs to its creator.
   }
 }
 
@@ -288,83 +437,43 @@ function discard(path: string): void {
 function takeChannelCommit(dropDir: string, id: string, hooks?: ChannelCommitHooks): number | 'busy' {
   const lock = channelCommitLockPath(dropDir, id);
   const prep = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
-  let fd: number;
+  let fd: number | null = null;
+  let published = false;
   try {
     fd = openSync(prep, 'wx');
-  } catch {
-    return 'busy';
-  }
-  try {
     if (hooks?.failOwnerWrite === true) throw new Error('owner write failed');
     writeFileSync(fd, `${process.pid}\n`);
     fsyncSync(fd);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  hooks?.beforePublish?.();
-  try {
+    hooks?.beforePublish?.();
     linkSync(prep, lock);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  try {
+    published = true;
     const mine = fstatSync(fd);
-    const published = statSync(lock);
-    if (mine.dev !== published.dev || mine.ino !== published.ino) {
-      closeSync(fd);
-      discard(prep);
-      return 'busy';
-    }
-  } catch {
-    closeSync(fd);
+    const named = statSync(lock);
+    if (mine.dev !== named.dev || mine.ino !== named.ino) throw new Error('lock inode changed');
+    const owned = fd;
+    fd = null;
     discard(prep);
-    return 'busy';
-  }
-  discard(prep);
-  return fd;
-}
-
-const LOCK_EX = 2;
-const LOCK_NB = 4;
-
-type Flock = (fd: number, operation: number) => number;
-
-let flockImpl: Flock | null | undefined;
-
-/** Exclusive non-blocking flock. A live holder's claim stays at its public name, so recovery
- *  never renames it aside and never has a name to restore over a successor. */
-function flockExclusive(fd: number): boolean {
-  if (flockImpl === undefined) flockImpl = bindFlock();
-  if (flockImpl === null) return false;
-  return flockImpl(fd, LOCK_EX | LOCK_NB) === 0;
-}
-
-function bindFlock(): Flock | null {
-  try {
-    const req = createRequire(import.meta.url);
-    if (process.versions.bun !== undefined) {
-      const ffi = req('bun:ffi') as {
-        dlopen: (
-          library: string,
-          symbols: Record<string, { args: unknown[]; returns: unknown }>,
-        ) => { symbols: { flock: Flock } };
-        FFIType: { i32: unknown };
-      };
-      const library = process.platform === 'linux' ? 'libc.so.6' : 'libSystem.B.dylib';
-      const lib = ffi.dlopen(library, {
-        flock: { args: [ffi.FFIType.i32, ffi.FFIType.i32], returns: ffi.FFIType.i32 },
-      });
-      return (fd, operation) => lib.symbols.flock(fd, operation);
-    }
+    return owned;
   } catch {
-    return null;
+    return 'busy';
+  } finally {
+    // A return that does not hand back the descriptor removes the name this attempt published.
+    if (fd !== null) {
+      if (published) dropOwned(fd, lock);
+      else {
+        try {
+          closeSync(fd);
+        } catch {
+          // The descriptor is already closed.
+        }
+      }
+      discard(prep);
+    }
   }
-  return null;
 }
+
+// Exclusive non-blocking flock (src/lock/flock.ts). A live holder's claim stays at its public
+// name, so recovery never renames it aside and never has a name to restore over a successor.
 
 /** Claims this process already holds. A second attempt in the same process cannot wait on its
  *  own flock, so the set keeps that attempt from publishing another claim or renaming the lock. */
@@ -446,8 +555,7 @@ function adoptHeldClaim(dropDir: string, id: string): number | 'busy' {
 
 function flockWorks(hooks?: ChannelCommitHooks): boolean {
   if (hooks?.skipFlock === true) return false;
-  if (flockImpl === undefined) flockImpl = bindFlock();
-  return flockImpl !== null;
+  return flockBound();
 }
 
 const FLOCK_HELPER = `import errno, fcntl, os, select, sys
@@ -516,31 +624,21 @@ sys.stdin.buffer.read()
 
 function readHelperStatus(path: string, accept: readonly string[], waitMs = 2_000): string | null {
   const started = Date.now();
-  while (Date.now() - started < waitMs) {
+  // The helper runs in its own process and publishes the status beside the lock. This returns
+  // as soon as that status is one of `accept`, and at the deadline otherwise. It does not park
+  // the main thread on a wait whose timeout can fail to fire.
+  for (;;) {
     try {
       const text = readFileSync(path, 'utf8').trim();
       if (accept.includes(text)) return text;
     } catch {
       // The helper has not written the status yet.
     }
-    pauseMs(5);
+    if (Date.now() - started >= waitMs) return null;
   }
-  return null;
-}
-
-function helperDead(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
-  }
-  const probed = spawnSync('/bin/ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
-  const stat = (probed.stdout ?? '').trim();
-  return stat === '' || stat.startsWith('Z');
 }
 
 function stopHelper(child: ChildProcess): void {
-  const pid = child.pid;
   try {
     child.stdin?.end();
   } catch {
@@ -550,12 +648,6 @@ function stopHelper(child: ChildProcess): void {
     child.kill('SIGKILL');
   } catch {
     // The helper has already exited.
-  }
-  if (pid === undefined) return;
-  const started = Date.now();
-  while (Date.now() - started < 1_000) {
-    if (helperDead(pid)) return;
-    pauseMs(5);
   }
 }
 
@@ -613,6 +705,7 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
   const status = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
   const go = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
   const prep = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
+  hostedCommit('node:child_process.spawn');
   const helper = spawn('/usr/bin/python3', ['-c', FLOCK_HELPER, claim, lock, String(process.pid), status, go, prep], {
     stdio: ['pipe', 'ignore', 'ignore'],
   });
@@ -638,35 +731,57 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
     }
     const ours = created && holder === process.pid;
     if (Number.isInteger(holder) && holder > 0 && pidAlive(holder) && !ours) return 'busy';
+    // The published lock name's pid is the holder. The claim can still carry a dead pid, and
+    // the claim flock is free once the helper that published the lock has exited. Neither of
+    // those makes a live lock pid stealable. Only a dead lock pid may be replaced.
+    let publishedHolder = NaN;
+    try {
+      publishedHolder = Number(readFileSync(lock, 'utf8').trim());
+    } catch {
+      if (created) discard(claim);
+      return 'busy';
+    }
+    if (Number.isInteger(publishedHolder) && publishedHolder > 0 && pidAlive(publishedHolder)) {
+      if (created) discard(claim);
+      return 'busy';
+    }
     accepted = true;
     if (!lockIsDead(lock)) return 'busy';
     writeFileSync(go, '1\n');
     const published = readHelperStatus(status, ['published', 'aborted'], hooks?.helperWaitMs);
     if (published !== 'published') stopHelper(helper);
-    let fd: number;
+    let fd: number | null = null;
     try {
       fd = openSync(lock, 'r');
-    } catch {
-      return 'busy';
-    }
-    try {
       const now = Number(readFileSync(fd, 'utf8').trim());
       if (now !== process.pid) {
         closeSync(fd);
+        fd = null;
         return 'busy';
       }
       const mine = fstatSync(fd);
       const at = statSync(lock);
       if (mine.dev !== at.dev || mine.ino !== at.ino) {
         closeSync(fd);
+        fd = null;
         return 'busy';
       }
     } catch {
-      closeSync(fd);
+      if (fd !== null) dropOwned(fd, lock);
       return 'busy';
     }
+    if (fd === null) return 'busy';
     if (typeof helper.pid === 'number') hooks?.helperPid?.(helper.pid);
-    hooks?.beforeLockRename?.();
+    // The descriptor is held, but the caller has not recorded it yet. Record it before the
+    // hook so a nested attempt sees a live holder and does not remove the published name.
+    heldCommits.add(lock);
+    try {
+      hooks?.beforeLockRename?.();
+    } catch (error) {
+      heldCommits.delete(lock);
+      dropOwned(fd, lock);
+      throw error;
+    }
     return fd;
   } finally {
     heldClaims.delete(claim);
@@ -689,39 +804,35 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
 function replaceDeadLock(dropDir: string, id: string): number | 'busy' {
   const lock = channelCommitLockPath(dropDir, id);
   const prep = join(dropDir, `${id}.channel-commit.prep-${process.pid}-${randomBytes(4).toString('hex')}`);
-  let fd: number;
+  let fd: number | null = null;
+  let published = false;
   try {
     fd = openSync(prep, 'wx');
-  } catch {
-    return 'busy';
-  }
-  try {
     writeFileSync(fd, `${process.pid}\n`);
     fsyncSync(fd);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  try {
     renameSync(prep, lock);
-  } catch {
-    closeSync(fd);
-    discard(prep);
-    return 'busy';
-  }
-  try {
+    published = true;
     const mine = fstatSync(fd);
-    const published = statSync(lock);
-    if (mine.dev !== published.dev || mine.ino !== published.ino) {
-      closeSync(fd);
-      return 'busy';
-    }
+    const named = statSync(lock);
+    if (mine.dev !== named.dev || mine.ino !== named.ino) throw new Error('lock inode changed');
+    const owned = fd;
+    fd = null;
+    return owned;
   } catch {
-    closeSync(fd);
     return 'busy';
+  } finally {
+    if (fd !== null) {
+      if (published) dropOwned(fd, lock);
+      else {
+        try {
+          closeSync(fd);
+        } catch {
+          // The descriptor is already closed.
+        }
+        discard(prep);
+      }
+    }
   }
-  return fd;
 }
 
 function lockIsDead(lock: string): boolean {
@@ -775,14 +886,22 @@ function releaseChannelCommit(fd: number, path: string, hooks?: ChannelCommitHoo
   } catch {
     held = null;
   }
-  hooks?.beforeRelease?.();
-  closeSync(fd);
-  if (held === null) return;
   try {
-    const now = statSync(path);
-    if (now.dev === held.dev && now.ino === held.ino) unlinkSync(path);
-  } catch {
-    // The inode we held is already gone. A replacement at this path belongs to its creator.
+    hooks?.beforeRelease?.();
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // The descriptor is already closed.
+    }
+    if (held !== null) {
+      try {
+        const now = statSync(path);
+        if (now.dev === held.dev && now.ino === held.ino) unlinkSync(path);
+      } catch {
+        // The inode we held is already gone. A replacement at this path belongs to its creator.
+      }
+    }
   }
 }
 
@@ -798,6 +917,7 @@ function lockHolder(dropDir: string, id: string): number | null {
 /** True when the lock name exists and is not a dead positive pid. An empty or malformed record
  *  stays blocked. A missing name is not busy. */
 export function channelCommitActive(dropDir: string, id: string): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   try {
     const holder = Number(readFileSync(channelCommitLockPath(dropDir, id), 'utf8').trim());
     if (!Number.isInteger(holder) || holder <= 0) return true;
@@ -807,25 +927,41 @@ export function channelCommitActive(dropDir: string, id: string): boolean {
   }
 }
 
-/** Runs `work` while this process holds the commit lock. `busy` means the name is held, unknown,
- *  or not reclaimable. A dead positive pid may be replaced. A live holder is waited out. */
+/** Lock paths this process currently holds a descriptor for. A name that carries our pid and is
+ *  not in this set is a leftover: no one is waiting on it, and the next attempt removes it. */
+const heldCommits = new Set<string>();
+
+/** Runs `work` while this process holds the commit lock. `busy` means another live holder has
+ *  the name, or this process already holds it. A name that carries this process's pid while
+ *  this process does not hold the descriptor is stale: it is removed and the take is repeated.
+ *  This never waits. A caller that wants another try schedules it. The lock name is removed on
+ *  every return, including a throw from `work` or from the release hook. Nothing is spawned
+ *  while the descriptor is held. */
 export function withChannelCommit<T>(dropDir: string, id: string, work: () => T, hooks?: ChannelCommitHooks): T | 'busy' {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
   const path = channelCommitLockPath(dropDir, id);
   let fd: number | 'busy' = 'busy';
-  // Without flock the reclaim spawns a helper and waits for it. One attempt: repeating that
-  // wait across the live-holder retries would block for the helper's whole window each time.
-  const attempts = flockWorks(hooks) ? 50 : 1;
-  for (let at = 0; at < attempts; at += 1) {
+  for (let at = 0; at < 3; at += 1) {
     fd = tryChannelCommit(dropDir, id, at === 0 ? hooks : undefined);
     if (fd !== 'busy') break;
-    if (lockHolder(dropDir, id) === process.pid) return 'busy';
-    if (!channelCommitActive(dropDir, id)) break;
-    if (at + 1 < attempts) pauseMs(20);
+    const holder = lockHolder(dropDir, id);
+    // A live pid on the published lock is the holder, including this process while its
+    // descriptor is recorded. A stale claim or a free flock does not make that pid stealable.
+    // Only a dead lock pid is removed and tried again. This process's own pid is removed only
+    // when no descriptor is held for the name.
+    if (holder !== null && pidAlive(holder) && (holder !== process.pid || heldCommits.has(path))) return 'busy';
+    if (holder === process.pid && !heldCommits.has(path)) {
+      discard(path);
+      continue;
+    }
+    return 'busy';
   }
   if (fd === 'busy') return 'busy';
+  heldCommits.add(path);
   try {
     return work();
   } finally {
+    heldCommits.delete(path);
     releaseChannelCommit(fd, path, hooks);
   }
 }
@@ -837,6 +973,7 @@ export function withChannelCommit<T>(dropDir: string, id: string, work: () => T,
  * leg: reporting a hold that was not written would let both sides deliver.
  */
 export function reserveChannelFallback(dropDir: string, receipt: ChannelHeldReceipt): 'notified' | 'held' | 'unguarded' | 'uncertain' {
+  dropDir = seatFolderOf(dropDir, receipt.id); // E7b revision 3: the record's own tree.
   const claim = withChannelCommit(dropDir, receipt.id, () => {
     if (channelNotified(dropDir, receipt.id)) return 'notified' as const;
     if (channelEmitted(dropDir, receipt.id)) return 'uncertain' as const;
@@ -852,19 +989,13 @@ export function reserveChannelFallback(dropDir: string, receipt: ChannelHeldRece
   return claim === 'busy' ? 'unguarded' : claim;
 }
 
-/** The marker the server reserves before one channel notification. The meta joins the
- *  reservation to its intended message; the marker alone proves neither handoff nor read. */
+/** The marker the server reserves before one channel notification of an unstamped record. It
+ *  names the id and the instant only; it proves neither handoff nor read. */
 export type ChannelPushReceipt = {
   v: 1;
   kind: 'channel-push';
   id: string;
-  seat: string;
-  session: string;
-  root: string;
   at: string;
-  meta: { id: string; from: string; seat: string; team: string };
-  content_sha256: string;
-  status: typeof CHANNEL_PUSH_STATUS;
   /** Present only after the notification line was written. A marker without it is a reservation. */
   notified?: true;
 };
@@ -876,10 +1007,41 @@ export type ChannelPushReceipt = {
  * must not write a notification without winning this reservation.
  */
 export function recordChannelPush(dropDir: string, receipt: ChannelPushReceipt): boolean {
+  dropDir = seatFolderOf(dropDir, receipt.id); // E7b revision 3: the record's own tree.
+  hostedCommit('recordChannelPush');
   try {
     writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * rfc-event-comms E7b: retires one channel attempt of a stamped record, so the next copy can be
+ * pushed (R2.4 per-attempt markers). Under the record's channel commit lock, the push marker, the
+ * emitted marker and the abort beside them are moved, never deleted, into the record's delivery
+ * history (`.exposures/<id>/c<time>.<name>`), where they stay as evidence of the earlier copy.
+ * True once none stands at its live name; false on any fault (the next pass tries again).
+ */
+export function retireChannelAttempt(dropDir: string, id: string, nowMs: number = Date.now()): boolean {
+  dropDir = seatFolderOf(dropDir, id); // E7b revision 3: the record's own tree.
+  const done = withChannelCommit(dropDir, id, () => {
+    const history = join(dropDir, '.exposures', id);
+    try {
+      mkdirSync(history, { recursive: true, mode: 0o700 });
+    } catch {
+      return false;
+    }
+    for (const path of [channelPushPath(dropDir, id), channelEmittedPath(dropDir, id), channelAbortPath(dropDir, id)]) {
+      try {
+        renameSync(path, join(history, `c${String(nowMs)}.${basename(path)}`));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      }
+    }
+    // A stamped copy's own push is its history entry: the round's mark retires it.
+    return retireChannelCopy(dropDir, id, nowMs);
+  });
+  return done === true;
 }

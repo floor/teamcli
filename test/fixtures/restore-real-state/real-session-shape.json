@@ -1,0 +1,860 @@
+{
+  "sessions": {
+    "acme": {
+      "seats": {
+        "seat-1": {
+          "stage": "ready",
+          "pane": "pane-1",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "rules": "<rules>",
+          "last_active": "<last_active>",
+          "watcher": "<watcher>",
+          "pane_shell": 0,
+          "pane_shell_start": 0,
+          "agent_session": "<agent_session>"
+        },
+        "seat-2": {
+          "stage": "launched",
+          "pane": "pane-2",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "rules": "<rules>",
+          "pane_shell": 0,
+          "pane_shell_start": 0
+        },
+        "seat-3": {
+          "stage": "ready",
+          "pane": "pane-3",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "rules": "<rules>"
+        },
+        "seat-4": {
+          "stage": "ready",
+          "presence_binding": "<presence_binding>",
+          "pane": "pane-4",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": "<binding>",
+            "seq": 0,
+            "offset": 0
+          },
+          "presence_applied": {
+            "seat_id": "<seat_id>",
+            "binding": "<binding>",
+            "seq": 0,
+            "applied_at": "2026-11-04T21:11:45.208Z"
+          }
+        },
+        "seat-5": {
+          "stage": "ready",
+          "pane": "pane-5",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "rules": "<rules>",
+          "pane_shell": 0,
+          "pane_shell_start": 0,
+          "agent_session": "<agent_session>"
+        },
+        "seat-6": {
+          "stage": "ready",
+          "pane": "pane-6",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "presence_binding": "<presence_binding>",
+          "codex_endpoint": {
+            "url": "<url>",
+            "binding": "<binding>",
+            "pid": "<pid>",
+            "started_at": "2026-11-08T05:07:48.490Z",
+            "config": [
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>"
+            ]
+          },
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": "<binding>",
+            "seq": 0,
+            "offset": 0
+          },
+          "presence_applied": {
+            "seat_id": "<seat_id>",
+            "binding": "<binding>",
+            "seq": 0,
+            "applied_at": "2026-11-08T14:41:53.189Z"
+          },
+          "pane_shell": 0,
+          "pane_shell_start": 0
+        },
+        "seat-7": {
+          "stage": "ready",
+          "pane": "pane-7",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": null,
+            "seq": 0,
+            "offset": 0
+          }
+        },
+        "seat-8": {
+          "stage": "ready",
+          "pane": "pane-8",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>"
+        },
+        "seat-9": {
+          "stage": "ready",
+          "pane": "pane-9",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>"
+        },
+        "seat-10": {
+          "stage": "ready",
+          "pane": "pane-10",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "pane_shell": 0,
+          "pane_shell_start": 0,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "presence_binding": "<presence_binding>",
+          "codex_endpoint": {
+            "url": "<url>",
+            "binding": "<binding>",
+            "pid": "<pid>",
+            "started_at": "2026-11-08T05:02:18.368Z",
+            "config": [
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>"
+            ]
+          },
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "effort": "<effort>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": "<binding>",
+            "seq": 0,
+            "offset": 0
+          }
+        },
+        "seat-11": {
+          "stage": "ready",
+          "pane": "pane-11",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "pane_shell": 0,
+          "pane_shell_start": 0,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "presence_binding": "<presence_binding>",
+          "codex_endpoint": {
+            "url": "<url>",
+            "binding": "<binding>",
+            "pid": "<pid>",
+            "started_at": "2026-11-08T05:02:30.344Z",
+            "config": [
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>",
+              "<config>"
+            ]
+          },
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "effort": "<effort>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": "<binding>",
+            "seq": 0,
+            "offset": 0
+          }
+        },
+        "seat-12": {
+          "stage": "ready",
+          "presence_binding": "<presence_binding>",
+          "pane": "pane-12",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "pane_shell": 0,
+          "pane_shell_start": 0,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": "<binding>",
+            "seq": 0,
+            "offset": 0
+          },
+          "presence_applied": {
+            "seat_id": "<seat_id>",
+            "binding": "<binding>",
+            "seq": 0,
+            "applied_at": "2026-11-08T14:40:57.658Z"
+          }
+        },
+        "seat-13": {
+          "stage": "ready",
+          "presence_binding": "<presence_binding>",
+          "pane": "pane-13",
+          "workspace": "<workspace>",
+          "createdWorkspace": true,
+          "pane_shell": 0,
+          "pane_shell_start": 0,
+          "watcher": "<watcher>",
+          "id": "<id>",
+          "cli": "<cli>",
+          "model": "<model>",
+          "version": "<version>",
+          "launch_line": "<launch_line>",
+          "last_active": "<last_active>",
+          "start_cwd": "<start_cwd>",
+          "launched": {
+            "shell": 0,
+            "cli": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "agent_session": "<agent_session>",
+          "rules": "<rules>",
+          "presence_scan": {
+            "binding": "<binding>",
+            "seq": 0,
+            "offset": 0
+          },
+          "presence_applied": {
+            "seat_id": "<seat_id>",
+            "binding": "<binding>",
+            "seq": 0,
+            "applied_at": "2026-11-08T14:40:57.658Z"
+          }
+        }
+      },
+      "worktrees": {
+        "seat-label": {
+          "path": "<path>",
+          "branch": "<branch>",
+          "own_commits": false,
+          "seat": "<seat>",
+          "setup": "<setup>"
+        },
+        "seat-label-tests": {
+          "path": "<path>",
+          "branch": "<branch>",
+          "own_commits": false,
+          "seat": "<seat>",
+          "setup": "<setup>"
+        },
+        "team-list": {
+          "path": "<path>",
+          "branch": "<branch>",
+          "own_commits": false,
+          "seat": "<seat>",
+          "setup": "<setup>"
+        }
+      },
+      "launched_file": "<launched_file>",
+      "retained_seats": {
+        "seat-22": {
+          "id": "<id>",
+          "last_active": "<last_active>"
+        },
+        "seat-14": {
+          "id": "<id>",
+          "last_active": "<last_active>"
+        },
+        "seat-28": {
+          "id": "<id>",
+          "last_active": "<last_active>"
+        },
+        "seat-20": {
+          "id": "<id>",
+          "last_active": "<last_active>"
+        },
+        "seat-19": {
+          "id": "<id>",
+          "last_active": "<last_active>"
+        },
+        "seat-18": {
+          "id": "<id>",
+          "last_active": "<last_active>"
+        }
+      },
+      "briefs": {
+        "seat-26": {
+          "id": "<id>",
+          "at": "2026-11-03T23:33:12.801Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-4",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>",
+            "<superseded>"
+          ]
+        },
+        "seat-29": {
+          "id": "<id>",
+          "at": "2026-11-08T05:24:04.024Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-1",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-27": {
+          "id": "<id>",
+          "at": "2026-11-08T09:11:45.117Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-12",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-15": {
+          "id": "<id>",
+          "at": "2026-11-08T05:02:17.984Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-10",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-16": {
+          "id": "<id>",
+          "at": "2026-11-06T11:58:38.924Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-17": {
+          "id": "<id>",
+          "at": "2026-11-06T11:58:38.924Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-18": {
+          "id": "<id>",
+          "at": "2026-11-06T09:54:10.348Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-14",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-19": {
+          "id": "<id>",
+          "at": "2026-11-05T03:59:06.051Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-15",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-20": {
+          "id": "<id>",
+          "at": "2026-11-06T01:31:44.402Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-16",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-21": {
+          "id": "<id>",
+          "at": "2026-11-08T05:24:51.687Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-2",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-23": {
+          "id": "<id>",
+          "at": "2026-11-08T05:02:29.956Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-11",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-24": {
+          "id": "<id>",
+          "at": "2026-11-08T09:12:09.679Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-13",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-25": {
+          "id": "<id>",
+          "at": "2026-11-08T05:07:47.126Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-6",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-30": {
+          "id": "<id>",
+          "at": "2026-11-03T23:33:12.801Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-3",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>",
+            "<superseded>",
+            "<superseded>"
+          ]
+        },
+        "seat-31": {
+          "id": "<id>",
+          "at": "2026-11-08T05:22:53.684Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-5",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-32": {
+          "id": "<id>",
+          "at": "2026-11-06T11:58:38.924Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-22": {
+          "id": "<id>",
+          "at": "2026-11-03T23:33:12.801Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-14": {
+          "id": "<id>",
+          "at": "2026-11-03T23:33:12.801Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "superseded": [
+            "<superseded>"
+          ]
+        },
+        "seat-28": {
+          "id": "<id>",
+          "at": "2026-11-05T03:59:06.051Z",
+          "incarnation": "<incarnation>",
+          "epoch": "<epoch>",
+          "sha256": "<sha256>",
+          "attempt": 0,
+          "stage": "ready",
+          "seat_handle": "<seat_handle>",
+          "pane": "pane-17",
+          "pane_root_pid": 0,
+          "superseded": [
+            "<superseded>"
+          ]
+        }
+      },
+      "idle_claims": {
+        "seat-15": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-16": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-18": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-19": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-21": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-30": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-31": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-32": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-22": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        },
+        "seat-14": {
+          "claim_id": "<claim_id>",
+          "idle_since": "<idle_since>",
+          "state": "refused",
+          "claimed_at": "2026-10-28T10:07:10.819Z",
+          "notice": "<notice>"
+        }
+      },
+      "watchdog": {
+        "file": "<file>"
+      },
+      "bus": {
+        "pane": "pane-18",
+        "started": "<started>",
+        "workspace": "<workspace>"
+      },
+      "watch": {
+        "pane": "pane-19",
+        "heartbeat": "2026-11-08T10:16:46.661Z",
+        "workspace": "<workspace>"
+      }
+    }
+  }
+}

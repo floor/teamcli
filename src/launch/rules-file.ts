@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants, openSync, closeSync, mkdirSync, readSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { constants, closeSync, readSync } from 'node:fs';
+import { openSync, mkdirSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { basename, dirname, join } from 'node:path';
 import { storePath, type Standing } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';

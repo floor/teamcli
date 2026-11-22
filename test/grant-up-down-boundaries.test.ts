@@ -1,3 +1,4 @@
+// Default-channel placement is per seat, while authority and session assertions stay intact.
 // Adversarial coverage for the granted orchestrator seat's `up` and `down`: the placement is
 // the real walk — the agent list a session answers with, the pane roots the caller's process
 // chain descends from, and the pane the state records — never a caller built by hand, because
@@ -403,18 +404,17 @@ describe('the placement walk decides the granted seat', () => {
     expect(trace).toMatchObject({ closed: [], typed: [], audits: [] });
   });
 
-  test('down of the operator\'s seat: the map refuses it, and nothing is stopped', async () => {
+  test('down of a seat outside lead and operator: the map refuses it, and nothing is stopped', async () => {
     record({
       lead: { pane: 'lead-pane', workspace: 'lead-ws' },
       pilot: { pane: 'pilot-pane', workspace: 'pilot-ws' },
       worker: { pane: 'worker-pane', workspace: 'worker-ws' },
     });
     const { sources, trace } = downTrace(() => people());
-    const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [PILOT.root], PILOT.pane);
+    // Own-team admission covers the lead and the operator. A worker is outside it, so the map still refuses.
+    const io = placeIo([LEAD, PILOT, WORKER], { alpha: ALPHA }, [WORKER.root], WORKER.pane);
     const code = await runDown([], io, sources);
     expect(code).toBe(1);
-    // The operator is no longer the rule's second leg: `down` admits the owner or `leads`, and
-    // the operator holds neither. Nothing is closed and no grant line is written.
     expect(io.err).toContain('team down: only the owner or `leads` stops the team; this call is ');
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -459,12 +459,11 @@ describe('the scope the approval signed', () => {
     // The map's row admits the orchestrator: no grant section means no grant to constrain it,
     // and the run is the lead's, with no audit line behind it.
     expect(code, io.err + io.out).toBe(0);
+    // 1352 starts the three seats and no watch workspace.
     expect(trace.workspaces).toEqual([
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
-      { label: 'worker', cwd: lobby },
-      // Last, the watch's own workspace: the pane that runs the watch for the session.
-      { label: 'Watch · acme', cwd: root },
+      { label: 'worker', cwd: join(lobby, 'worker') },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -500,13 +499,11 @@ describe('the approval the grant rides on', () => {
     expect(code, io.err + io.out).toBe(0);
     expect(io.err).not.toContain('never approved');
     expect(io.err).not.toContain('deny');
-    // The session starts down, so the ready records are not kept and the three seats launch.
+    // 1352 starts the three seats and no watch workspace. The session starts down, so the ready records are not kept.
     expect(trace.workspaces).toEqual([
       { label: 'lead', cwd: root },
       { label: 'pilot', cwd: root },
-      { label: 'worker', cwd: lobby },
-      // Last, the watch's own workspace: the pane that runs the watch for the session.
-      { label: 'Watch · acme', cwd: root },
+      { label: 'worker', cwd: join(lobby, 'worker') },
     ]);
     expect(trace.closed).toEqual([]);
     expect(trace.audits).toEqual([]);
@@ -526,9 +523,7 @@ describe('the approval the grant rides on', () => {
     expect(io.err).not.toContain('deny');
     expect(trace.workspaces).toEqual([
       { label: 'pilot', cwd: root },
-      { label: 'worker', cwd: lobby },
-      // Last, the watch's own workspace.
-      { label: 'Watch · acme', cwd: root },
+      { label: 'worker', cwd: join(lobby, 'worker') },
     ]);
     expect(trace.audits).toEqual([{ seat: 'lead', act: 'up' }]);
     const doctorIo = testIo(root);
@@ -721,7 +716,8 @@ describe('the audit line', () => {
     expect(code).toBe(0);
     expect(io.err).toContain("skip lead: left as it is; a granted up does not relaunch or close the orchestrator's seat\n");
     expect(trace.closed).toEqual([]);
-    const workerAt = canonicalLanding(lobby).landing;
+    // Default-channel workers start in their own lobby folder.
+    const workerAt = canonicalLanding(join(lobby, 'worker')).landing;
     expect(trace.workspaces).toContainEqual({ label: 'worker', cwd: workerAt });
     // The operator starts in the project; the orchestrator's own seat does not: one workspace
     // at the root, never two.

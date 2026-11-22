@@ -1,3 +1,4 @@
+import { hostedCommit } from '../host/request-scope.ts';
 // The one network seam of `team release check`: a URL in, one HTTP attempt out. Every read the
 // command makes but one is public and credential-free — for those this wiring sends no header of
 // any kind. The single exception is the Linear read's POST, whose caller names the headers
@@ -49,6 +50,7 @@ function headOf(chunks: Uint8Array[]): string {
 /** Node's `fetch` as the command's network: HTTPS, no headers of its own, no redirects followed. */
 export const realFetch: Fetch = async (url, request) => {
   try {
+    hostedCommit('fetch');
     const response = await fetch(url, {
       redirect: 'manual',
       signal: AbortSignal.timeout(TIMEOUT_MS),

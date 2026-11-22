@@ -26,7 +26,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, fixtureLaunchPlace, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 // Neutral fixture ids: the host's pane shape is never written into a test, built or literal.
@@ -58,6 +58,7 @@ type SeatSpec = {
   launch: string;
   inbound?: 'accept' | 'hold' | 'refuse';
   leads?: boolean;
+  deliveryOrder?: readonly string[];
 };
 
 type World = { base: string; root: string; dir: string; home: string; sockets: string };
@@ -72,7 +73,7 @@ function seatBlock(seat: SeatSpec): string {
     model: ${model}
     version: ${JSON.stringify(version)}
     launch: ${seat.launch}
-${seat.inbound === undefined ? '' : `    inbound: ${seat.inbound}\n`}${seat.leads === true ? '    leads: true\n' : ''}`;
+${seat.deliveryOrder === undefined ? '' : `    delivery_order: [${seat.deliveryOrder.join(', ')}]\n`}${seat.inbound === undefined ? '' : `    inbound: ${seat.inbound}\n`}${seat.leads === true ? '    leads: true\n' : ''}`;
 }
 
 function teamText(seats: readonly SeatSpec[], order?: readonly string[]): string {
@@ -192,8 +193,8 @@ function ready(w: World, seats: readonly Ready[]): void {
         pane: seat.pane,
         workspace: 'fixture-workspace',
         cli: seat.cli ?? 'claude-code',
-        // A current launch's record: a Codex seat's line carries its profile's pinned feature.
-        launch_line: seat.cli === 'codex' ? `${seat.launch} -c features.mcp_oauth_refresh_coordination=false` : seat.launch,
+        // A current launch's record: a Codex seat on the default desktop_control carries no pins.
+        launch_line: seat.launch,
       };
     }
   });
@@ -277,6 +278,7 @@ function check(w: World, live: Live): { code: number; out: string } {
     now: () => NOW,
     home: w.home,
     sockets: w.sockets,
+    launchPlace: fixtureLaunchPlace(w.base),
   });
   return { code, out: `${io.out}${io.err}` };
 }
@@ -504,12 +506,20 @@ describe('team check names a live seat whose socket a send would skip', () => {
   });
 
   test('a declared order that leaves the socket out is a choice, not a skipped socket', () => {
-    const w = world([{ name: 'bydrop', role: 'orchestrator', launch: 'claude', leads: true }], ['drop']);
+    // The drop-only order is the worker's. The lead keeps an order that can wake it, and a
+    // live socket, so the check stays on the worker's choice.
+    const w = world([
+      { name: 'lead', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true, deliveryOrder: ['socket'] },
+      { name: 'bydrop', role: 'implementer', launch: 'claude', deliveryOrder: ['drop'] },
+    ]);
     const line = wrapperLine(w, 'bydrop');
     setLaunch(w, 'bydrop', line);
-    const seat = { name: 'bydrop', pane: PANE_ONE, launch: line, pid: SESSION_PID };
-    ready(w, [seat]);
-    const { code, out } = check(w, liveOn([seat]));
+    const lead = { name: 'lead', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    const worker = { name: 'bydrop', pane: PANE_TWO, launch: line, pid: OTHER_PID };
+    declare(w, 'lead');
+    writeSocket(w, lead);
+    ready(w, [lead, worker]);
+    const { code, out } = check(w, liveOn([lead, worker]));
     expect(out).not.toContain(NOT_SOCKET);
     expect(out).not.toContain(NO_SOCKET);
     expect(code).toBe(0);

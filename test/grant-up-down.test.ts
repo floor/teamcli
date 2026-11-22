@@ -199,7 +199,8 @@ describe('the granted orchestrator', () => {
     };
     const io = testIo(root, SEAT);
     const code = await runUp([], io, sources);
-    const workerAt = canonicalLanding(lobby).landing;
+    // Default-channel placement is per seat; the grant admission assertions remain exact.
+    const workerAt = canonicalLanding(join(lobby, 'worker')).landing;
     expect({ code, out: io.out, err: io.err, audits, workspaces, closed }).toMatchObject({
       code: 0,
       audits: [],

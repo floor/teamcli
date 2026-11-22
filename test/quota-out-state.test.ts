@@ -1,15 +1,17 @@
 // Quota-out: the CLI's own usage wall as its own state. The reset is printed exactly as the
 // screen words it (`at` a clock, `in` a span), the classifier reads the wall only where the CLI
 // draws it (the block directly above the composer, per the captures and the reported frames),
-// and a send refuses a walled seat before a drop file, a socket frame or a typed key exists.
+// and a send keeps its signed note for a walled seat without a socket frame or a typed key.
 // Frames: the retained captures for Claude Code and Gemini, a synthetic one derived from a
 // reported Antigravity screen (no capture exists), and synthetic Codex frames built from the
 // wording in Codex's own upstream source at the tested tags. No provider turn, no real pane.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readMessage } from '../src/mcp/inbox.ts';
+import { readHistory } from '../src/send/history.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -18,6 +20,17 @@ import { statusQuota } from '../src/information/quota-observe.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { requestDaemon, startSendDaemon, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
 import { storePath } from '../src/store/store.ts';
+import {
+  heldWork,
+  outOfTokensState,
+  tokenLeadLine,
+  tokenSwapHook,
+  tokenUnavailable,
+  tokenWarnLine,
+  weeklyBelowWarning,
+} from '../src/quota/token-fallback.ts';
+import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
+import { outOfTokens } from '../src/watch/checks/out-of-tokens.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox, testIo } from './helpers.ts';
 
@@ -275,8 +288,26 @@ function paneHost(w: { sockets: string; home: string }): PaneHost {
 
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
-describe('a walled seat takes no send effect', () => {
-  test('a send is refused before any drop, socket frame or typed key, and names the reset', async () => {
+function expectQueuedMessage(w: { root: string; dir: string; home: string }, body: string): void {
+  const drops = join(w.dir, 'send-drops', 'acme', 'lead');
+  expect(existsSync(drops)).toBe(true);
+  const ids = readdirSync(drops).filter((id) => !id.includes('.'));
+  expect(ids).toHaveLength(1);
+  const id = ids[0]!;
+  expect(existsSync(join(drops, `${id}.read.json`))).toBe(false);
+  const history = readHistory('acme', w.root, w.home);
+  expect(history.ok).toBe(true);
+  if (history.ok) {
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({ to: 'lead', outcome: 'queued, not woken', via: 'drop' });
+  }
+  const read = readMessage({ root: w.root, dropDir: drops, session: 'acme', seat: 'lead' }, id, w.home);
+  expect(read.ok).toBe(true);
+  expect(JSON.stringify(read)).toContain(body);
+}
+
+describe('a walled seat keeps the note without a wake', () => {
+  test('a send keeps a signed note without a socket frame or typed key', async () => {
     const w = world();
     const host = paneHost(w);
     host.show(WALL);
@@ -285,12 +316,14 @@ describe('a walled seat takes no send effect', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: refused: lead: quota out on deepseek, resets at 11:00; nothing was sent\n');
+    expect(io.err).toContain('lead: not delivered: out of tokens');
+    expect(io.err).toContain("kept in lead's inbox");
     expect(io.out).toBe('');
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(host.dials()).toBe(0);
-    expect(existsSync(join(w.root, '.agents', 'send-drops', 'acme', 'lead'))).toBe(false);
+    expect(existsSync(join(w.root, '.agents', 'send-drops', 'acme', 'lead'))).toBe(true);
+    expectQueuedMessage(w, 'hello');
   });
 
   test('a host that still says working does not cancel the wall the screen proves', async () => {
@@ -303,27 +336,11 @@ describe('a walled seat takes no send effect', () => {
     const code = await runSend(['lead', 'hello'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toContain('quota out on deepseek, resets at 11:00; nothing was sent');
+    expect(io.err).toContain('lead: not delivered: out of tokens');
+    expect(io.err).toContain("kept in lead's inbox");
+    expectQueuedMessage(w, 'hello');
     expect(host.typed).toEqual([]);
     expect(host.dials()).toBe(0);
-  });
-
-  test('a quote above a live idle box is not the wall: the send walks its legs', async () => {
-    const w = world();
-    const host = paneHost(w);
-    host.show([
-      '● The handover note quotes the dialog it saw:',
-      '  API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00',
-      '  I answered it, so this is the box after.',
-      '',
-      claudeBox(''),
-    ].join('\n'));
-    const io = owner(w.root);
-
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(host.typed.length).toBe(0);
   });
 
   test('the daemon refuses before the drop file is staged', async () => {
@@ -347,5 +364,129 @@ describe('a walled seat takes no send effect', () => {
     expect(host.typed).toEqual([]);
     const store = storePath(w.team.project, w.root, w.home);
     expect(existsSync(join(store, 'drops'))).toBe(false);
+  });
+});
+
+const SHIPPED = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules'] as const;
+
+const LIMIT_TAILS = [
+  'Usage limit reached\n❯ ',
+  'Request rejected (429)\n❯ ',
+  'weekly quota exhausted\n❯ ',
+  'weekly limit reached\n❯ ',
+  'rate limit\n❯ ',
+];
+
+function tokenSeat(dir: string, over: Partial<SeatObservation> = {}): SeatObservation {
+  return {
+    name: 'alpha',
+    running: true,
+    working: false,
+    vendor: 'kimi',
+    role: 'builder',
+    agentsDir: dir,
+    screen: { kind: 'rate limit', reset: null, reason: 'out of tokens' },
+    ...over,
+  } as SeatObservation;
+}
+
+function onceHarness(): { ctx: CheckContext; finish: () => void } {
+  const active = new Set<string>();
+  let current = new Set<string>();
+  const ctx: CheckContext = {
+    now: 1_000,
+    watch: {} as CheckContext['watch'],
+    budgets: {} as CheckContext['budgets'],
+    once(key: string, text: string, to: Report['to'] = 'operator'): Report | null {
+      current.add(key);
+      return active.has(key) ? null : { key, text, to };
+    },
+    keep(key: string): void {
+      if (active.has(key)) current.add(key);
+    },
+    memory<T>(_kind: string, start: () => T): T {
+      return start();
+    },
+  };
+  return {
+    ctx,
+    finish() {
+      active.clear();
+      for (const key of current) active.add(key);
+      current = new Set();
+    },
+  };
+}
+
+describe('an out-of-tokens screen is not idle or done', () => {
+  // 17 Nov: the model-issue sentence is a launch or model fault (a seat resumed without its
+  // launcher's endpoint), never quota. It reads as a provider error on the model, not idle or
+  // done, and never out of tokens.
+  test('each shipped CLI reads the model-issue screen as a model fault, never out of tokens, idle or done', () => {
+    const tail = "There's an issue with the selected model (k3-256k)\n❯ ";
+    for (const cli of SHIPPED) {
+      const screen = readScreen(cli, tail);
+      expect(screen, cli).toEqual({ kind: 'provider error', reason: 'model' });
+      expect(outOfTokensState(screen)).toBeNull();
+    }
+  });
+
+  test('a usage limit, a 429, and an exhausted weekly quota on the live tail are out of tokens', () => {
+    for (const tail of LIMIT_TAILS) {
+      expect(readScreen('claude-code', tail), tail).toEqual({
+        kind: 'rate limit',
+        reset: null,
+        reason: 'out of tokens',
+      });
+    }
+  });
+
+  test('the status word is out of tokens, and a quoted sentence above the live box is not', () => {
+    const live = readScreen('claude-code', 'Usage limit reached\n❯ ');
+    expect(outOfTokensState(live)).toBe('out of tokens');
+    expect(outOfTokensState(live)).not.toBe('idle');
+    expect(outOfTokensState(live)).not.toBe('done');
+    const quoted = [
+      'Usage limit reached',
+      'I answered it before the tests ran, so this is the box after.',
+      '',
+      claudeBox(''),
+    ].join('\n');
+    expect(outOfTokensState(readScreen('claude-code', quoted))).toBeNull();
+  });
+
+  test('a running turn that mentions the sentence stays a running turn', () => {
+    const busy = "There's an issue with the selected model (k3-256k)\nesc to interrupt\n";
+    expect(readScreen('claude-code', busy).kind).toBe('working');
+  });
+
+  test('one message to the lead names the seat, the vendor, and what it held, and the seat is marked', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'token-fallback-'));
+    try {
+      const { ctx, finish } = onceHarness();
+      const first = outOfTokens.run(tokenSeat(dir), ctx);
+      expect(first.map((report) => `${report.to}: ${report.text}`)).toEqual([
+        `orchestrator: ${tokenLeadLine('alpha', 'kimi', 'task')}`,
+      ]);
+      expect(tokenUnavailable(dir, 'alpha')).toContain('not taking a send or a review');
+      expect(tokenSwapHook({ seat: 'alpha', vendor: 'kimi', held: heldWork('builder') })).toEqual({
+        kind: 'waiting',
+        why: 'the automatic swap waits for team swap',
+      });
+      finish();
+      expect(outOfTokens.run(tokenSeat(dir), ctx)).toEqual([]);
+      const review = outOfTokens.run(tokenSeat(dir, { name: 'reviewer-a', role: 'reviewer', vendor: 'kimi' }), onceHarness().ctx);
+      expect(review.map((report) => report.text)).toEqual([tokenLeadLine('reviewer-a', 'kimi', 'review')]);
+      outOfTokens.run(tokenSeat(dir, { screen: { kind: 'idle' } }), onceHarness().ctx);
+      expect(tokenUnavailable(dir, 'alpha')).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a weekly figure below 20% warns, and exactly 20% does not', () => {
+    expect(weeklyBelowWarning(19)).toBe(true);
+    expect(weeklyBelowWarning(20)).toBe(false);
+    expect(tokenWarnLine('kimi', 19)).toBe('kimi weekly quota is 19% left, below the 20% warning');
   });
 });

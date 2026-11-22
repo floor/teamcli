@@ -10,6 +10,8 @@ A declared seat can be copied too: `team add <name> --like <seat>` writes a new 
 source in the file, with the source's fields and titled `<name>`, and starts it now. The source's
 own entry is left as it is. A source marked `human: true` is refused the same way.
 
+Temporary seats start without the channel.
+
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the
 lobby gate. `--worktree` names the worktree a temporary seat works in. `add` makes the lobby when it

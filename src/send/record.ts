@@ -20,15 +20,21 @@
 // `team reply --close` and signed with `RECEIPT_DOMAIN` like a receipt, since it is derived state
 // beside a message. It is not a message and carries no body: it names the record, the thread and
 // the side that closed it, and `team reply` reads it before a reply is admitted.
+import { hostedCommit } from '../host/request-scope.ts';
 import { type KeyObject } from 'node:crypto';
-import { lstatSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { version } from '../version.ts';
+import { folderOfDrop, seatFolderOf } from './drop-folder.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
+import { floorState } from '../queue/floor.ts';
+import { EXPOSURES } from '../queue/handover.ts';
+import { ensureFolder } from '../queue/durable.ts';
+import { NO_STAMPED_FOLDER, noteStampedId, recordFolderFor } from '../queue/mail-tree.ts';
 
 /** The `kind` a message record's payload carries. A receipt carries `receipt`, a thread's close
  *  `thread-close`. */
@@ -108,6 +114,17 @@ export type RecordPayload = {
    *  immutable client id and the grant that opened the thread. A record carries `from_client` or
    *  `to_client`, never both. */
   to_client?: { client_id: string; grant_id: string };
+  /** The delivery level (rfc-event-comms E7b): 3 on a record signed while its root
+   *  was not proven dark. A stamped record is under the at-least-once contract for its whole life:
+   *  it is settled only by its recipient's acknowledgement, a reply or a lead's clearance, never by
+   *  a writer-side read. Absent: the legacy contract. A build that predates the field refuses the
+   *  record as unsupported, so no older carrier ever presents a stamped body. */
+  lvl?: 3;
+  /** The sender's identity as signed at send time (the Claude adapter §4.2): its name, address
+   *  and model, each one line. Only a stamped record carries it — stamped records live in the
+   *  `send-stamped` tree, which no build before the stamp lists — so a rollback build never meets
+   *  it. A record without it is named from its verified `from` and `from_id`. */
+  from_identity?: { name: string; address?: string; model?: string };
 };
 
 export type SignedRecord = {
@@ -119,6 +136,219 @@ export type SignedRecord = {
   /** The signed field names this version does not read, when the record came from a file. */
   unknown?: readonly string[];
 };
+
+/** The delivery level a stamped record carries (rfc-event-comms E7b). */
+export const DELIVERY_LEVEL = 3 as const;
+
+/**
+ * The payload as it is signed: stamped `lvl: 3` unless its root is proven dark (E7b decision 3).
+ * A root whose floor cannot be read, or that is active or fenced, stamps: an activated team never
+ * loses the guarantee to an unreadable floor. A record to an external client is not stamped (a
+ * client settles through its own grant), and a payload that already carries the stamp keeps it.
+ */
+export function stampedPayload(payload: RecordPayload, home: string): RecordPayload {
+  // A general seat brief keeps its own epoch-bound lifecycle (served once per launch at the turn
+  // start, never acknowledged with `team ack`), so it is never stamped either.
+  if (payload.lvl === DELIVERY_LEVEL) {
+    noteStampedId(payload.id);
+    return payload;
+  }
+  if (payload.to_client !== undefined || payload.brief_sha256 !== undefined) return payload;
+  let dark: boolean;
+  try {
+    dark = floorState(payload.root, home).kind === 'dark';
+  } catch {
+    dark = false;
+  }
+  if (dark) return payload;
+  // E7b revision 3: the era rides with the id in this process, so its history lines stay
+  // body-free even if the floor rolls back to dark before they are written.
+  noteStampedId(payload.id);
+  return { ...payload, lvl: DELIVERY_LEVEL };
+}
+
+/**
+ * The payload stamped at the delivery level because its era is already decided by its origin: a
+ * handoff taken from the stamped tree keeps its stamp (E7b revision 3), and a channel probe is
+ * always a stamped record. The stamp is still set here, in the one module that signs.
+ */
+export function withDeliveryStamp(payload: RecordPayload): RecordPayload {
+  return { ...payload, lvl: DELIVERY_LEVEL };
+}
+
+/** Whether a payload is under the at-least-once contract. */
+export function isStampedPayload(payload: { lvl?: unknown }): boolean {
+  return payload.lvl === DELIVERY_LEVEL;
+}
+
+const stampCache = new Map<string, { stamp: string; value: boolean }>();
+
+/**
+ * Whether the record at `dropDir/id` is stamped, read from its file (the envelope's payload field;
+ * the signature is checked by every reader that serves the body, and a stripped stamp breaks it).
+ * `false` for a readable file without the stamp (a legacy text drop included), or no record at all;
+ * `'unknown'` for a record that cannot be read now, which every settlement check treats as stamped.
+ */
+export function recordStampAt(dropDir: string, id: string): boolean | 'unknown' {
+  if (!recordNameOk(id)) return false;
+  const path = recordFile(dropDir, id);
+  const stamp = fileStatStamp(path);
+  if (stamp === null) {
+    try {
+      lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    }
+    return 'unknown';
+  }
+  const cached = stampCache.get(path);
+  if (cached !== undefined && cached.stamp === stamp) return cached.value;
+  const text = readNoFollow(path);
+  if (text === null) return 'unknown';
+  // A readable file that is not a signed envelope (a legacy text drop) is not stamped: only a
+  // record this build signs can carry the stamp. Only a file that cannot be read is unknown.
+  let value: boolean;
+  try {
+    const parsed = JSON.parse(text) as { payload?: { lvl?: unknown } } | null;
+    value = parsed !== null && typeof parsed === 'object' && parsed.payload?.lvl === DELIVERY_LEVEL;
+  } catch {
+    value = false;
+  }
+  if (stampCache.size > 4096) stampCache.clear();
+  stampCache.set(path, { stamp, value });
+  return value;
+}
+
+/** The `read_by` a writer-side read of a stamped record carried before one read wrote one receipt
+ *  (E7b): a copy was handed over and nobody had confirmed it. It never settles the message; only
+ *  the recipient's ack, a reply or a lead's clearance does. This build writes no copy receipt (the
+ *  copy number is the copy's trace) and still reads one an earlier build left. */
+export const COPY_READ_BY = 'copy';
+
+/** The `read_by` on the `delivered` receipt a carrier writes (a socket frame, a runtime queue, a
+ *  typed wake, a channel push): transport acceptance, never evidence that the seat saw the body.
+ *  No reader settles or sweeps a message read on it. */
+export const CARRIER_DELIVERED_BY = 'carrier';
+
+/** Whether a `read_by` names a carrier's hand-over: `carrier`, or `carrier:<leg>` with the leg
+ *  that took the body (socket, channel, native, typed, headless-resume). */
+export function isCarrierDeliveredBy(readBy: string | undefined): boolean {
+  return readBy === CARRIER_DELIVERED_BY || (readBy?.startsWith(`${CARRIER_DELIVERED_BY}:`) ?? false);
+}
+
+/** The leg a carrier's `read_by` names, or null when it names none. */
+export function carrierLegOf(readBy: string | undefined): string | null {
+  return readBy !== undefined && readBy.startsWith(`${CARRIER_DELIVERED_BY}:`) ? readBy.slice(CARRIER_DELIVERED_BY.length + 1) : null;
+}
+
+/** The acknowledgement note beside the record (`<id>.ack.json`, `read_by: ack`): written only when
+ *  the read name is already held — by another reader's read, for `team ack` (retention moves
+ *  acknowledged mail at once), or by a copy receipt an earlier build wrote, for a stamped record's
+ *  confirmation (E7b). An ack whose read name is free is the read receipt itself. */
+export function ackedFile(dropDir: string, id: string): string {
+  return join(folderOfDrop(dropDir, id), `${id}.ack.json`);
+}
+
+/** The clearance note beside a stamped record whose copy receipt already stood (the Claude adapter
+ *  §3): the lead's or the owner's clearance, kept with its actor, while the ack note keeps the
+ *  `ack` word every level-3 reader settles by. A `.json` sidecar: no listing reads it as mail. */
+export function clearedFile(dropDir: string, id: string): string {
+  return join(folderOfDrop(dropDir, id), `${id}.cleared.json`);
+}
+
+/** The `read_by` words that confirm: the recipient's own ack, its channel ack tool, a reply (the
+ *  reply op and answered-by-send), and a lead's clearance. */
+export function isConfirmedReadBy(readBy: string | undefined): boolean {
+  // `answered-by-send` (an unrelated outbound send to the same sender) is not record-bound, so it
+  // never settles a stamped record; it stays a settlement for legacy mail only.
+  return readBy === 'ack' || readBy === 'channel' || readBy === 'reply' || isLeadAckReadBy(readBy);
+}
+
+/**
+ * The strict settlement of a record already known to be stamped (E7b R4.3), for the paths that
+ * have the record in hand: the retry scheduler, retention and the retirement notices. Only a
+ * positively confirming receipt counts: a verifying `replied`, a verifying `read` whose `read_by`
+ * confirms, or the acknowledgement note. A read with no reader word, any other word, or one that
+ * cannot be read, settles nothing. (`isRead`, the hot listing predicate, reads no record body; it
+ * trusts a read with no reader word because only an older build writes one, and an older build
+ * cannot read a stamped record.)
+ */
+/** Whether the record has a delivery history (`.exposures/<id>`), by one lstat. Only stamped copies
+ *  are numbered there. An lstat that fails other than ENOENT counts as a history (strict rule). */
+function hasDeliveryHistory(dropDir: string, id: string): boolean {
+  try {
+    return lstatSync(join(seatFolderOf(dropDir, id), EXPOSURES, id)).isDirectory();
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
+export function stampedSettled(dropDir: string, id: string, context: StatusContext, key: KeyObject): boolean {
+  if (receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key)) return true;
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  const word = read?.payload.read_by;
+  // The recipient's own confirmations; a clearance counts only with its authority proved (the
+  // owner, or the lead the caller bound in `context.lead`), exactly as `leadAckReceiptAt` asks.
+  if (read !== null && (word === 'ack' || word === 'channel' || word === 'reply')) return true;
+  if (read !== null && isLeadAckReadBy(word) && leadAckReceiptAt(dropDir, id, context, key) !== null) return true;
+  const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+  if (note === null) return false;
+  if (note.payload.read_by === 'ack') return true;
+  return clearedBy(note.payload.read_by, context) !== null;
+}
+
+/** The clearing actor a lead-ack word names, when its authority holds for this context: the owner,
+ *  or the lead the caller bound. Null otherwise. */
+function clearedBy(readBy: string | undefined, context: StatusContext): string | null {
+  const by = leadAckActorOf(readBy);
+  if (by === null) return null;
+  return by === 'owner' || (context.lead !== undefined && by === context.lead) ? by : null;
+}
+
+/**
+ * How a stamped record was settled, for the sender's report (the Claude adapter §3): `answered`
+ * (a reply), `acked` (the recipient's ack, by `team ack` or the channel's ack tool), or `cleared`
+ * by the owner or the lead the context binds. Null while it is not settled. The same rule as
+ * `stampedSettled`, read for what it says.
+ */
+export function stampedSettlement(dropDir: string, id: string, context: StatusContext, key: KeyObject): { kind: 'answered' } | { kind: 'acked' } | { kind: 'cleared'; by: string } | null {
+  if (receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key)) return { kind: 'answered' };
+  const read = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
+  const word = read?.payload.read_by;
+  if (read !== null && word === 'reply') return { kind: 'answered' };
+  if (read !== null && (word === 'ack' || word === 'channel')) return { kind: 'acked' };
+  if (read !== null && isLeadAckReadBy(word)) {
+    const cleared = leadAckReceiptAt(dropDir, id, context, key);
+    if (cleared !== null) return { kind: 'cleared', by: cleared.by };
+  }
+  const note = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+  if (note === null) return null;
+  const cleared = leadAckReceiptAt(dropDir, id, context, key);
+  if (cleared !== null) return { kind: 'cleared', by: cleared.by };
+  if (note.payload.read_by === 'ack') return { kind: 'acked' };
+  const by = clearedBy(note.payload.read_by, context);
+  return by === null ? null : { kind: 'cleared', by };
+}
+
+const copyCache = new Map<string, { stamp: string; copy: boolean }>();
+
+/** Whether the verifying read receipt at `path` is an unconfirmed copy's (`read_by: copy`).
+ *  Cached by the file's stat stamp, so a hot listing reads each receipt once. */
+function copyReceipt(path: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
+  const stamp = fileStatStamp(path);
+  const cached = stamp === null ? undefined : copyCache.get(path);
+  if (cached !== undefined && cached.stamp === stamp) return cached.copy;
+  const receipt = readVerifiedReceipt(path, id, 'read', context, key, brief);
+  // A receipt that verified a moment ago and cannot be classified now is treated as a copy: an
+  // unknown never settles a message (fail toward delivery), and it is not remembered.
+  if (receipt === null) return true;
+  const copy = receipt.payload.read_by === COPY_READ_BY;
+  if (stamp !== null) {
+    if (copyCache.size > 4096) copyCache.clear();
+    copyCache.set(path, { stamp, copy });
+  }
+  return copy;
+}
 
 /** The statuses a receipt can record. `sent` is the absence of a receipt, never written. */
 export type ReceiptStatus = Exclude<MessageStatus, 'sent'>;
@@ -212,7 +442,7 @@ export type Sealed = { payload: RawPayload; signature: string };
 const RECORD_FIELDS: readonly string[] = [
   'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
   'thread', 'subject', 'message_kind', 'work', 'in_reply_to', 'brief_sha256', 'incarnation',
-  'from_client', 'to_client',
+  'from_client', 'to_client', 'lvl', 'from_identity',
 ];
 
 /** The signed fields this version reads on a receipt. The last is the writer's signed
@@ -326,11 +556,19 @@ function nonEmpty(value: unknown): value is string {
 /** A file name's own bound: one directory entry, not a path. */
 const RECORD_NAME_MAX = 255;
 
-const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new'];
+const RECORD_SIDECAR_SUFFIXES = ['.pending', '.taken', '.read', '.wake', '.woken', '.reported', '.json', '.new', '.channel-emitted', '.channel-abort'];
 
-/** Watcher, receipt and private publication sidecars are never message candidates. */
+/** A message id as a record's own file name: a UUID, or the `unread-<uuid>` an earlier build wrote. */
+export const RECORD_STEM = /^(?:unread-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Watcher, receipt and private publication sidecars are never message candidates: a name with a
+ *  known sidecar suffix, or any `<record id>.<anything>` — a record's own name never has a dot, so
+ *  every file beside it that starts with its id and a dot (`.wake-try`, `.lead-episode`,
+ *  `.fallback.json`, a sidecar a later build adds) is the record's, never another record. */
 export function isRecordSidecarName(name: string): boolean {
-  return RECORD_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix));
+  if (RECORD_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix))) return true;
+  const dot = name.indexOf('.');
+  return dot > 0 && RECORD_STEM.test(name.slice(0, dot));
 }
 
 /** An id that can name one file in a folder: no separator, no traversal, no control character,
@@ -372,6 +610,7 @@ export function projectRecord(value: unknown): RecordProjection | null {
   if (value.subject !== undefined && !nonEmpty(value.subject)) return null;
   if (value.message_kind !== undefined && typeof value.message_kind !== 'string') return null;
   if (value.work !== undefined && !nonEmpty(value.work)) return null;
+  if (value.lvl !== undefined && value.lvl !== DELIVERY_LEVEL) return null;
   // A brief's record carries both binding fields or neither: a record with only one is not one
   // this version wrote, and an ordinary message carries neither.
   const brief = value.brief_sha256 !== undefined || value.incarnation !== undefined;
@@ -400,6 +639,7 @@ export function projectRecord(value: unknown): RecordProjection | null {
   // reader refuse the record. An unknown field NAME stays unsupported, as RECORD_FIELDS says.
   if (value.message_kind !== undefined && isMessageKind(value.message_kind)) payload.message_kind = value.message_kind;
   if (value.work !== undefined) payload.work = value.work as string;
+  if (value.lvl === DELIVERY_LEVEL) payload.lvl = DELIVERY_LEVEL;
   // A record is one side of a client exchange, never both: the writer and the addressee are
   // different principals, and a payload claiming both is not one this version writes. The two
   // maps have exactly the same strict shape.
@@ -417,6 +657,13 @@ export function projectRecord(value: unknown): RecordProjection | null {
     if (payload.from !== `client:${fromClient.client_id}` || payload.from_id !== null) return null;
     payload.from_client = fromClient;
   }
+  if (value.from_identity !== undefined) {
+    // Signed only into a stamped record: an unstamped record carrying it is not one this writes.
+    if (payload.lvl !== DELIVERY_LEVEL) return null;
+    const identity = identityMapOf(value.from_identity);
+    if (identity === null) return null;
+    payload.from_identity = identity;
+  }
   if (value.to_client !== undefined) {
     const toClient = clientMapOf(value.to_client);
     if (toClient === null) return null;
@@ -430,6 +677,23 @@ export function projectRecord(value: unknown): RecordProjection | null {
 /** The payload a message record carries, or null when the value is not one this version writes. */
 export function recordPayloadOf(value: unknown): RecordPayload | null {
   return projectRecord(value)?.payload ?? null;
+}
+
+/** The `from_identity` map a stamped record carries: a non-empty one-line `name`, and optional
+ *  one-line `address` and `model`, each at most 64 characters; null for any other shape. */
+function identityMapOf(value: unknown): { name: string; address?: string; model?: string } | null {
+  if (!isRecordValue(value)) return null;
+  if (Object.keys(value).some((key) => key !== 'name' && key !== 'address' && key !== 'model')) return null;
+  const field = (text: unknown): boolean => typeof text === 'string' && text !== '' && Array.from(text).length <= 64
+    && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029·]/.test(text);
+  if (!field(value.name)) return null;
+  if (value.address !== undefined && !field(value.address)) return null;
+  if (value.model !== undefined && !field(value.model)) return null;
+  return {
+    name: value.name as string,
+    ...(value.address === undefined ? {} : { address: value.address as string }),
+    ...(value.model === undefined ? {} : { model: value.model as string }),
+  };
 }
 
 /** The `{client_id, grant_id}` map a client record carries, or null when it is not exactly one. */
@@ -604,23 +868,28 @@ function signedCloseFromSealed(sealed: Sealed): SignedClose | null {
   return withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown);
 }
 
-/** The record's path: the folder `team send` writes to, and the id as the file's name. */
+/** The record's path: the live folder `team send` writes to, or the archive month that
+ *  already holds this id. A missing id names the live folder. */
 export function recordFile(dropDir: string, id: string): string {
-  return join(dropDir, id);
+  return join(folderOfDrop(dropDir, id), id);
 }
 
-/** A receipt's path beside its message: `<id>.<status>.json`. */
+/** A receipt's path beside its message: `<id>.<status>.json`, in the folder that holds the record. */
 export function receiptFile(dropDir: string, id: string, status: ReceiptStatus): string {
-  return join(dropDir, `${id}.${status}.json`);
+  return join(folderOfDrop(dropDir, id), `${id}.${status}.json`);
 }
 
-/** A close's path beside the record it answers: `<id>.closed.json`. */
+/** A close's path beside the record it answers: `<id>.closed.json`, in the folder that holds the record. */
 export function closeFile(dropDir: string, id: string): string {
-  return join(dropDir, `${id}.closed.json`);
+  return join(folderOfDrop(dropDir, id), `${id}.closed.json`);
 }
 
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
-export function signRecord(payload: RecordPayload, home: string): SignedRecord {
+export function signRecord(payload: RecordPayload, home: string, options: { stamp?: false } = {}): SignedRecord {
+  // E7b: signing never decides the delivery era. The sender decides it once, when it builds the
+  // payload (`stampedPayload`), and this signs exactly that payload, so the canonical record and
+  // every leg that carries it agree. `stamp: false` is kept for the no-store path's clarity.
+  void options;
   const key = messageKeyOf(home);
   const raw = payload as unknown as RawPayload;
   return withRaw({ payload, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
@@ -786,16 +1055,27 @@ export type RecordWrite = { ok: true; path: string; existing?: true } | { ok: fa
  * and a second write is the receiver's duplicate to drop, not the sender's to overwrite.
  */
 export function writeRecord(dropDir: string, record: SignedRecord): RecordWrite {
+  hostedCommit('writeRecord');
   const id = record.payload.id;
   if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
   const path = recordFile(dropDir, id);
   if (heldAt(path).kind !== 'missing') return { ok: false, reason: 'a record already holds that id' };
+  // E7b revision 3: the record's era names its container; a stamped record is written only into
+  // the seat's stamped folder (src/queue/mail-tree.ts), which no older reader lists or opens.
+  const stamped = isStampedPayload(record.payload);
+  const folder = recordFolderFor(dropDir, stamped);
+  if (folder === null) return { ok: false, reason: NO_STAMPED_FOLDER };
+  // E7b: a stamped record's era evidence (its delivery-history folder) stands, durably, before the
+  // record can be seen, so no receipt can ever stand on it without the strict rule applying.
+  if (stamped && !ensureFolder(join(folder, EXPOSURES, id))) {
+    return { ok: false, reason: 'the delivery history folder could not be made durable' };
+  }
   try {
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    dropMessage(folder, id, `${JSON.stringify(record, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the record could not be written' };
   }
-  return { ok: true, path };
+  return { ok: true, path: join(folder, id) };
 }
 
 /**
@@ -835,7 +1115,14 @@ export type SealedRead = { ok: true; sealed: Sealed | null } | { ok: false; reas
  * folder or a FIFO is refused and never replaced — writing there would either follow it or take a
  * name this key does not own.
  */
+/** The folder a record's sidecar is written into: beside a record in the stamped tree, so its
+ *  settlement sits in the same tree (E7b revision 3); otherwise the caller's folder, as before. */
+function besideRecord(dropDir: string, id: string, sidecarPath: string): string {
+  return seatFolderOf(dropDir, id) === dropDir ? dropDir : dirname(sidecarPath);
+}
+
 export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWrite {
+  hostedCommit('writeRecordOver');
   const id = record.payload.id;
   if (!recordNameOk(id)) return { ok: false, reason: 'the record id cannot be a file name' };
   const path = recordFile(dropDir, id);
@@ -844,12 +1131,16 @@ export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWr
   if (held.kind === 'fifo') return { ok: false, reason: 'a FIFO was found and not followed' };
   if (held.kind === 'folder') return { ok: false, reason: 'the record path is a folder' };
   if (held.kind === 'other') return { ok: false, reason: 'the record path is not a regular file' };
+  // E7b revision 3: an existing record is replaced where it stands; a new one goes to the folder
+  // of its own era (src/queue/mail-tree.ts).
+  const folder = held.kind === 'file' ? dirname(path) : recordFolderFor(dropDir, isStampedPayload(record.payload));
+  if (folder === null) return { ok: false, reason: NO_STAMPED_FOLDER };
   try {
-    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+    dropMessage(folder, id, `${JSON.stringify(record, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the record could not be written' };
   }
-  return { ok: true, path };
+  return { ok: true, path: join(folder, id) };
 }
 
 /**
@@ -978,8 +1269,20 @@ export function readClose(path: string, expectedId?: string): CloseRead {
   return { ok: true, close };
 }
 
+/** The directory a path names, as device and inode, following links; null when it cannot be
+ *  read. For folders this is exactly `sameFolder`'s test: two paths resolve to the same canonical
+ *  folder when, and only when, they name the same directory. One stat is a fraction of a resolve. */
+function folderIdentity(at: string): string | null {
+  try {
+    const stat = statSync(at);
+    return `${String(stat.dev)}:${String(stat.ino)}`;
+  } catch {
+    return null;
+  }
+}
+
 const RECEIPT_STAMP_CACHE_LIMIT = 8192;
-const receiptStampCache = new Map<string, { stamp: string; scope: string }>();
+const receiptStampCache = new Map<string, { stamp: string; scope: string; payloadRoot: string }>();
 const keyPrintMemo = new WeakMap<KeyObject, string>();
 
 /** Stable fingerprint of a key's public half for in-memory stamp caches. */
@@ -1039,18 +1342,16 @@ export function receiptHolds(
   if (process.getuid !== undefined && held.uid !== process.getuid()) return false;
   const stamp = fileStatStamp(path);
   const keyPrint = stamp !== null ? keyPrintForCache(key) : '';
-  const rootReal = (() => {
-    try {
-      return realpathSync(context.root);
-    } catch {
-      return context.root;
-    }
-  })();
+  // The checkout scopes a cached yes by the directory it names now, never by a remembered name:
+  // a hit also needs the receipt's own signed root to name that same directory now, which is the
+  // fresh `sameFolder` test below. A checkout that cannot be read caches nothing.
+  const rootIdentity = folderIdentity(context.root);
   const briefScope = brief === undefined ? '' : `${brief.incarnation}\0${brief.sha256}\0${brief.epoch}`;
-  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootReal}\0${briefScope}`;
+  const scope = `${keyPrint}\0${id}\0${status}\0${context.to}\0${context.session}\0${rootIdentity ?? ''}\0${briefScope}`;
   if (stamp !== null && keyPrint !== '') {
     const cached = receiptStampCache.get(path);
-    if (cached !== undefined && cached.stamp === stamp && cached.scope === scope) {
+    if (cached !== undefined && rootIdentity !== null && cached.stamp === stamp && cached.scope === scope
+      && folderIdentity(cached.payloadRoot) === rootIdentity) {
       return true;
     }
   }
@@ -1079,7 +1380,7 @@ export function receiptHolds(
   }
   if (stamp !== null && keyPrint !== '') {
     if (receiptStampCache.size >= RECEIPT_STAMP_CACHE_LIMIT) receiptStampCache.clear();
-    receiptStampCache.set(path, { stamp, scope });
+    if (rootIdentity !== null) receiptStampCache.set(path, { stamp, scope, payloadRoot: payload.root });
   }
   return true;
 }
@@ -1106,7 +1407,21 @@ export function statusOf(dropDir: string, id: string, context: StatusContext, ke
  * reader that asks only this question does not stat them.
  */
 export function isRead(dropDir: string, id: string, context: StatusContext, key: KeyObject, brief?: BriefBinding): boolean {
-  if (receiptHolds(receiptFile(dropDir, id, 'read'), id, 'read', context, key, brief)) return true;
+  // E7b: a record that has a delivery history was handed out as a stamped copy, so the strict rule
+  // decides (only the recipient's confirmation settles it). The history folder is looked at, never
+  // read, and no record body is read: the hot listing stays body-free.
+  if (brief === undefined && hasDeliveryHistory(dropDir, id)) return stampedSettled(dropDir, id, context, key);
+  // An unconfirmed copy's read (`read_by: copy`) settles nothing; the acknowledgement note does.
+  const readName = receiptFile(dropDir, id, 'read');
+  if (receiptHolds(readName, id, 'read', context, key, brief)) {
+    if (!copyReceipt(readName, id, context, key, brief)) return true;
+    const note = ackedFile(dropDir, id);
+    if (heldAt(note).kind === 'file') {
+      const acked = readVerifiedReceipt(note, id, 'read', context, key, brief);
+      if (acked !== null && acked.payload.read_by === 'ack') return true;
+    }
+    return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
+  }
   return receiptHolds(receiptFile(dropDir, id, 'replied'), id, 'replied', context, key, brief);
 }
 
@@ -1168,7 +1483,7 @@ export function readVerifiedReceipt(
 const SHOWN_SEAT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Words this build writes on `read_by` that are not themselves seat names. */
-const KNOWN_READER = new Set(['answered-by-send', 'channel', 'reply']);
+const KNOWN_READER = new Set(['ack', 'answered-by-send', 'carrier', 'channel', 'copy', 'reply']);
 
 /** Role words a receipt must not print. The shared message key can sign any of them, and none is
  *  a claim that the owner, the lead, or the orchestrator read the message. */
@@ -1304,12 +1619,23 @@ export function leadAckReceiptAt(
   context: StatusContext,
   key: KeyObject,
 ): { by: string; at: string; payload: ReceiptPayload } | null {
-  const verified = readVerifiedReceipt(receiptFile(dropDir, id, 'read'), id, 'read', context, key);
-  if (verified === null) return null;
-  const by = leadAckActorOf(verified.payload.read_by);
-  if (by === null) return null;
-  if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) return null;
-  return { by, at: verified.payload.at, payload: verified.payload };
+  // The one clearance lookup, in both places a clearance is kept: the read receipt itself, and
+  // the clearance note written when a copy's receipt already held the read name.
+  for (const path of [receiptFile(dropDir, id, 'read'), clearedFile(dropDir, id)]) {
+    const verified = readVerifiedReceipt(path, id, 'read', context, key);
+    if (verified === null) continue;
+    // The clearance note counts only beside the committed ack note it was written with: the same
+    // time, and the `ack` word. A note alone is an intent that never committed.
+    if (path !== receiptFile(dropDir, id, 'read')) {
+      const ack = readVerifiedReceipt(ackedFile(dropDir, id), id, 'read', context, key);
+      if (ack === null || ack.payload.read_by !== 'ack' || ack.payload.at !== verified.payload.at) continue;
+    }
+    const by = leadAckActorOf(verified.payload.read_by);
+    if (by === null) continue;
+    if (by !== 'owner' && (context.lead === undefined || by !== context.lead)) continue;
+    return { by, at: verified.payload.at, payload: verified.payload };
+  }
+  return null;
 }
 
 /**
@@ -1347,6 +1673,7 @@ export function isReadOrCleared(
  * past it.
  */
 export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: string, brief?: BriefBinding): RecordWrite {
+  hostedCommit('writeReceipt');
   const id = receipt.payload.id;
   const status = receipt.payload.status;
   if (!recordNameOk(id)) return { ok: false, reason: 'the receipt id cannot be a file name' };
@@ -1360,7 +1687,7 @@ export function writeReceipt(dropDir: string, receipt: SignedReceipt, home: stri
     return { ok: false, reason: 'the read receipt name is held by a file that does not verify for this brief' };
   }
   try {
-    dropMessage(dropDir, `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+    dropMessage(besideRecord(dropDir, id, path), `${id}.${status}.json`, `${JSON.stringify(receipt, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the receipt could not be written' };
   }
@@ -1385,12 +1712,13 @@ function receivedAt(path: string, receipt: SignedReceipt, home: string, brief?: 
  * thread is the one that stands.
  */
 export function writeClose(dropDir: string, close: SignedClose): RecordWrite {
+  hostedCommit('writeClose');
   const id = close.payload.id;
   if (!recordNameOk(id)) return { ok: false, reason: 'the close id cannot be a file name' };
   const path = closeFile(dropDir, id);
   if (heldAt(path).kind !== 'missing') return { ok: true, path, existing: true };
   try {
-    dropMessage(dropDir, `${id}.closed.json`, `${JSON.stringify(close, null, 2)}\n`);
+    dropMessage(besideRecord(dropDir, id, path), `${id}.closed.json`, `${JSON.stringify(close, null, 2)}\n`);
   } catch {
     return { ok: false, reason: 'the close could not be written' };
   }

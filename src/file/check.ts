@@ -1,3 +1,4 @@
+import { resolvedTarget } from '../charter/body.ts';
 import type { YamlEntry, YamlNode } from '../yaml.ts';
 import { parseMeasure } from './sections/units.ts';
 import type { Deprecation, Problem } from './types.ts';
@@ -9,6 +10,21 @@ export class Check {
   warnings: Problem[] = [];
   /** Fields the file still reads and no longer acts on; `team check` prints them, nothing else. */
   deprecations: Deprecation[] = [];
+  /** The values `{root}` and `{worktrees}` were filled in, and the folders they were filled with
+   *  (src/file/root-word.ts): a path-valued field that takes only relative paths takes such a
+   *  value's absolute path when it lies inside one of those folders. */
+  wordNodes: ReadonlySet<YamlNode> = new Set();
+  wordFolders: readonly string[] = [];
+
+  /** Whether `node` came from a word and its absolute `path` lies inside the entity's folders. */
+  insideWordFolder(node: YamlNode | undefined, path: string): boolean {
+    if (node === undefined || !this.wordNodes.has(node) || !path.startsWith('/')) return false;
+    // On disk, as a charter check reads it: a link on the way is followed, and a path that does
+    // not resolve that way lies inside nothing.
+    const real = resolvedTarget(path);
+    if (real === null) return false;
+    return this.wordFolders.some((folder) => real === folder || real.startsWith(`${folder}/`));
+  }
 
   fail(line: number, message: string): void {
     this.problems.push({ line, message });

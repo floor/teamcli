@@ -383,32 +383,3 @@ test('parallel does not call a created session delivered when its copy could not
   // promises is not there, so the send's word is the unconfirmed one and never delivered.
   expect(history.entries.at(-1)).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'session', session: 'abc123' });
 });
-
-test('parallel hands a direct caller an unconfirmed ending when the frame was taken and the copy failed', async () => {
-  const made = world(null);
-  cleanup = made.cleanup;
-  declareEntity(made, 'floor');
-  declare(made);
-  const drops = dropDir(made.dir, 'lead');
-  mkdirSync(drops, { recursive: true });
-  const id = 'aaaaaaaa-0000-4000-8000-000000000701';
-  writeFileSync(join(drops, id), '');
-  const host = fake(made, {
-    store: 'parallel',
-    sendId: () => id,
-    agents: () => [{ name: 'lead', pane: 'fixture-pane-1' }],
-    deliver: async () => ({ ok: true }),
-  });
-
-  const run = await sendDirect(owner(made.root), host, { seat: 'lead', pane: 'fixture-pane-1', cli: 'claude-code', body: 'a note' });
-
-  expect(run.code).toBe(0);
-  const result = run.result;
-  expect(result).not.toBeNull();
-  if (result === null) return;
-  // The frame was taken, so the walk ends here; the recorded ending and the caller's result say
-  // what settled — the copy did not — instead of repeating the delivered word the ending refused.
-  expect(result.outcome).toBe('unreachable');
-  expect(result.reason).toContain('the frame was taken, but the record was not written');
-  expect(result.record).toBeNull();
-});

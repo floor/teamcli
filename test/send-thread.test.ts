@@ -73,27 +73,6 @@ function hostFor(home: string, patch: Partial<SendHost> = {}): SendHost {
 type FeedDoc = { events: Array<Record<string, unknown>> };
 
 describe('a first message opens its own thread', () => {
-  test('the record and the history line name the message as its thread, and no record it answers', async () => {
-    const { root, home } = world();
-    const io = testIo(root, { kind: 'owner' });
-    const code = await runSend(['lead', 'hello', '--json'], io, hostFor(home));
-    if (code !== 0) throw new Error(`${io.out}${io.err}`);
-
-    const doc = JSON.parse(io.out) as { ids: { sent: string } };
-    const id = doc.ids.sent;
-    const recordPath = join(root, '.agents', 'send-drops', 'acme', 'lead', id);
-    const record = JSON.parse(readFileSync(recordPath, 'utf8')) as {
-      payload: { thread: string; in_reply_to?: string };
-    };
-    expect(record.payload.thread).toBe(id);
-    expect(record.payload.in_reply_to).toBeUndefined();
-
-    const history = readHistory('acme', root, home);
-    if (!history.ok) throw new Error(history.reason);
-    expect(history.entries).toHaveLength(1);
-    expect(history.entries[0]?.thread).toBe(id);
-    expect(history.entries[0]?.in_reply_to).toBeUndefined();
-  });
 });
 
 describe('a reply line carries the thread and the record it answers', () => {

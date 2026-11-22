@@ -81,9 +81,6 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       ...exactFiles([
         'test/broker.test.ts',
         'test/broker-run.ts',
-        'test/exit-codes.test.ts',
-        'test/exit-filter.ts',
-        'test/exit-filter.test.ts',
         'test/helpers.ts',
       ]),
       ...dirPrefixes(['test/fixtures']),
@@ -98,7 +95,20 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/state.ts',
       'src/file-write.ts',
       'src/caller.ts',
+      // Places a sandboxed seat by the folders its confinement lets it write.
+      'src/placement/confined.ts',
+      // Runs a confined seat's send and reply as that seat, from its outbox.
+      'src/send/confined-outbox.ts',
+      'src/process-tools-adapter.ts',
+      // The process kernel and the parent adapter start and read child processes for the CLI.
+      'src/process-kernel.ts',
+      'src/process-parent-adapter.ts',
       'src/herdr.ts',
+      // Reads and types into panes through the terminal host directly.
+      'src/herdr-direct.ts',
+      // Ends processes a closed pane left behind (the service manager's reaper).
+      'src/orphan-reaper.ts',
+      'src/temp-folders.ts',
       'src/child.ts',
       'src/entities.ts',
       'src/grant.ts',
@@ -124,6 +134,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/conformance',
       'src/daemon',
       'src/file',
+      // The send host: its effect guard, request scope, peer check and supervisor.
+      'src/host',
       'src/launch',
       'src/launchers',
       'src/lobby',
@@ -132,10 +144,18 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/permissions',
       'src/policy',
       'src/profiles',
+      // Quota exhaustion and fallback can change admission to a wake.
+      'src/quota',
+      // The mail queue a send writes and a seat reads.
+      'src/queue',
       'src/reach',
       'src/registry',
       'src/release',
+      // The socket adapter the broker and the send host dial and serve on.
+      'src/runtime',
       'src/security',
+      // Reads the machine's secrets (Keychain, the encrypted entity file).
+      'src/secrets',
       'src/send',
       'src/settings',
       'src/signing',
@@ -168,6 +188,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/commands/lock.ts',
       'src/commands/mcp.ts',
       'src/commands/migrate.ts',
+      // `team migrate --root`: rewrites the team's record as its owner.
+      'src/commands/migrate-root.ts',
       'src/commands/owner-seat.ts',
       'src/commands/policy.ts',
       'src/commands/register.ts',
@@ -223,7 +245,7 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
   {
     name: 'non-heavy-test-files',
     patterns: [
-      /^test\/(?!broker\.test\.ts$|broker-run\.ts$|exit-codes\.test\.ts$|exit-filter(\.test)?\.ts$|helpers\.ts$|fixtures\/).+\.(ts|py|md|txt|yaml|json)$/,
+      /^test\/(?!broker\.test\.ts$|broker-run\.ts$|helpers\.ts$|fixtures\/).+\.(ts|py|md|txt|yaml|json)$/,
     ],
   },
   {
@@ -246,6 +268,7 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
     patterns: dirPrefixes([
       'src/budgets',
       'src/charter',
+      'src/diagnostics',
       'src/end',
       'src/handover',
       'src/information',
@@ -268,7 +291,12 @@ export const ROUTINE_ALLOWLIST: readonly LaneRule[] = [
  * cannot widen its own lane by editing a helper this script imports.
  */
 export const ADMISSION_MODULES: readonly string[] = [
+  'src/quota/out-of-tokens.ts',
+  'src/quota/token-fallback.ts',
   'src/caller.ts',
+  'src/placement/confined.ts',
+  'src/send/confined-outbox.ts',
+  'src/process-tools-adapter.ts',
   'src/check/signature.ts',
   'src/file/signature.ts',
   'src/signing/owner-request.ts',

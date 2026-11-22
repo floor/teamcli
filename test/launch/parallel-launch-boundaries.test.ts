@@ -334,11 +334,11 @@ describe('parallel launch window boundaries', () => {
     expect(launchedAt.get('a-pane')).toBe(0);
     expect(launchedAt.get('c-pane')).toBe(0);
     expect(out.join('')).toBe(
-      'a: ready\nb: left out: its launch command did not run; left at launched\nc: ready\n',
+      'a: ready\nb: left out: its launch command did not run (the terminal host did not take the line in pane b-pane); left at launched\nc: ready\n',
     );
     expect(logged).toEqual([
       { who: 'a', what: 'ready' },
-      { who: 'b', what: 'left out: its launch command did not run; left at launched' },
+      { who: 'b', what: 'left out: its launch command did not run (the terminal host did not take the line in pane b-pane); left at launched' },
       { who: 'c', what: 'ready' },
     ]);
   });
@@ -645,10 +645,10 @@ function launchWorld(): { launch: Launch; order: string[] } {
     sessionUp: () => session === 'running',
     createWorkspace(_session, _cwd, label) {
       n++;
-      const pane = `w${n}:p1`;
+      const pane = `synthetic-ws-${n}:p1`;
       panes.set(pane, { text: IDLE_SCREEN, agent: false });
       order.push(`create:${label}`);
-      return { pane, workspace: `w${n}` };
+      return { pane, workspace: `synthetic-ws-${n}` };
     },
     paneRun(_session, pane, command) {
       const known = panes.get(pane);
@@ -718,11 +718,14 @@ describe('the serial opt-out on the up command', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--serial', '--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
-    expect(io.err).toContain('watch: started\n');
+    // The daemon owns the watch now; up creates exactly the two seats whose ordering is tested.
+    expect(made.order.filter((event) => event.startsWith('create:'))).toEqual(['create:coordinator', 'create:operator']);
+    expect(made.order).toContain('rename:claude-coordinator-acme');
+    expect(made.order).toContain('read:synthetic-ws-1:p1');
     // Serial: the operator's workspace exists only after the coordinator is named, and only
     // after the coordinator's wait has read its pane — it settled before the second seat began.
     expect(made.order.indexOf('rename:claude-coordinator-acme')).toBeLessThan(made.order.indexOf('create:operator'));
-    expect(made.order.indexOf('read:w1:p1')).toBeLessThan(made.order.indexOf('create:operator'));
+    expect(made.order.indexOf('read:synthetic-ws-1:p1')).toBeLessThan(made.order.indexOf('create:operator'));
   });
 
   test('the same machine without the flag overlaps the two seats', async () => {
@@ -737,10 +740,13 @@ describe('the serial opt-out on the up command', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(['--file', '.agents/team.yaml'], io, upSources(home, made));
     expect(code, io.out + io.err).toBe(0);
+    expect(made.order).toContain('create:operator');
+    expect(made.order).toContain('read:synthetic-ws-1:p1');
+    expect(made.order).toContain('read:synthetic-ws-2:p1');
     // Parallel: both workspaces were made and their panes launched before either seat's wait
     // read a pane — the contrast that shows the flag above is what forced the order, not the
     // fixture.
-    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('read:w1:p1'));
-    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('read:w2:p1'));
+    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('read:synthetic-ws-1:p1'));
+    expect(made.order.indexOf('create:operator')).toBeLessThan(made.order.indexOf('read:synthetic-ws-2:p1'));
   });
 });

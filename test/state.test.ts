@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,11 +15,15 @@ import {
   isSeatId,
   mintSeatId,
   readState,
+  readStateShared,
   storedWatchRecord,
   updateState,
   withLock,
   writeAtomic,
 } from '../src/state.ts';
+
+const realReadFileSync = fs.readFileSync;
+const realExistsSync = fs.existsSync;
 
 let dir: string;
 beforeEach(() => {
@@ -299,6 +304,62 @@ describe('the state file', () => {
     writeAtomic(join(dir, 'x.json'), 'two');
     expect(readFileSync(join(dir, 'x.json'), 'utf8')).toBe('two');
     expect(readdirSync(dir)).toEqual(['x.json']);
+  });
+});
+
+describe('the shared read', () => {
+  test('one frozen object until a write replaces the file', () => {
+    expect(readStateShared(dir)).toEqual({ format: 1, sessions: {} });
+    updateState(dir, (state) => { state.sessions.one = { ...emptySession(), seats: { a: { stage: 'ready' } } }; });
+    const first = readStateShared(dir);
+    expect(first.sessions.one?.seats.a?.stage).toBe('ready');
+    expect(readStateShared(dir)).toBe(first);
+    expect(Object.isFrozen(first.sessions.one!.seats.a)).toBe(true);
+    expect(() => { (first.sessions.one!.seats.a as { stage: string }).stage = 'named'; }).toThrow();
+    updateState(dir, (state) => { state.sessions.one!.seats.a!.stage = 'named'; });
+    const second = readStateShared(dir);
+    expect(second).not.toBe(first);
+    expect(second.sessions.one?.seats.a?.stage).toBe('named');
+    // The editing door still hands out its own copy.
+    readState(dir).sessions.one!.seats.a!.stage = 'ready';
+    expect(readStateShared(dir)).toBe(second);
+  });
+
+  test('an absent file is kept as the empty state it was observed as, not a file seen by a later look', () => {
+    const path = join(dir, STATE_FILE);
+    const populated = JSON.stringify({ format: 1, sessions: { one: { ...emptySession(), seats: { a: { stage: 'ready' } } } } });
+    // A file is created right after the first look finds none, and removed before the next poll.
+    const exists = spyOn(fs, 'existsSync').mockImplementation(((file: unknown) => file === path || realExistsSync(file as string)) as typeof fs.existsSync);
+    const read = spyOn(fs, 'readFileSync').mockImplementation(((file: unknown, ...rest: unknown[]) => {
+      if (file === path) return populated;
+      return (realReadFileSync as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      readStateShared(dir);
+    } finally {
+      exists.mockRestore();
+      read.mockRestore();
+    }
+    expect(readStateShared(dir)).toEqual({ format: 1, sessions: {} });
+  });
+
+  test('the state kept is parsed from the bytes it is compared by (A, then B, then A again)', () => {
+    const text = (stage: string): string => JSON.stringify({ format: 1, sessions: { one: { ...emptySession(), seats: { a: { stage } } } } });
+    const path = join(dir, STATE_FILE);
+    writeFileSync(path, text('ready'));
+    // Every path read after the first sees B, as when B lands between two reads of A and A
+    // comes back into the same key before the last one.
+    let reads = 0;
+    const spy = spyOn(fs, 'readFileSync').mockImplementation(((file: unknown, ...rest: unknown[]) => {
+      if (file === path && (reads += 1) === 2) return text('named');
+      return (realReadFileSync as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      expect(readStateShared(dir).sessions.one?.seats.a?.stage).toBe('ready');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(readStateShared(dir).sessions.one?.seats.a?.stage).toBe('ready');
   });
 });
 

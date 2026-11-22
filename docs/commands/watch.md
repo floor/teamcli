@@ -323,13 +323,13 @@ waits for a seat; a pause notice, when a pause lands; a retry for a marker a sen
 unread wake, for a seat whose message has been unread for its seat's unread window — the file's
 `watch.unread_after` when it moved the section, else the delivery class's default (thirty seconds
 for a seat a message can wake while it is idle, sixty for a typed or pull-only seat; ADR
-`zeus-message-path`, D2). None of them ever carries a report's text, and each stops before the
+`architect-message-path`, D2). None of them ever carries a report's text, and each stops before the
 pane. The ring, the retry and the unread wake all build the same wake line: the rendered
 `message-display` header and the hint naming the seat's fastest read path — the profile's
 `read_hint` when it declares one, the shipped `Read it with: team drops --read.` otherwise ([team
 send](send.md#the-message-display-wake-line)). One hint names a message's id: a socket delivery's
 single re-wake says `ack <id> or reply`, so the seat can settle exactly the record its frame
-carried (ADR `zeus-message-path`, D3). A sender the watch cannot name falls back to the
+carried (ADR `architect-message-path`, D3). A sender the watch cannot name falls back to the
 shipped nameless ring, `Team: run team drops --read --seat <seat> --session <session>`, rather
 than building nothing. Automatic work is never typed: the dispatcher's own lines below say what
 it did instead. The lines around them:
@@ -359,7 +359,7 @@ it did instead. The lines around them:
 | `<seat>: a message from <from> was unread and its webhook adapter took it after the unread window (<n> ms)` | the cascade's webhook leg posted the signed record to the seat's declared adapter after the seat's unread window, and the adapter took it: the history records `via: webhook` with `delivered`, the wake marker says a webhook wake was sent, and nothing is typed |
 | `<seat>: a message from <from> was unread and its webhook post's answer was not read (<why>); it is not posted again` | the post went out and its answer never came back: the wake marker stays reserved with `webhook` as its evidence, so no later pass posts the message again, the report at twice the window says the answer was not read, and nothing is typed |
 | `<seat>: a channel send from <from> was read (receipt)` | the seat's channel handling turn acknowledged a pushed message: its signed receipt names the id with `read_by: channel`, the history records `delivered (read)` with `via: channel`, the marker that waited for it is cleared, and nothing is typed |
-| `<seat>: a channel send from <from> was redelivered on the socket` | the push's confirmation window ended with no signed receipt and the receiving seat's socket took the frame: the socket delivery wrote its own `delivered` history line, marked `failed: redelivered: channel unconfirmed`, the marker is cleared, and nothing is typed; no receipt is written — the record stays unread for the seat's own read, and the unread pass re-wakes it once with `ack <id> or reply` (ADR `zeus-message-path`, D3) |
+| `<seat>: a channel send from <from> was redelivered on the socket` | the push's confirmation window ended with no signed receipt and the receiving seat's socket took the frame: the socket delivery wrote its own `delivered` history line, marked `failed: redelivered: channel unconfirmed`, the marker is cleared, and nothing is typed; no receipt is written — the record stays unread for the seat's own read, and the unread pass re-wakes it once with `ack <id> or reply` (ADR `architect-message-path`, D3) |
 | `<seat>: a channel send from <from> was not confirmed; the socket was not taken (<why>); the message waits in the bus inbox` | the push's one redelivery could not go over the socket: the marker already says `redelivered: channel unconfirmed`, the retry that follows stops before the pane, and nothing is typed |
 | `<seat>: an inbox send from <from> was not delivered (<why>); the record is at <path>; send it again` (the word is `a channel send` for that leg; `send it again` alone when the record's file is gone) | the marker ended without a receipt or a delivery — thirty minutes passed, or the retry found a reason not to touch the pane: a watch with no home to verify a sender with, a record that does not verify with this home's key or names no sender, a trigger line that would not fit, a seat back at its shell, a human's pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
@@ -400,8 +400,8 @@ never retried at all: it waits for the seat's own signed receipt, and thirty min
 send it is given up on with the drop file's path and `no receipt within 30m`. A `channel` marker
 waits for the handling turn's `ack` receipt the same way: a receipt promotes it once — one
 `delivered (read)` history line with `via: channel`, nothing typed — and a push still without one
-three minutes after it was written is redelivered exactly once, the socket first; when the socket
-is not taken the line says so and the message waits in the bus inbox, with
+three minutes after it was written is redelivered exactly once, on the socket when the seat's team
+file opted in to it; when the socket is not declared or not taken the line says so and the message waits in the bus inbox, with
 `redelivered: channel unconfirmed` written on the marker before the attempt so no later pass
 repeats it. A channel marker whose own three-minute window has not ended is left alone, and a
 channel push goes before an inbox message's ten-minute fallback. `--no-nudge` runs no retry
@@ -410,7 +410,7 @@ runs, and types nothing.
 
 A delivery that found no busy box is watched the same way. A message still without a signed
 receipt after its seat's unread window gets the next leg down the cascade below the one the
-send's first history line names (ADR `zeus-message-path`, D2). The window is `watch.unread_after`
+send's first history line names (ADR `architect-message-path`, D2). The window is `watch.unread_after`
 when the file moved the section, else the class default: thirty seconds for a seat a message can
 wake while it is idle, sixty for a typed or pull-only seat. A seat that declares a webhook
 adapter is posted the signed record first — a post is no keystroke and needs no pane, so it goes
@@ -445,7 +445,7 @@ nothing to the pane give the reservation back so a later pass may wake, and only
 wrote to the pane and ended uncertainly (`unreachable`) keeps it, spent. A socket delivery is the
 one message whose re-wake is single by ruling: it is typed once with `ack <id> or reply`, and an
 attempt that does not land keeps its reservation spent rather than giving it back — no retry
-ledger is written and no later pass types the line again (ADR `zeus-message-path`, D3); a pass
+ledger is written and no later pass types the line again (ADR `architect-message-path`, D3); a pass
 that could not attempt it at all, because no seam was bound, gives it back, since nothing was
 typed. Its report at twice the window keeps the reserved wake's words, `a wake was attempted at
 <at> and its outcome is unconfirmed`. At twice the seat's
@@ -459,7 +459,10 @@ its outcome is unconfirmed`, one never attempted says no wake line was typed, on
 attempts never landed says how many were tried and that none was confirmed, one a webhook post
 took says `its webhook adapter took the wake at <at>`, one whose post's answer was never read
 says `a webhook wake was posted at <at> and its answer was not read`, and one that was sent says
-when.
+when. The stuck-seat notice to the lead types nothing itself; when the history records a typed
+wake delivered for the oldest message, it says `a typed wake was delivered at <at> and the seat
+has not read it since`, and drops the screen word's `no wake reached it`, which that delivery
+contradicts.
 `--no-nudge` skips the wake but still writes the report.
 
 The report's sender mailbox is resolved through the signed record's agent id and the agent and
@@ -573,18 +576,14 @@ seats:
 watch: none
 ```
 
-Every `team watch` console below shows a pass as the watch itself prints it — the lines its pane
-shows while it runs, and the same lines in `.agents/team.log`. Run bare from the owner's terminal
-outside herdr, `team watch` hands itself to its workspace and prints one line about that instead;
-a `--no-nudge` or `--no-notify` run, the owner's, stays in the caller's terminal and prints these
-lines directly.
+A hand-run `team watch` does not run a pass. It reports whether the daemon hosts the session and
+exits 0. The consoles below are that report.
 
 The seats are at their prompts, nothing to report: a pass is the two lines that frame it.
 
 ```console
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -593,9 +592,7 @@ never types a report into a seat. The operator is a lead and is not nudged eithe
 
 ```console screens="claude-keeper=question"
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -603,9 +600,7 @@ A permission prompt is the owner's, and the watch says so rather than nudging an
 
 ```console screens="claude-beacon=permission"
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z claude-beacon waits at a permission prompt: its owner's to answer
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -614,9 +609,7 @@ retry pass and the wake. The report is the same line either way: it never had on
 
 ```console screens="claude-keeper=question"
 $ team watch --no-nudge ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s, without nudges
-2026-10-04T09:00:00.000Z claude-keeper asked a question: the operator's to act on
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -625,9 +618,7 @@ answer, and a watch does not stop the team over it:
 
 ```console machine=tight
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z free memory is 8%, below 15%
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -642,10 +633,7 @@ seats: [
 
 ```console
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z the watch-rhythm policy could not be read: team: policy source cannot be read or verified (./.agents/team.yaml: line 3: "[" is not closed on its line); automated work, nudges and escalations are held until it can be read
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z team config is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host this session
 exit 0
 ```
 
@@ -688,8 +676,7 @@ seats:
 
 ```console
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
@@ -749,13 +736,12 @@ seats:
 
 ```console machine=tight
 $ team watch ; echo "exit $?"
-2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z the watch of "beacon" stopped
+team watch: the daemon does not host session beacon
 exit 0
 ```
 
-`up` leaves a watch running in a workspace of its own, so a second one refuses rather than reading
-the same session twice:
+`up` does not start a watch of its own. A following `team watch` reports whether the daemon hosts
+the session:
 
 ```console
 $ team up ; echo "exit $?"
@@ -764,12 +750,11 @@ claude-keeper: ready
   already ready; left as it is
 claude-beacon: ready
   already ready; left as it is
-watch: started
 0 seats repaired, 0 skipped (working), 0 refused
 exit 0
 $ team watch ; echo "exit $?"
-team watch: a watch already runs for the session "beacon" (pid 4242)
-exit 1
+team watch: the daemon does not host session beacon
+exit 0
 ```
 
 The six that can't be turned off — `attention`, `missing`, `model-drift`, `model-rule`,
@@ -816,6 +801,6 @@ seats:
 ```console
 $ team up ; echo "exit $?"
 team up: line 9: watch.checks can't turn off attention: attention, missing, model-drift, model-rule, prompt-escalation, approval always run
-team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-growth, budget
+team up: line 10: unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, out-of-tokens, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-growth, budget
 exit 2
 ```

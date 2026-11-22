@@ -1,3 +1,4 @@
+import { RUNTIME_WAKE_MAX } from '../readable-wake.ts';
 // Headless one-turn session resume adapter and relay bridge for Gemini (`0.64.0`, `gemini`) and
 // Cursor (`2026.10.16`, `cursor-agent`) seats on the `headless-resume` delivery leg.
 //
@@ -15,8 +16,7 @@
 //     Both run with `AGENT_UNATTENDED=1`, `stdio: ['ignore', 'pipe', 'pipe']`, in the seat's
 //     working directory (`target.cwd ?? target.root`).
 //   - Forwards the single-line signed-record pointer (`pushPointer(id, sender)`) verbatim and
-//     unchanged (`<= TRIGGER_MAX` chars, no newlines or NUL bytes). Never carries or substitutes a
-//     message body.
+//     unchanged (`<= TRIGGER_MAX` chars, no newlines or NUL bytes). Carries bounded full message text, or an explicit oversized-body read hint.
 //   - Resolves signed `deliveryTimeout` (`budgets.native` = 15s default from
 //     `DELIVERY_TIMEOUT_DEFAULTS.native`) first, fails closed on `{ ok: false }`, clamps any
 //     optional `timeoutMs` override so it can only shorten, and deducts elapsed preparation time
@@ -29,11 +29,8 @@ import { spawn } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { readTeamConfig } from '../../file/team-config.ts';
-import {
-  stage as relayStage,
-  type CopyTarget,
-  type RelayReceipt as PackageRelayReceipt,
-} from '../../../packages/relay/index.js';
+import type { CopyTarget, RelayReceipt as PackageRelayReceipt } from '../../../packages/relay/index.js';
+import { relayStage } from '../relay-stage.ts';
 import {
   DELIVERY_RECEIPT_SECONDS,
   receiptSecondsFor,
@@ -51,7 +48,6 @@ import {
 import { readState, type SeatState } from '../../state.ts';
 import type { AttemptOutcome, RelayReceipt as WalkRelayReceipt } from '../fallback-events.ts';
 import type { WalkAttempt } from '../fallback-walk.ts';
-import { TRIGGER_MAX } from '../native.ts';
 import {
   pushPointer,
   type PushSender,
@@ -59,6 +55,7 @@ import {
   type RuntimePushOutcome,
   type RuntimePushRequest,
 } from '../push.ts';
+import { hostedCommit } from '../../host/request-scope.ts';
 
 /** Canonical leg name in `DELIVERY_LEGS`. */
 export const HEADLESS_RESUME_ROUTE = 'headless-resume' as const;
@@ -342,6 +339,7 @@ export const defaultHeadlessResumeSpawn: HeadlessResumeSpawn = (binary, args, op
     const file = executableOnPath(binary, env.PATH) ?? binary;
     let child;
     try {
+      hostedCommit('node:child_process.spawn');
       child = spawn(file, [...args], {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         env,
@@ -479,17 +477,16 @@ export function probeHeadlessResumeRoute(
   if (
     pointer === null
     || pointer === ''
-    || pointer.includes('\n')
     || pointer.includes('\r')
     || pointer.includes('\0')
-    || pointer.length > TRIGGER_MAX
+    || Buffer.byteLength(pointer, 'utf8') > RUNTIME_WAKE_MAX
   ) {
     return {
       status: 'refused',
       reason:
-        pointer === null || pointer.length > TRIGGER_MAX
-          ? `the pointer would exceed ${String(TRIGGER_MAX)} characters`
-          : 'the runtime pointer is not a valid single line',
+        pointer === null || Buffer.byteLength(pointer, 'utf8') > RUNTIME_WAKE_MAX
+          ? `the runtime message would exceed ${String(RUNTIME_WAKE_MAX)} bytes`
+          : 'the runtime message is empty or contains a carriage return or NUL byte',
     };
   }
 

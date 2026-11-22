@@ -15,6 +15,7 @@
 import { readdirSync } from 'node:fs';
 import { isRecordSidecarName, recordNameOk } from './record.ts';
 import { attributedBody } from './sender-claim.ts';
+import { seatListingDirs } from '../queue/mail-tree.ts';
 
 export const MIN_ID_PREFIX_LEN = 8;
 
@@ -42,16 +43,21 @@ export function shortIdPrefix(id: string, existingIds: Iterable<string> = []): s
  * folder does not exist yet.
  */
 export function existingRecordIdsIn(dropDir: string): string[] {
-  try {
-    return readdirSync(dropDir).filter(
-      (name) =>
-        recordNameOk(name) &&
-        !isRecordSidecarName(name) &&
-        !name.startsWith('work-'),
-    );
-  } catch {
-    return [];
+  // E7b revision 3: a seat's records are those of both its folders (src/queue/mail-tree.ts).
+  const ids: string[] = [];
+  for (const folder of seatListingDirs(dropDir)) {
+    try {
+      ids.push(...readdirSync(folder).filter(
+        (name) =>
+          recordNameOk(name) &&
+          !isRecordSidecarName(name) &&
+          !name.startsWith('work-'),
+      ));
+    } catch {
+      // A folder that does not exist yet holds none.
+    }
   }
+  return ids;
 }
 
 /**
@@ -63,6 +69,37 @@ export function existingRecordIdsIn(dropDir: string): string[] {
 export function readerLine(msgId: string, existingIds: Iterable<string> = []): string {
   const prefix = shortIdPrefix(msgId, existingIds);
   return `↩ team reply ${prefix} "…" · team ack ${prefix}`;
+}
+
+/** The reply half of the reader line, for a channel copy whose own ack line names the ack tool
+ *  (`channelAckLine`): `↩ team reply <prefix> "…"`. */
+export function replyLine(msgId: string, existingIds: Iterable<string> = []): string {
+  return `↩ team reply ${shortIdPrefix(msgId, existingIds)} "…"`;
+}
+
+/**
+ * A served body followed by its reader line: what every reader that hands a seat a message's body
+ * (`team drops --read`, `inbox_read`, the channel, a typed wake carrying the body) ends with, so
+ * the id `team reply` and `team ack` take is on the screen however the message arrived
+ * (`takesReaderLine` says which records do).
+ */
+export function bodyWithReaderLine(body: string, msgId: string, existingIds: Iterable<string> = []): string {
+  return `${body}\n\n${readerLine(msgId, existingIds)}`;
+}
+
+/** The reader line with the record's whole id, for a wake that cannot see the receiving mailbox:
+ *  a prefix there could be shared by another record in it, and `team reply` refuses an ambiguous
+ *  prefix, so only the full id is sure to name this record. */
+export function fullReaderLine(msgId: string): string {
+  return `↩ team reply ${msgId} "…" · team ack ${msgId}`;
+}
+
+/** Whether a served record ends with the reader line: not the seat's general brief, not a
+ *  report the runtime itself wrote (`from: runtime`, the watch's unread reports), which no seat
+ *  answers, and not a client's drop, whose delivery keeps its own text — every other record is a
+ *  message from a seat or the owner, which a reply reaches. */
+export function takesReaderLine(payload: { from: string; from_client?: unknown }, generalBrief: boolean): boolean {
+  return !generalBrief && payload.from !== 'runtime' && payload.from_client === undefined;
 }
 
 /**
@@ -79,20 +116,18 @@ export type SocketMessageFrameOptions = {
   from?: string;
   from_id?: string | null;
   rule?: string | null;
-  cli?: string | null;
-  displayName?: string | null;
-  senderLabel?: string | null;
   compact?: boolean;
   existingIds?: Iterable<string>;
   human?: boolean;
   carried?: string;
   home?: string;
   root?: string;
+  /** The send instant: the record's own `at`, so the receiver's line carries the send time. */
+  at?: string | Date | null;
 };
 
 /**
- * Builds a rendered socket message frame with the compact sender header, the body (or first
- * content line when `compact: true`), and the appropriate reader footer (`compactReaderLine` when
+ * Builds a rendered socket message frame with the compact sender header, the full body, and the appropriate reader footer (`compactReaderLine` when
  * `compact: true`, `readerLine` otherwise, or `null` for a human pane).
  */
 export function socketMessageFrame(
@@ -103,13 +138,12 @@ export function socketMessageFrame(
   options: SocketMessageFrameOptions = {},
 ): string {
   const rendered = attributedBody(body, options.from ?? '', {
-    cli: options.cli,
-    displayName: options.displayName,
-    senderLabel: options.senderLabel,
+    fromId: options.from_id,
     rule: options.rule,
-    compact: options.compact,
+    compact: false,
     home: options.home,
     root: options.root,
+    at: options.at,
   });
   const reply = options.human
     ? null

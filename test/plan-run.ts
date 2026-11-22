@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { emptySession, updateState } from '../src/state.ts';
+import { discardFixtures } from './fixture-cleanup.ts';
 
 const SESSION = 'plan-evidence';
 
@@ -289,5 +290,5 @@ try {
   try { execFileSync('herdr', ['session', 'stop', SESSION], { stdio: 'ignore' }); } catch { /* already stopped */ }
   try { execFileSync('herdr', ['session', 'delete', SESSION], { stdio: 'ignore' }); } catch { /* already gone */ }
   try { server?.kill(); } catch { /* the session stop owns the process */ }
-  try { execFileSync('/usr/bin/trash', [base], { stdio: 'ignore' }); } catch { /* the dir is left if trash refuses it */ }
+  try { discardFixtures([base], { quiet: true }); } catch { /* the dir is left if it cannot be moved */ }
 }

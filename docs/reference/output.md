@@ -10,7 +10,7 @@ The CLI contract covers **51 command names** in `src/cli.ts` order: top-level `t
 
 Every command falls into one of four surface shapes:
 
-- **Reading commands** (`status`, `seats`, `list`, `check`, `doctor`, `commits`, `pr`, `release`, `usage`, `feed`, `messages`, `issues`, `plan`, `ask-show`, `drops`, `policy`, `sessions`, `mcp`, `projects`, `worktree list`, `proc list`, `send --list`): inspect state and print a context line (when team- or project-scoped), a headered table or structured findings list, optional collapsed notes, optional `difference:` / `repair:` / `who:` blocks, and one closing summary line.
+- **Reading commands** (`status`, `seats`, `list`, `check`, `doctor`, `commits`, `pr`, `release`, `usage`, `feed`, `messages`, `issues`, `plan`, `ask-show`, `drops`, `policy`, `sessions`, `mcp status`, `mcp doctor`, `projects`, `worktree list`, `proc list`, `send --list`): inspect state and print a context line (when team- or project-scoped), a headered table or structured findings list, optional collapsed notes, optional `difference:` / `repair:` / `who:` blocks, and one closing summary line.
 - **Action commands** (`up`, `down`, `add`, `remove`, `restart`, `reload`, `register`, `answer`, `init`, `grant`, `delegate`, `revoke`, `worktree new|pull|remove`, `send`, `reply`, `raise`, `route`, `next`, `lock`, `unlock`, `tempo`, `hold`, `pause`, `resume`, `policy set|unset`, `rename`, `proc add|clear`): mutate state or preview a mutation under `--dry-run`, printing a context or plan header, step lines (`+`, `!`, `  skip`) on `--dry-run`, and one closing action summary line (`dry run: nothing was run` on `--dry-run`).
 - **Top-level CLI** (`team`): prints `--help`, `--version`, or `--about` (which prints the version, licence, docs link, and the `what 0.5.0 must not pretend` block).
 - **Daemon / protocol surfaces** (`watch`, `broker`, `bus`, `conformance-adapter`): long-running foreground loops or wire-protocol adapters; human-readable startup/refusal lines follow the error contract on stderr, and `--json` is not used on the daemon loop itself.
@@ -73,6 +73,8 @@ In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for t
 | 49 | `trace` | reading | `team <project>, session "<session>"` | `TIME  STEP  VIA  OUTCOME  MS  DELTA  NOTE` | `<n> step` / `<n> steps` summary | `team.trace` | `schema/trace.schema.json` | `0, 1, 2` (5 rows) | `Exits 0 when the trace is printed, 1 when the log holds no step under that id or the event log can't be read, 2 when the invocation or team file can't be read.` |
 | 50 | `conformance-adapter` | protocol (hidden) | — | — | wire protocol | — (protocol) | — | `0` (1 row) | Hidden protocol command (not in `commands` or `--help`); exits `0` when the protocol finishes. |
 
+`team route` reports an existing socket as `socket_state: ineligible` when send's inbound or held-socket gate refuses it. Its action summary names the same reason as send; `native` describes CLI capability alone. A send dry run includes the skipped socket and its reason even when the resolved delivery order is declared.
+
 ### 1.2 Context Line
 
 Team-scoped reading commands that open with a multi-row table or findings block (`status`, `seats`, `check`, `doctor`, `messages`, `issues`, `feed`, `trace`, `plan`, `drops`, `policy`, `raise`, `reply`, `worktree list`, `proc list`, `send --list`) print a single context line (`contextLine(project, session)`):
@@ -129,6 +131,12 @@ Every tabular block prints an **uppercase column header row** above its data row
   - Missing or inapplicable cells render as `-`.
   - Column widths are computed on `plainLine`-cleaned text *before* any ANSI styling is applied.
   - `spec.indent` defaults to `'  '` (two spaces, for tables nested under a context line or section heading such as `team status`). Top-level tables with no context line (such as `team seats`, `team list`, `team projects`) pass `indent: ''` so the table starts at column 0.
+
+`team mcp setup --json` prints `team.mcp-setup` (`schema/mcp-setup.schema.json`):
+`{format, seat, session, cwd, dry_run, status, changes}`. Each change names its kind and action;
+project config lists the two paths, launch names its record path, and placement names the pane.
+An unchanged `--off` has an empty list. Refusals print `team.error` and exit 1; invalid invocations
+exit 2. The zero-write plan and successful setup or removal exit 0.
 
 ### 1.4 Severity Vocabulary (`team doctor`, `team mcp doctor`)
 
@@ -543,3 +551,5 @@ To keep `bun test` (including `test/docs.test.ts`) green at every commit, each c
 | **Family 3 — Session & Seat Actions** | `up`, `down`, `add`, `remove`, `restart`, `reload`, `register`, `answer`, `watch` | `docs/commands/up.md`, `docs/commands/down.md`, `docs/commands/add.md`, `docs/commands/remove.md`, `docs/commands/restart.md`, `docs/commands/reload.md`, `docs/commands/register.md`, `docs/commands/answer.md`, `docs/commands/watch.md` | `test/commands/up*.test.ts`, `test/commands/down*.test.ts`, `test/commands/add*.test.ts`, `test/commands/remove*.test.ts`, `test/restart.test.ts`, `test/reload*.test.ts`, `test/register*.test.ts`, `test/answer.test.ts`, `test/watch.test.ts` |
 | **Family 4 — Authority & Setup Actions** | `init`, `grant`, `delegate`, `revoke`, `hold`, `tempo`, `lock`, `unlock` | `docs/commands/init.md`, `docs/commands/grant.md`, `docs/commands/delegate.md`, `docs/commands/revoke.md`, `docs/commands/hold.md`, `docs/commands/tempo.md`, `docs/commands/lock.md`, `docs/commands/unlock.md` | `test/init.test.ts`, `test/grant*.test.ts`, `test/delegate.test.ts`, `test/revoke.test.ts`, `test/hold.test.ts`, `test/tempo.test.ts`, `test/lock.test.ts` |
 | **Family 5 — Messaging, Worktrees & Tasks** | `send`, `route`, `feed`, `messages`, `issues`, `next`, `plan`, `worktree`, `ask-show`, `broker` | `docs/commands/send.md`, `docs/commands/route.md`, `docs/commands/feed.md`, `docs/commands/messages.md`, `docs/commands/issues.md`, `docs/commands/next.md`, `docs/commands/plan.md`, `docs/commands/worktree.md`, `docs/commands/ask-show.md`, `docs/commands/broker.md` | `test/send.test.ts`, `test/route.test.ts`, `test/feed.test.ts`, `test/messages.test.ts`, `test/issues.test.ts`, `test/next.test.ts`, `test/plan.test.ts`, `test/worktree.test.ts`, `test/ask-show.test.ts`, `test/broker.test.ts` |
+
+The direct `swap <seat> <preset>` form uses the `team.swap` schema. Its dry run has status `planned`, `dry_run: true`, the named `preset`, `fresh: true`, a `changes` map of `{from,to}` field values and a nullable `worktree` creation plan. A completed direct swap has status `swapped`, the same recipe changes, its new `pane` and `notes`. Existing swap listing and queue documents keep their statuses and fields. See `docs/specs/swap-preset.md` for the command and refusal rules.

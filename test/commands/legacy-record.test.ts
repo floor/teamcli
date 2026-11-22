@@ -14,11 +14,15 @@ import type { Caller } from '../../src/caller.ts';
 import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { runDown } from '../../src/commands/down.ts';
+import { createHostedWatch } from '../../src/daemon/watch.ts';
+import { hostedWatchRun } from '../../src/daemon/watch-run.ts';
+import { routeOf } from '../../src/daemon/routes.ts';
+import { forgetIdleEpisodes } from '../../src/watch/dispatch.ts';
 import { runInit } from '../../src/commands/init.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
 import { standingSource, runStatus, type StatusSources } from '../../src/commands/status.ts';
 import { runUp, type Launch } from '../../src/commands/up.ts';
-import { runWatch, type WatchSources } from '../../src/commands/watch.ts';
+import type { WatchSources } from '../../src/commands/watch.ts';
 import { runWorktree } from '../../src/commands/worktree.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
@@ -56,7 +60,10 @@ beforeEach(() => {
   writeFileSync(join(root, '.agents/team.yaml'), example);
 });
 
-afterEach(() => rmSync(base, { recursive: true, force: true }));
+afterEach(() => {
+  forgetIdleEpisodes();
+  rmSync(base, { recursive: true, force: true });
+});
 
 const store = () => storePath('acme-web', root, home);
 
@@ -117,6 +124,39 @@ function doctorSources(): DoctorSources {
     sessionRunning: () => true,
     now: () => NOW,
     home,
+  };
+}
+
+
+/** The file's seats, for the daemon route a hosted watch runs under. */
+const SEATS = ['claude-coordinator-acme', 'codex-acme', 'deepseek-acme', 'grok-acme'];
+
+/** A hosted watch over this root: the daemon's own binding, its lines collected in `log`.
+ *  A hosted watch has no timer of its own, so `beats` ticks drive its passes. */
+async function hostedPasses(
+  root: string, home: string, base: WatchSources, passes: number,
+): Promise<{ log: string; stop: () => Promise<void>; state: () => { phase: string; cycles: number } }> {
+  const route = routeOf(root, 'acme-web', 'acme-web', SEATS);
+  const log: string[] = [];
+  const host = createHostedWatch({
+    route,
+    now: base.now,
+    effects: 'open',
+    run: hostedWatchRun({ route, log: (text) => log.push(text), base, pid: 4242 }),
+  });
+  const deadline = Date.now() + 5000;
+  let beats = 0;
+  const started = base.now().getTime();
+  while (host.state().cycles < passes) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for the hosted watch: ${JSON.stringify(host.state())}`);
+    beats += 1;
+    host.tick(new Date(started + beats * 130_000));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return {
+    log: log.join(''),
+    stop: () => host.stop('the daemon is closing'),
+    state: () => host.state(),
   };
 }
 
@@ -214,9 +254,9 @@ describe('a legacy record, with the team\'s seats running', () => {
     // The file turns the load check off; an approval in force is what that needs, so the
     // check runs, and a load above the file's maximum is still reported.
     writeFileSync(join(root, '.agents/team.yaml'), example.replace('  interval: 120s', '  interval: 120s\n  checks:\n    load: off'));
-    let passes = 2;
-    const io = testIo(root, OWNER);
-    const code = await runWatch(FILE, io, {
+    // Daemon-only watch: the passes run in the daemon's hosted loop, every writer closed.
+    forgetIdleEpisodes();
+    const watched = await hostedPasses(root, home, {
       live: () => live(),
       machine: () => loaded_machine,
       standing: standingSource(home),
@@ -229,19 +269,20 @@ describe('a legacy record, with the team\'s seats running', () => {
       sleep: async () => {},
       notify: () => {},
       now: () => NOW,
-      wait: async () => --passes > 0,
+      wait: async () => false,
       alive: () => false,
       pid: 4242,
       home,
-    } satisfies WatchSources);
-    expect(code).toBe(0);
+    } satisfies WatchSources, 2);
     // Said once, however many passes run — and never as "never approved".
-    expect(io.out.split(LINE).length - 1).toBe(1);
-    expect(io.out).not.toContain('the file was never approved on this machine');
+    expect(watched.log.split(LINE).length - 1).toBe(1);
+    expect(watched.log).not.toContain('the file was never approved on this machine');
     // The check the file tried to turn off still ran, and no seat was closed.
-    expect(io.out).toContain('the load is 6.5 per core, above 6');
-    expect(io.out).not.toContain('closed ');
-    expect(io.out).toContain('the watch of "acme-web" stopped');
+    expect(watched.log).toContain('the load is 6.5 per core, above 6');
+    expect(watched.log).not.toContain('closed ');
+    expect(watched.log).toContain('watching the session "acme-web"');
+    await watched.stop();
+    expect(watched.state()).toMatchObject({ phase: 'stopped', cycles: 2 });
   });
 
   test('down dry-run with no approval record still prints the plan', async () => {
@@ -359,9 +400,9 @@ describe('a record the verification refused, through the same commands', () => {
     expect(await runDoctor(FILE, doctor, doctorSources())).toBe(1);
     expect(doctor.out).toContain(`MISS  ${WHY}\n`);
 
-    let passes = 2;
-    const io = testIo(root, OWNER);
-    const code = await runWatch(FILE, io, {
+    // Daemon-only watch: the pass runs in the daemon's hosted loop, every writer closed.
+    forgetIdleEpisodes();
+    const watched = await hostedPasses(root, home, {
       live: () => live(),
       machine: () => fine,
       standing: standingSource(home),
@@ -374,13 +415,13 @@ describe('a record the verification refused, through the same commands', () => {
       sleep: async () => {},
       notify: () => {},
       now: () => NOW,
-      wait: async () => --passes > 0,
+      wait: async () => false,
       alive: () => false,
       pid: 4242,
       home,
-    } satisfies WatchSources);
-    expect(code).toBe(0);
-    expect(io.out.split(WHY).length - 1).toBe(1);
-    expect(io.out).not.toContain('the file was never approved on this machine');
+    } satisfies WatchSources, 2);
+    expect(watched.log.split(WHY).length - 1).toBe(1);
+    expect(watched.log).not.toContain('the file was never approved on this machine');
+    await watched.stop();
   });
 });

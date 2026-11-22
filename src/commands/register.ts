@@ -102,7 +102,7 @@ export type RegisterSources = {
 /** The host's rename, in the shape a launch's own host takes it (`do: rename`). */
 const realRename = (session: string, pane: string, name: string): boolean => agentRename(pane, name, session);
 
-const realSources: RegisterSources = {
+export const realSources: RegisterSources = {
   home: homedir(),
   sessionState: (session) => sessionState(session),
   agents: (session) => agentList(session),

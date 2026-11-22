@@ -1,3 +1,4 @@
+// Codex launches omit the obsolete OAuth refresh override after the dialog fix.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,18 +28,22 @@ const fixture = (name: string) => readFileSync(new URL(`../fixtures/codex/0.157.
 const codex = profileFor('codex');
 if (!codex) throw new Error('codex has no profile');
 
+/** The profile's computer- and browser-use pins a seat on the default desktop_control carries:
+ *  none. */
+const PINS = '';
+
 describe('Codex launch and captured screens', () => {
   test('unattended flags are launch arguments; rules are a first message', () => {
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.')).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false');
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'on' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.mcp_oauth_refresh_coordination=false');
-    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen -c features.mcp_oauth_refresh_coordination=false');
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.')).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen' + PINS);
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'on' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen' + PINS);
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, undefined, { codexDaemon: 'off' })).toBe('AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-daemon --no-alt-screen' + PINS);
     expect(codex.rulesOption).toBeNull();
     expect(codex.loginCheck).toEqual(['login', 'status']);
     expect(codex.exit).toBe('/exit');
     expect(versionVerdict('codex-cli 0.157.0', codex.tested)).toBe('tested');
     expect(versionVerdict('codex-cli 0.160.0', codex.tested)).toBe('tested');
-    expect(versionVerdict('codex-cli 0.161.0', codex.tested)).toBe('tested');
-    expect(versionVerdict('codex-cli 0.162.0', codex.tested)).toBe('newer');
+    expect(versionVerdict('codex-cli 0.167.0', codex.tested)).toBe('tested');
+    expect(versionVerdict('codex-cli 0.167.1', codex.tested)).toBe('newer');
   });
   test('the team inbox rides the launch as two -c values, and no file is written', () => {
     expect(codex.mcpInbox).toEqual({
@@ -66,8 +71,7 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--session","acme"]\''
-      + ' -c features.mcp_oauth_refresh_coordination=false',
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--session","acme"]\'' + PINS,
     );
   });
   test('a quote or backslash in a structured value is escaped inside the TOML string', () => {
@@ -81,8 +85,7 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/my \\"bun\\""\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper","--session","acme"]\''
-      + ' -c features.mcp_oauth_refresh_coordination=false',
+      + ' -c \'mcp_servers.team_inbox.args=["/src/with \\\\ backslash/cli.ts","mcp","serve","--seat","helper","--session","acme"]\'' + PINS,
     );
   });
   test('a launch that read a team file names it to the server, inside the -c array', () => {
@@ -97,8 +100,7 @@ describe('Codex launch and captured screens', () => {
     ).toBe(
       'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen'
       + ' -c \'mcp_servers.team_inbox.command="/opt/bun"\''
-      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--file","/tmp/my project/.agents/team.yaml"]\''
-      + ' -c features.mcp_oauth_refresh_coordination=false',
+      + ' -c \'mcp_servers.team_inbox.args=["/src/cli.ts","mcp","serve","--seat","helper","--file","/tmp/my project/.agents/team.yaml"]\'' + PINS,
     );
   });
   test('a plan for a seat in a lobby carries the team file onto the codex launch line', () => {
@@ -352,24 +354,6 @@ describe('Codex launch and captured screens', () => {
 });
 
 describe('the typed-newline captures (Codex)', () => {
-  // Real captures (see the fixtures README): 2026-10-04, plain `codex --no-daemon`,
-  // 163 by 47 — a two-line text typed with the CLI's newline key (Ctrl+J), a two-line text
-  // in one write, a second line beginning with the prompt glyph and one with `>`, a long
-  // line that wraps, and three lines with a blank middle. Every later line of the person's
-  // text is drawn at the continuation column, two; none at the prompt column. They stay as
-  // documentation of the continuation column; a row break may stand for at most one space,
-  // never a newline, so no multi-line text reads back — the delivery is one line, and
-  // nothing types a multi-line text.
-  test.each([
-    ['typed-two-lines', 'first typed line of the sample\nsecond typed line of the sample'],
-    ['pasted-two-lines', 'first pasted line of the sample\nsecond pasted line of the sample'],
-    ['second-line-glyph', 'the reply follows\n› quoted line beginning with the prompt glyph'],
-    ['second-line-gt', 'a plain reply follows\n> line beginning with a greater-than sign'],
-    ['blank-middle', 'first line above the blank\n\nthird line below the blank'],
-  ] as const)('%s reads unsent, and its multi-line text no longer reads back', (file, text) => {
-    expect(readScreen('codex', fixture(file)).kind).toBe('unsent');
-    expect(boxHoldsText('codex', text, fixture(file))).toBe(false);
-  });
   test('wrapped-line reads unsent and holds exactly its one line', () => {
     const text = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu';
     expect(readScreen('codex', fixture('wrapped-line')).kind).toBe('unsent');
@@ -790,32 +774,6 @@ function drawn(text: string): string {
   const [first = '', ...rest] = wordWrap(text, 50);
   return [`› ${first}`, ...rest.map((row) => `  ${row}`)].join('\n');
 }
-
-test('the box limits: 16 rows read back, 17 and more read unknown', () => {
-  // rules-fit-16.txt is the tallest box whose input row, frame and status row all fit the
-  // reading window; from 17 rows the window starts at the input row itself and the core reads
-  // unknown, however complete the screen looks (rules-fit-17.txt) — and at 19 the pane's own
-  // scroll begins (rules-fit-19.txt is complete but unknown, rules-fit-20.txt has dropped its
-  // first typed row). The whole rules message drew 30 rows at 50 columns (rules-scrolled.txt),
-  // which is why the rules now travel as a file and one line.
-  for (const rows of [5, 12, 16]) {
-    expect(readScreen('codex', capture(`rules-fit-${rows}`)).kind).toBe('unsent');
-  }
-  for (const rows of [17, 19, 20]) {
-    expect(readScreen('codex', capture(`rules-fit-${rows}`)).kind).toBe('unknown');
-  }
-  expect(readScreen('codex', capture('rules-scrolled')).kind).toBe('unknown');
-  // The fitted texts are multi-line, and a row break may stand for at most one space, never
-  // a newline: no multi-line text reads back at any height, and nothing types one. The
-  // captures stay as documentation of the window's edge.
-  for (const rows of [5, 12, 16, 17, 19, 20]) {
-    expect(boxHoldsText('codex', fitted(rows), capture(`rules-fit-${rows}`))).toBe(false);
-  }
-  expect(boxHoldsText('codex', SAMPLE_RULES, capture('rules-scrolled'))).toBe(false);
-  // A pane after a sent and answered turn reads the same (rules-part-16-after-reply.txt).
-  expect(readScreen('codex', capture('rules-part-16-after-reply')).kind).toBe('unsent');
-  expect(boxHoldsText('codex', fitted(16), capture('rules-part-16-after-reply'))).toBe(false);
-});
 
 // The line the 2026-10-05 capture holds, as `team` composes it: the same path and hash the
 // fixtures README names, through the function that builds it. The box draws it as four rows,

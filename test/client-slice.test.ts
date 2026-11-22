@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { readArgs } from '../src/args.ts';
@@ -16,11 +16,14 @@ import type { SendHost } from '../src/commands/send.ts';
 import { runSend } from '../src/commands/send.ts';
 import {
   CLIENT_EXPIRY_MAX_MS,
+  CLIENT_SLICE_DISPLAY_NAME,
   KEY_ISOLATION_LINE,
   appendClientRevocation,
   clientGrantsFolder,
   clientKeyDir,
   clientKeyPlacementProblem,
+  staleRegistryRoots,
+  startFolderProblems,
   clientRevocations,
   newClientKeyPair,
   publicKeyObject,
@@ -31,24 +34,34 @@ import {
   type ClientGrantRecord,
 } from '../src/client/records.ts';
 import { claimClientRequest } from '../src/client/replay.ts';
-import { resolveClientTarget, runClientSend } from '../src/client/send.ts';
+import { resolveClientTarget, runClientSend, writeClientDrop } from '../src/client/send.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
+import { CHANNEL_HELD_RECEIPT, reserveChannelFallback } from '../src/mcp/channel.ts';
+import { seatFolderOf } from '../src/send/drop-folder.ts';
+import { activate } from '../src/queue/floor.ts';
 import { insideTeamPane } from '../src/client/pane-guard.ts';
 import { runClient } from '../src/commands/client.ts';
-import { runClientMessages } from '../src/client/inbox.ts';
+import { clientSentStatuses, runClientMessages, sentTeamsOf } from '../src/client/inbox.ts';
 import { clientRequestBody, signClientRequest, type ClientRequest } from '../src/client/verify.ts';
 import { CLIENT_REQUEST_DOMAIN } from '../src/client/verify.ts';
 import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
-import { emptySession, updateState, type SessionState } from '../src/state.ts';
+import { carriedStartFolderProblem, emptySession, keptStartFolder, LOG_FILE, retireCarriedStartFolder, updateState, type SessionState } from '../src/state.ts';
+import { CANONICAL_RECORD_VERSION } from '../src/file/canonical-record.ts';
+import { canonicalTeam } from '../src/file/team-config.ts';
+import { sha256, TEAM_CONFIG_RECORD_FORMAT, writeStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { readHistory, type HistoryEntry } from '../src/send/history.ts';
-import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
+import { signedRecordOf, signReceiptPayload, verifyRecord } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
+import type { TypedWakeHost } from '../src/send/typed-wake.ts';
 import type { OrderWord } from '../src/settings/inherit.ts';
-import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
+import { keyOf, messageKeyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 
 const TEAM_ID = 'aaaaaaaaaaaa';
 const OTHER_TEAM_ID = 'bbbbbbbbbbbb';
@@ -84,7 +97,9 @@ function fixture(label: string): Fixture {
   const home = join(base, 'home');
   const teamRoot = join(base, 'floor');
   const lobby = join(base, 'lobby');
-  for (const dir of [home, teamRoot, lobby]) mkdirSync(dir, { recursive: true });
+  // Both registered teams' folders exist: a registry entry whose root is gone refuses every
+  // client key's placement (the stale-root scene below).
+  for (const dir of [home, teamRoot, lobby, join(base, 'teamcli')]) mkdirSync(dir, { recursive: true });
   const ownerKey = keyOf(home);
   const agent = registerAgent(home, {
     name: 'orchestrator',
@@ -307,7 +322,182 @@ describe('client grant and key records', () => {
       // A hand-edited or future record: the field is present, but it is not a path.
       state.sessions.floor = { seats: { worker: { id: 'seat_0123456789ab', stage: 'ready', start_cwd: 42 } }, worktrees: {} } as unknown as SessionState;
     });
-    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('not an absolute path');
+    // Refused, naming the seat, its team's state file and the repair: a key the check cannot
+    // place could sit in that seat's folder, so one bad record is a refusal, never a skip.
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).toContain('the recorded start folder of seat "worker"');
+    expect(said).toContain('is not a path: client key placement cannot be checked; `team restart worker` records it again');
+    expect(startFolderProblems(f.teamRoot)).toEqual(['worker (session floor): its recorded start folder is not a path, so every client send on this machine is refused; run `team restart worker`']);
+  });
+
+  test('a relative start folder is read against the team root as it is on disk, never its registry spelling', () => {
+    const f = fixture('alias-root');
+    // The registry names the team root through a link at another depth: the seat ran in the
+    // real root, so its relative record must be read from there.
+    const alias = join(f.base, 'aliases', 'deeper', 'team');
+    mkdirSync(dirname(alias), { recursive: true });
+    symlinkSync(f.teamRoot, alias);
+    const teams = join(f.home, '.config', 'team', 'teams.yaml');
+    writeFileSync(teams, readFileSync(teams, 'utf8').replace(`root: ${f.teamRoot}`, `root: ${alias}`));
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      const session = emptySession();
+      session.seats.worker = { id: 'seat_0123456789ab', stage: 'ready', start_cwd: relative(realpathSync(f.teamRoot), dirname(f.keyDir)) };
+      state.sessions.floor = session;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
+  });
+
+  test('a registry root that is genuinely not there is passed over with a doctor warning; a root that is a link to nothing refuses', () => {
+    const f = fixture('stale-root');
+    const missing = join(f.base, 'teamcli');
+    rmSync(missing, { recursive: true, force: true });
+    // Not there at all: no folder below it can hold the key, so the placement passes it over.
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+    expect(staleRegistryRoots(f.home)).toEqual([
+      `the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${missing}, which is not there: a client key's placement passes it over; restore the folder, or remove the stale entry with \`team forget ${OTHER_TEAM_ID}\``,
+    ]);
+    // A link to nothing may lead anywhere: refused, naming the entry and its repair.
+    symlinkSync(join(f.base, 'nowhere'), missing);
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).toContain(`the team registry records team "teamcli" (${OTHER_TEAM_ID}) at ${missing}, which cannot be read`);
+    expect(said).toContain(`\`team forget ${OTHER_TEAM_ID}\``);
+    expect(staleRegistryRoots(f.home)[0]).toContain('every client send on this machine is refused');
+    // Restored, nothing is said.
+    rmSync(missing);
+    mkdirSync(missing);
+    expect(staleRegistryRoots(f.home)).toEqual([]);
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+  });
+
+  test('declarations are read by the registry\'s own id for the entry, through the root\'s real path', () => {
+    const f = fixture('registry-id');
+    // The registry keys this team by its recorded id, which is not the hash of today's root
+    // spelling: the record stored under that id is the team's definition, and its seat starts
+    // beside the key's folder.
+    const text = `format: 1
+project: floor
+operator: steward
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: steward
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    cwd: ${relative(realpathSync(f.teamRoot), dirname(f.keyDir))}
+`;
+    const checked = validateTeamFile(text);
+    if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+    expect(teamIdOf(f.teamRoot)).not.toBe(TEAM_ID);
+    writeStoredTeamConfig(f.home, {
+      format: TEAM_CONFIG_RECORD_FORMAT, id: TEAM_ID, root: f.teamRoot, text, text_sha256: sha256(text),
+      record_version: CANONICAL_RECORD_VERSION, record_sha256: sha256(canonicalTeam(checked.team)), created_by: 'init', created_at: NOW.toISOString(),
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" starts in');
+  });
+
+  test('a registry root that is not absolute refuses', () => {
+    const f = fixture('relative-root');
+    const teams = join(f.home, '.config', 'team', 'teams.yaml');
+    writeFileSync(teams, readFileSync(teams, 'utf8').replace(`root: ${f.teamRoot}`, 'root: floor'));
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('cannot be checked');
+  });
+
+  test('a state that cannot be read, or a state link to nothing, refuses rather than read as no record', () => {
+    const dangling = fixture('state-dangling');
+    mkdirSync(join(dangling.teamRoot, '.agents'), { recursive: true });
+    symlinkSync(join(dangling.base, 'gone.json'), join(dangling.teamRoot, '.agents', 'team.state.json'));
+    expect(clientKeyPlacementProblem(dangling.home, dangling.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(dangling.teamRoot)[0]).toContain('is a link to nothing');
+    const folder = fixture('state-folder');
+    mkdirSync(join(folder.teamRoot, '.agents', 'team.state.json'), { recursive: true });
+    expect(clientKeyPlacementProblem(folder.home, folder.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(folder.teamRoot)[0]).toContain('cannot be read');
+    // A state that is genuinely not there is no record, and refuses nothing.
+    const none = fixture('state-none');
+    expect(startFolderProblems(none.teamRoot)).toEqual([]);
+  });
+
+  test('a folder a relaunch carries for a dropped record is checked as the seat\'s own, malformed values too', () => {
+    const f = fixture('carried');
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      state.sessions.floor = { ...emptySession(), retained_start_cwd: { worker: dirname(f.keyDir) } } as SessionState;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
+    for (const value of [null, false, 0, '']) {
+      updateState(join(f.teamRoot, '.agents'), (state) => {
+        (state.sessions.floor as unknown as { retained_start_cwd: Record<string, unknown> }).retained_start_cwd = { worker: value };
+      });
+      expect(clientKeyPlacementProblem(f.home, f.keyDir), JSON.stringify(value)).toContain('is not a path');
+      expect(startFolderProblems(f.teamRoot).length, JSON.stringify(value)).toBe(1);
+    }
+  });
+
+  test('a dangling .agents link is not an absent state: it refuses', () => {
+    const f = fixture('agents-dangling');
+    symlinkSync(join(f.base, 'gone-agents'), join(f.teamRoot, '.agents'));
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('cannot be read');
+    expect(startFolderProblems(f.teamRoot)[0]).toContain('is a link to nothing');
+  });
+
+  test('a lobby seat\'s declared lobby is checked even when the registry records another', () => {
+    const f = fixture('declared-lobby');
+    mkdirSync(join(f.teamRoot, '.agents'), { recursive: true });
+    writeFileSync(join(f.teamRoot, '.agents', 'team.yaml'), `format: 1
+project: floor
+entity: floor
+operator: steward
+lobby: ${dirname(f.keyDir)}
+workspace:
+  mode: shared
+seats:
+  - role: orchestrator
+    name: steward
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    leads: true
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    cwd: .
+`);
+    const said = clientKeyPlacementProblem(f.home, f.keyDir);
+    expect(said).not.toBeNull();
+    expect(said).toMatch(/inside the folder seat "worker" starts in|cannot be checked/);
+  });
+
+  test('a relative start folder an older version recorded is read against the team root, not refused', () => {
+    const f = fixture('relative-cwd');
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      const session = emptySession();
+      session.seats.worker = { id: 'seat_0123456789ab', stage: 'ready', start_cwd: 'web' };
+      state.sessions.floor = session;
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toBeNull();
+    expect(startFolderProblems(f.teamRoot)).toEqual([]);
+    // Still checked: read against the root, a relative folder that reaches the key is refused.
+    updateState(join(f.teamRoot, '.agents'), (state) => {
+      state.sessions.floor!.seats.worker!.start_cwd = relative(f.teamRoot, dirname(f.keyDir));
+    });
+    expect(clientKeyPlacementProblem(f.home, f.keyDir)).toContain('inside the folder seat "worker" ran in');
   });
 
   test('a present but non-path recorded worktree path is unknown, not accepted', () => {
@@ -971,10 +1161,13 @@ function liveInboxIn(w: WalkWorld): void {
   );
 }
 
-/** The receiving session's own declaration that it accepts cross-session frames, and the socket
- *  its pane exposes. The declaration's file predates the socket, so the session was started after
- *  the declaration took effect and the socket leg is live. */
+/** The receiving session's own declaration that it accepts cross-session frames, the team file's
+ *  opt-in (`inbound: accept` on the seat: a launch's own accept authorizes nothing by itself), and
+ *  the socket its pane exposes. The declaration's file predates the socket, so the session was
+ *  started after the declaration took effect and the socket leg is live. */
 function acceptInbound(w: WalkWorld): void {
+  const file = join(w.dir, 'team.yaml');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('    name: orchestrator\n', '    name: orchestrator\n    inbound: accept\n'));
   const path = cliHookSettingsPath(w.dir, 'floor', 'orchestrator');
   if (path === null) throw new Error('the fixture seat declares no settings path');
   mkdirSync(dirname(path), { recursive: true });
@@ -1013,7 +1206,8 @@ function walkHost(
     frames,
     dials: () => dials,
     delivery: options.delivery,
-    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator' }],
+    // herdr names the CLI it detected: the live placement a socket dial proves reads it.
+    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator', cli: 'claude' }],
     processInfo: () => ({ shell: 111, foreground: [222] }),
     socketsDir: w.sockets,
     deliver: async (socketPath: string, frame: string): Promise<SendOutcome> => {
@@ -1078,51 +1272,6 @@ describe('the client send walk', () => {
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
   });
 
-  test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {
-    const w = walkFixture('walk-socket');
-    acceptInbound(w);
-    const host = walkHost(w);
-    const io = capture(w, { caller: owner });
-    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
-    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    expect(host.frames).toHaveLength(1);
-    const frame = JSON.parse(host.frames[0] as string) as { type: string; message: { role: string; content: string }; msg_id: string };
-    expect(frame.type).toBe('user');
-    expect(frame.msg_id).toBe('drop-1');
-    // The client's socket frame opens with the compact client header and closes with the one-line footer.
-    expect(frame.message.content).toBe(
-      'Client Grok Bot (owner relay):\n\nhello orchestrator\n\n↩ team reply drop-1 "…" · team ack drop-1',
-    );
-    // One signed record and no receipt: only the seat writes a read receipt, so the taken frame
-    // leaves the record unread and the watch re-wakes it like any other message.
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
-    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
-  });
-
-  test('a refused socket frame falls back to the typed trigger with the same record', async () => {
-    const w = walkFixture('walk-fallback');
-    acceptInbound(w);
-    const host = walkHost(w, {
-      dial: async () => ({ ok: false, reason: 'the session closed the connection before it took the frame' }),
-    });
-    const io = capture(w, { caller: owner });
-    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
-    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
-    expect(host.dials()).toBe(1);
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    // The frame was never taken, so no read receipt exists for it.
-    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    const last = walkHistory(w).at(-1);
-    expect(last).toMatchObject({ via: 'drop', outcome: 'queued, not woken' });
-    expect(last?.failed).toContain('socket: the session closed the connection before it took the frame');
-  });
-
   test('with no channel and no inbound declaration, the typed trigger wakes the seat', async () => {
     const w = walkFixture('walk-typed');
     const host = walkHost(w);
@@ -1163,41 +1312,151 @@ describe('the client send walk', () => {
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
   });
 
-  test('the record the walk carries is the grant\'s own: one drop, no receipt, client principal intact', async () => {
-    const w = walkFixture('walk-identity');
+  test('a Claude seat whose launch accepts frames takes the client drop on its socket, as a seat send does', async () => {
+    const w = walkFixture('walk-socket');
     acceptInbound(w);
-    let atDial: { names: string[]; bytes: string } = { names: [], bytes: '' };
-    const host = walkHost(w, {
-      onDial: () => {
-        atDial = {
-          names: readdirSync(w.dropDir).sort(),
-          bytes: readFileSync(join(w.dropDir, 'drop-1'), 'utf8'),
-        };
-      },
-    });
+    const host = walkHost(w);
     const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    // The record was on disk, alone, before the frame was dialed; the walk did not rewrite it.
-    expect(atDial.names).toEqual(['drop-1']);
-    expect(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')).toBe(atDial.bytes);
-    // The taken frame wrote no receipt: only the seat writes a read receipt, so the record stays
-    // unread for its own reader and the watch re-wakes it like any other message.
-    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1']);
-    const parsed = signedRecordOf(JSON.parse(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')));
-    expect(parsed).not.toBeNull();
-    if (parsed === null) return;
-    expect(parsed.payload.from).toBe(`client:${CLIENT_ID}`);
-    expect(parsed.payload.from_id).toBeNull();
-    expect(parsed.payload.from_client).toEqual({ client_id: CLIENT_ID, grant_id: w.grant.grantId });
-    expect(parsed.payload.to).toBe('orchestrator');
-    expect(parsed.payload.to_id).toBe(w.grant.recipientId);
-    const messageKey = messageKeyState(w.home);
-    expect(messageKey.kind).toBe('key');
-    if (messageKey.kind === 'key') expect(verifyRecord(parsed, messageKey.key)).toBe(true);
-    // The frame names the sender as the person's client, never as a seat address.
-    const frame = JSON.parse(host.frames[0] as string) as { message: { content: string } };
-    expect(frame.message.content).toContain('Client Grok Bot (owner relay):');
-    expect(frame.message.content).not.toContain('client:grok-bot@');
+    // The client contract is unchanged: one confirmation line, one key-isolation line.
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
+    expect(host.dials(), readFileSync(join(w.dir, LOG_FILE), 'utf8')).toBe(1);
+    expect(host.frames[0]).toContain(CLIENT_SLICE_DISPLAY_NAME);
+    expect(host.typed).toEqual([]);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
+    const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
+    // The history line is the send's one record of success: the log keeps no separate "sent on
+    // the socket" line, only the client walk's own outcome.
+    expect(log).not.toContain('sent on the socket');
+    expect(log).toContain('orchestrator: delivered (socket) for client drop drop-1');
+    expect(log).not.toContain('queued, no event adapter');
+  });
+
+  test('the socket is dialed only while the registry still records the grant\'s recipient on that seat and CLI', async () => {
+    const w = walkFixture('walk-socket-retired');
+    acceptInbound(w);
+    // The record now says another CLI holds the seat: the dial's record check refuses it.
+    updateAgent(w.home, w.grant.recipientId, { cli: 'codex' });
+    const host = walkHost(w);
+    expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, host)).toBe(0);
+    expect(host.dials()).toBe(0);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('socket: the addressed seat record changed');
+  });
+
+  test('a team that declares the retired typed word still reaches a socket-accepting Claude seat (the 2026-11-16 case)', async () => {
+    const w = walkFixture('walk-socket-declared');
+    acceptInbound(w);
+    // The live floor team's word: typed was retired, so before this the client walk filtered the
+    // order to `typed` alone, refused it, and left the drop "queued, not woken" while every seat
+    // send reached the same seat on its socket.
+    const host = walkHost(w, { delivery: { team: ['typed'] } });
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(host.dials()).toBe(1);
+    expect(host.typed).toEqual([]);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
+  });
+
+  for (const scene of [
+    { cli: 'codex', launch: 'codex', idle: 'codex/0.161.0/idle.txt', working: 'codex/0.161.0/working.txt', composer: '› Ask Codex to do anything' },
+    { cli: 'grok', launch: 'grok', idle: 'grok/1.0.70/idle.txt', working: 'grok/1.0.52/working.txt', composer: null },
+  ] as const) {
+    test(`a ${scene.cli} seat takes the client drop through its profile's typed wake, as a seat send does`, async () => {
+      const w = walkFixture(`walk-${scene.cli}`);
+      const file = join(w.dir, 'team.yaml');
+      writeFileSync(file, readFileSync(file, 'utf8').replace('cli: claude-code', `cli: ${scene.cli}`).replace('launch: claude', `launch: ${scene.launch}`).replace('vendor: anthropic', `vendor: ${scene.cli === 'codex' ? 'openai' : 'xai'}`));
+      const idle = readFileSync(join(import.meta.dir, 'fixtures', scene.idle), 'utf8');
+      const working = readFileSync(join(import.meta.dir, 'fixtures', scene.working), 'utf8');
+      const typed: string[] = [];
+      const prompted: string[] = [];
+      let enters = 0;
+      let reads = 0;
+      const pane: TypedWakeHost = {
+        read: () => {
+          reads += 1;
+          if (enters > 0 || prompted.length > 0) return working;
+          if (typed.length > 0 && scene.composer !== null) return idle.replace(scene.composer, `› ${(typed[typed.length - 1] ?? '').replaceAll('\n', '\n  ')}`);
+          return idle;
+        },
+        type: (_pane, text) => { typed.push(text); return true; },
+        enter: () => { enters += 1; return true; },
+        prompt: (_pane, line) => { prompted.push(line); return true; },
+        wait: async () => {},
+      };
+      const host = { ...walkHost(w), typedWake: () => pane, wakeVerifyMs: 50, wakePollMs: 1 } as unknown as WalkHost;
+      const io = capture(w, { caller: owner });
+      expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+      expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+      // Codex types its one line and presses Enter; Grok's profile submits by agent prompt.
+      if (scene.cli === 'codex') {
+        expect(typed, readFileSync(join(w.dir, LOG_FILE), 'utf8')).toHaveLength(1);
+        expect(enters).toBe(1);
+      } else {
+        expect(prompted).toHaveLength(1);
+        expect(typed).toEqual([]);
+      }
+      expect(reads).toBeGreaterThan(0);
+      expect(host.frames).toEqual([]);
+      expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed', outcome: 'delivered (typed wake)' });
+      expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('orchestrator: delivered (typed wake) for client drop drop-1');
+    });
+  }
+
+  test('the client reads its own message status events: delivered, then read, then replied', async () => {
+    const w = walkFixture('walk-status');
+    acceptInbound(w);
+    const host = walkHost(w);
+    expect(await runSend(clientArgs(w), capture(w, { caller: owner }).io, host)).toBe(0);
+    const coordinator = { entity: 'floor', teamId: TEAM_ID, teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const teams = sentTeamsOf(w.home, coordinator);
+    // Every team of the grant's entity is read: the coordinator's first, then the fixture's second.
+    expect(teams.map((one) => one.project)).toEqual(['floor', 'teamcli']);
+    const key = messageKeyOf(w.home);
+    const statusNow = () => clientSentStatuses({ home: w.home, teams, clientId: w.grant.clientId, key, replies: [], limit: 20 });
+    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', team: 'floor', at: NOW.toISOString(), status: 'delivered' }]);
+    // The seat's own signed read receipt is what makes it read; a planted file proves nothing.
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), '{"not":"signed"}\n');
+    expect(statusNow()[0]?.status).toBe('delivered');
+    const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: 'drop-1', to: 'orchestrator', root: w.teamRoot, session: 'floor', at: NOW.toISOString() }, w.home);
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), `${JSON.stringify(receipt)}\n`);
+    expect(statusNow()[0]?.status).toBe('read');
+    // A verified reply on the message's own thread in the client's inbox is the replied event.
+    const replied = clientSentStatuses({ home: w.home, teams, clientId: w.grant.clientId, key, replies: [{ id: 'r-1', at: NOW.toISOString(), from: 'orchestrator', from_id: '', to: `client:${w.grant.clientId}`, body: 'ok', thread: 'drop-1', grantId: w.grant.grantId }], limit: 20 });
+    expect(replied[0]?.status).toBe('replied');
+  });
+
+  test('an accepted send whose delivery walk cannot run is still in the client\'s status list, as queued, then read', async () => {
+    const w = walkFixture('walk-unwalked');
+    // The receiving file no longer names the grant's seat: the walk cannot run at all, yet the
+    // drop the grant wrote is the client's message.
+    const file = join(w.dir, 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll('orchestrator', 'chief'));
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, walkHost(w))).toBe(0);
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
+    const coordinator = { entity: 'floor', teamId: TEAM_ID, teamRoot: w.teamRoot, session: 'floor', recipientId: w.grant.recipientId, recipientSeat: 'orchestrator' };
+    const key = messageKeyOf(w.home);
+    const statusNow = () => clientSentStatuses({ home: w.home, teams: sentTeamsOf(w.home, coordinator), clientId: w.grant.clientId, key, replies: [], limit: 20 });
+    expect(statusNow()).toEqual([{ id: 'drop-1', to: 'orchestrator', team: 'floor', at: NOW.toISOString(), status: 'queued' }]);
+    const receipt = signReceiptPayload({ kind: 'receipt', status: 'read', id: 'drop-1', to: 'orchestrator', root: w.teamRoot, session: 'floor', at: NOW.toISOString() }, w.home);
+    writeFileSync(join(w.dropDir, 'drop-1.read.json'), `${JSON.stringify(receipt)}\n`);
+    expect(statusNow()[0]?.status).toBe('read');
+  });
+
+  test('a socket that refuses the frame leaves the client drop in the bus inbox, named', async () => {
+    const w = walkFixture('walk-socket-refused');
+    acceptInbound(w);
+    const host = walkHost(w, { dial: async () => ({ ok: false, reason: 'connection refused' } as unknown as SendOutcome) });
+    const io = capture(w, { caller: owner });
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(host.dials()).toBeGreaterThanOrEqual(1);
+    expect(host.typed).toEqual([]);
+    expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop' });
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('socket: connection refused); the client drop waits in its bus inbox');
   });
 });
 
@@ -1219,4 +1478,107 @@ test('a world built from a temp working directory still places its client key', 
     process.chdir(cwd);
     rmSync(tempCheckout, { recursive: true, force: true });
   }
+});
+
+describe('the start folder a record write keeps', () => {
+  test('fresh workspace evidence wins; without it the prior folder stands, made absolute; a malformed one is kept', () => {
+    expect(keptStartFolder('/srv/team', '/srv/team/web', '/old')).toBe('/srv/team/web');
+    expect(keptStartFolder('/srv/team', 'web', 42)).toBe('/srv/team/web');
+    expect(keptStartFolder('/srv/team', undefined, 'legacy')).toBe('/srv/team/legacy');
+    expect(keptStartFolder('/srv/team', undefined, '/abs')).toBe('/abs');
+    // No path at all, and nothing fresh to repair it: kept as it was, so placement keeps refusing.
+    expect(keptStartFolder('/srv/team', undefined, 42) as unknown).toBe(42);
+    expect(keptStartFolder('/srv/team', undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe('carried start folders that do not read', () => {
+  test('are named before any launch, and a record write never throws on them', () => {
+    for (const value of [null, 42, 'x', []]) {
+      const session = { ...emptySession(), retained_start_cwd: value } as unknown as SessionState;
+      expect(carriedStartFolderProblem(session, 'floor', '/srv/team/.agents'), JSON.stringify(value)).toContain('are not a map by seat name: nothing was launched');
+      expect(() => retireCarriedStartFolder(session, 'worker')).not.toThrow();
+      // Kept as it was: it is placement evidence the client key's check refuses on.
+      expect((session as { retained_start_cwd?: unknown }).retained_start_cwd).toEqual(value);
+    }
+    expect(carriedStartFolderProblem({ ...emptySession(), retained_start_cwd: { worker: 0 } }, 'floor', '/x')).toBeNull();
+    expect(carriedStartFolderProblem(undefined, 'floor', '/x')).toBeNull();
+  });
+});
+
+// Live finding (2026-11-21, floor): a client's message to the orchestrator waited 2000 ms for the
+// channel push, got none, and nothing re-offered it for 17 minutes. The channel server refused
+// every client record, so the client walk's first leg could never be taken and every channel
+// re-offer the scheduler reserved for it pushed nothing. The seat's own channel server now pushes
+// a client's signed record whose originating grant verifies.
+describe('a client drop on the coordinator seat\'s own channel', () => {
+  const FLAG = '--dangerously-load-development-channels server:team-inbox';
+
+  function feed(): { lines: AsyncIterable<string>; write(line: string): void; end(): void; replies: string[] } {
+    let wake: (() => void) | null = null;
+    let ended = false;
+    const replies: string[] = [];
+    const lines = (async function* () {
+      while (!ended) await new Promise<void>((resolve) => { wake = resolve; });
+    })();
+    return { lines, write: (line) => replies.push(line), end: () => { ended = true; const resume = wake; wake = null; resume?.(); }, replies };
+  }
+
+  const notices = (replies: readonly string[]): string[] => replies
+    .map((line) => JSON.parse(line) as { method?: string; params?: { content?: unknown } })
+    .filter((one) => one.method === 'notifications/claude/channel')
+    .map((one) => String(one.params?.content));
+
+  test('the channel server pushes the client\'s signed drop when it lands', async () => {
+    const w = walkFixture('channel-push');
+    const teamFile = join(w.dir, 'team.yaml');
+    writeFileSync(teamFile, readFileSync(teamFile, 'utf8').replace('    launch: claude\n', `    launch: claude ${FLAG}\n`));
+    writeFileSync(join(w.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { floor: { seats: { orchestrator: { stage: 'ready', pane: 'pane-orchestrator' } }, worktrees: {} } } })}\n`);
+    const target = resolveClientTarget(w.home, 'orchestrator@floor', w.grant);
+    if (!target.ok) throw new Error(target.why);
+    const stream = feed();
+    const io = testIo(w.teamRoot, { kind: 'seat', name: 'orchestrator', pane: 'pane-orchestrator', session: 'floor' });
+    const running = runMcpServe({ seat: 'orchestrator', session: 'floor' }, io, stream, { home: w.home });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const drop = writeClientDrop({ home: w.home, grant: { clientId: CLIENT_ID, grantId: w.grant.grantId }, target: target.target, body: 'hello from the console', now: new Date() });
+      if (!drop.ok) throw new Error(drop.why);
+      for (let at = 0; at < 400 && notices(stream.replies).length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(notices(stream.replies)).toHaveLength(1);
+      expect(notices(stream.replies)[0]).toContain('hello from the console');
+    } finally {
+      stream.end();
+      await running;
+    }
+  });
+
+  test('a stamped client drop whose send gave the channel up is re-offered on the channel, numbered', async () => {
+    const w = walkFixture('channel-reoffer');
+    const teamFile = join(w.dir, 'team.yaml');
+    writeFileSync(teamFile, readFileSync(teamFile, 'utf8').replace('    launch: claude\n', `    launch: claude ${FLAG}\n`));
+    writeFileSync(join(w.dir, 'team.state.json'), `${JSON.stringify({ format: 1, sessions: { floor: { seats: { orchestrator: { stage: 'ready', pane: 'pane-orchestrator' } }, worktrees: {} } } })}\n`);
+    expect(activate(w.teamRoot, { home: w.home, build: 'b', actors: () => [{ kind: 'daemon', name: 'daemon', pid: 1, build: 'b', level: 3 }] }).kind).toBe('activated');
+    const target = resolveClientTarget(w.home, 'orchestrator@floor', w.grant);
+    if (!target.ok) throw new Error(target.why);
+    const drop = writeClientDrop({ home: w.home, grant: { clientId: CLIENT_ID, grantId: w.grant.grantId }, target: target.target, body: 'held off once', now: new Date() });
+    if (!drop.ok) throw new Error(drop.why);
+    expect(drop.record.lvl).toBe(3);
+    // The send's channel leg missed its grace: its abort and held marker stand, no push did.
+    const folder = seatFolderOf(target.target.dropDir, drop.id);
+    expect(reserveChannelFallback(folder, { v: 1, kind: CHANNEL_HELD_RECEIPT, id: drop.id, at: new Date().toISOString(), reason: 'no push receipt within 2000 ms' })).toBe('held');
+    const then = new Date(Date.now() - 2 * 60_000);
+    utimesSync(join(folder, drop.id), then, then);
+    const stream = feed();
+    const io = testIo(w.teamRoot, { kind: 'seat', name: 'orchestrator', pane: 'pane-orchestrator', session: 'floor' });
+    const running = runMcpServe({ seat: 'orchestrator', session: 'floor', redeliverMs: 20 }, io, stream, { home: w.home });
+    try {
+      for (let at = 0; at < 400 && notices(stream.replies).length === 0; at += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(notices(stream.replies)).toHaveLength(1);
+      expect(notices(stream.replies)[0]!.split('\n')[0]).toBe(`message ${drop.id} · delivery 1`);
+      expect(notices(stream.replies)[0]).toContain('held off once');
+    } finally {
+      stream.end();
+      await running;
+    }
+  });
 });

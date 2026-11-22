@@ -210,7 +210,7 @@ describe('sidebar slice 1 independent verification', () => {
   });
 
   describe('a commented header never ends a span', () => {
-    test('commented headers inside a marked [ui.sidebar.agents] table do not terminate its replacement span', () => {
+    test('commented headers inside a marked [ui.sidebar.agents] table do not terminate its span; the other lines are kept', () => {
       const prior = [
         '[ui.sidebar.agents] # managed by team',
         'rows = [["agent"]]',
@@ -230,8 +230,12 @@ describe('sidebar slice 1 independent verification', () => {
       expect(spliced.changed).toBe(true);
       expect(spliced.text).toBe(
         [
-          `[ui.sidebar.agents] ${SIDEBAR_BLOCK_MARKER}`,
+          '[ui.sidebar.agents] # managed by team',
           'rows = [["state_icon", "workspace", "agent"], ["state_text", "tab"]]',
+          '# [fake_header_one]',
+          'stale_before = "remove-me"',
+          '   # [ui]',
+          'stale_after = "remove-me-too"',
           '',
           '[real_following_table]',
           'keep = "yes"',
@@ -241,9 +245,17 @@ describe('sidebar slice 1 independent verification', () => {
           '',
         ].join('\n'),
       );
-      expect(spliced.text).not.toContain('stale_before');
-      expect(spliced.text).not.toContain('stale_after');
-      expect(spliced.text).not.toContain('fake_header_one');
+      const lines = spliced.text.split('\n');
+      const commentAt = lines.indexOf('   # [ui]');
+      expect({
+        next: lines[commentAt + 1],
+        sidebarTables: lines.filter((line) => line.startsWith('[ui.sidebar.agents]')).length,
+        uiHeadersBeforeFollowing: lines.slice(0, lines.indexOf('[real_following_table]')).filter((line) => line.trim() === '[ui]').length,
+      }).toEqual({
+        next: 'stale_after = "remove-me-too"',
+        sidebarTables: 1,
+        uiHeadersBeforeFollowing: 0,
+      });
     });
 
     test('commented headers inside an unmarked [ui.sidebar.agents] or [ui] table do not hide keys below them', () => {

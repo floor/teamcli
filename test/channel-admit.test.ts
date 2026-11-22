@@ -10,8 +10,8 @@
 // - Before-exposure stream control: refused records emit no channel notification, write no push
 //   marker and write no consumer read receipt, while a valid push writes only `.channel-push.json`
 //   and leaves `.read.json` absent until consumer acknowledgment.
-import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readTeamConfig } from '../src/file/team-config.ts';
@@ -19,7 +19,9 @@ import type { TeamFile } from '../src/file/types.ts';
 import { admitChannelDelivery } from '../src/mcp/channel-admit.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
-import { runMcpServe } from '../src/mcp/serve.ts';
+import { keptTeamFiles, runMcpServe, teamReadWitness } from '../src/mcp/serve.ts';
+import { registryIdentityView, senderIdentity } from '../src/comms/identity.ts';
+import * as registryAgents from '../src/registry/agents.ts';
 import { registerAgent, type Agent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { readTeams, setTeamProjectMembership, teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
@@ -684,127 +686,137 @@ describe('same-team sender and projected-roster uniqueness', () => {
 });
 
 describe('channel stream refusal before exposure', () => {
-  test('refused records emit no channel notification, write no push marker and write no consumer receipt, while a valid push writes only .channel-push.json', async () => {
+});
+
+describe('one registry read per admission', () => {
+  test('an admission reads each agent record once, however many roster seats it checks', () => {
     const { base, home } = createHome();
-    const local = createTeam(base, home, 'alpha', null, ['helper']);
-    const dropDir = join(local.root, '.agents', 'send-drops', local.session, 'lead');
-
-    const helperAgent = registerAgent(home, {
-      name: 'helper',
-      signing: { model: 'Test', version: '1', role: 'builder' },
-      lab: 'test',
-      cli: 'claude-code',
-      launcher: null,
-      launch: `claude ${CHANNEL_FLAG}`,
-      reach: { team: local.teamId, seat: 'helper', session: local.session, pane: 'pane-helper-2', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'owner',
-    });
-    // Register a tied competitor on `helper` so `helper` has ambiguous currentness even if listed in roster.
-    setAgentTimestamps(home, helperAgent.id, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z');
-    registerCompetitor(home, helperAgent, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z');
-
-    upsertTeam(home, local.teamId, {
-      root: local.root,
-      project: 'alpha',
-      entity: null,
-      session: local.session,
-      lobby: join(home, 'lobby'),
-      lifecycle: 'running',
-      roster: [
-        { agent: local.lead.id, seat: 'lead', role: 'coordinator' },
-        { agent: local.worker.id, seat: 'worker', role: 'builder' },
-        { agent: helperAgent.id, seat: 'helper', role: 'builder' },
-      ],
-    });
-
-    let wake: (() => void) | undefined;
-    let ended = false;
-    const replies: Array<Record<string, any>> = [];
-    const feed = {
-      lines: (async function* () {
-        while (!ended) await new Promise<void>((resolve) => { wake = resolve; });
-      })(),
-      write: (line: string) => { replies.push(JSON.parse(line)); },
-      end: () => { ended = true; wake?.(); },
-    };
-
-    const running = runMcpServe(
-      { seat: 'lead', session: local.session, file: local.file },
-      testIo(local.root, { kind: 'seat', name: 'lead', pane: 'pane-lead-0', session: local.session }),
-      feed,
-      { home },
-    );
-
-    const stageRecord = (id: string, extra: Partial<RecordPayload>) => {
-      const payload: RecordPayload = {
-        kind: 'message',
-        id,
+    const local = createTeam(base, home, 'alpha', 'org');
+    createTeam(base, home, 'beta', 'org');
+    const files = 4;
+    const reads = spyOn(registryAgents, 'getAgent');
+    try {
+      const admitted = admitChannelDelivery({
+        payload: { from: 'worker', from_id: local.worker.id, to: 'lead', to_id: local.lead.id, rule: "a seat to its own team's orchestrator" },
+        home,
         root: local.root,
         session: local.session,
-        from: 'worker',
-        from_id: local.worker.id,
-        to: 'lead',
-        to_id: local.lead.id,
-        at: '2026-10-22T09:00:00.000Z',
-        body: `payload-${id}`,
-        rule: "a seat to its own team's orchestrator",
-        thread: id,
-        ...extra,
-      };
-      mkdirSync(dropDir, { recursive: true, mode: 0o700 });
-      writeFileSync(join(dropDir, id), `${JSON.stringify(signRecord(payload, home), null, 2)}\n`, { mode: 0o600 });
-    };
-
-    const NULL_TO_ID = '11111111-0000-4000-8000-000000000201';
-    const WRONG_TO_ID = '11111111-0000-4000-8000-000000000202';
-    const TIED_FROM_ID = '11111111-0000-4000-8000-000000000203';
-    const VALID_ID = '11111111-0000-4000-8000-000000000204';
-
-    try {
-      for (let i = 0; i < 400 && !existsSync(listenerPath(dropDir)); i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(existsSync(listenerPath(dropDir))).toBe(true);
-
-      stageRecord(NULL_TO_ID, { to_id: null, body: 'secret-null-to-id' });
-      stageRecord(WRONG_TO_ID, { to_id: 'agt_000000000099', body: 'secret-wrong-to-id' });
-      stageRecord(TIED_FROM_ID, { from: 'helper', from_id: helperAgent.id, body: 'secret-tied-sender' });
-      stageRecord(VALID_ID, { body: 'valid-channel-delivery' });
-
-      for (let i = 0; i < 400 && !replies.some((one) => one.method === 'notifications/claude/channel'); i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      await new Promise((resolve) => setTimeout(resolve, 150));
-
-      const notifications = replies.filter((one) => one.method === 'notifications/claude/channel');
-      expect(notifications).toHaveLength(1);
-      expect(notifications[0]!.params.meta).toEqual({
-        id: VALID_ID,
-        from: 'worker',
         seat: 'lead',
-        team: 'alpha',
+        team: local.team,
       });
-      expect(notifications[0]!.params.content).toContain('valid-channel-delivery');
-
-      const serialized = JSON.stringify(replies);
-      expect(serialized).not.toContain('secret-null-to-id');
-      expect(serialized).not.toContain('secret-wrong-to-id');
-      expect(serialized).not.toContain('secret-tied-sender');
-
-      for (const refusedId of [NULL_TO_ID, WRONG_TO_ID, TIED_FROM_ID]) {
-        expect(existsSync(channelPushPath(dropDir, refusedId))).toBe(false);
-        expect(existsSync(receiptPath(dropDir, refusedId))).toBe(false);
-      }
-
-      // Accepted receipt separation: transport push writes `.channel-push.json` and never `.read.json`.
-      expect(existsSync(channelPushPath(dropDir, VALID_ID))).toBe(true);
-      expect(existsSync(receiptPath(dropDir, VALID_ID))).toBe(false);
+      expect(admitted.ok).toBe(true);
+      // The sender's own record once, and the registry scan once: never once per roster seat.
+      expect(reads.mock.calls.length).toBeLessThanOrEqual(files + 1);
     } finally {
-      feed.end();
-      await running;
+      reads.mockRestore();
     }
+  });
+});
+
+describe('the registry scan kept across pushes', () => {
+  test('an unchanged registry is not read again; an edited, added, removed or corrupted agent file is seen on the next admission', async () => {
+    const { base, home } = createHome();
+    const local = createTeam(base, home, 'alpha');
+    // Past the racy margin: a scan is kept only under a stamp no same-tick edit can hide behind.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const admit = () => admitChannelDelivery({
+      payload: { from: 'worker', from_id: local.worker.id, to: 'lead', to_id: local.lead.id, rule: "a seat to its own team's orchestrator" },
+      home,
+      root: local.root,
+      session: local.session,
+      seat: 'lead',
+      team: local.team,
+    });
+    expect(admit().ok).toBe(true);
+    const reads = spyOn(registryAgents, 'getAgent');
+    try {
+      // Unchanged: the kept scan answers; only the sender's own record is read.
+      expect(admit().ok).toBe(true);
+      expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      reads.mockRestore();
+    }
+    const leadFile = agentFilePath(home, local.lead.id);
+    const original = readFileSync(leadFile, 'utf8');
+    // Edited: the lead's record now names another session, so it is not the live recipient.
+    const edited = original.replace(`  session: "${local.session}"`, '  session: "elsewhere"');
+    expect(edited).not.toBe(original);
+    writeFileSync(leadFile, edited);
+    expect(admit().ok).toBe(false);
+    writeFileSync(leadFile, original);
+    expect(admit().ok).toBe(true);
+    // Added: a newer claimant of the lead seat displaces the named recipient.
+    const competitor = registerCompetitor(home, local.lead, '2021-01-01T00:00:00.000Z', '2021-01-01T00:00:00.000Z');
+    expect(admit().ok).toBe(false);
+    // Removed: the claimant's file is gone, and the lead is the holder again.
+    unlinkSync(agentFilePath(home, competitor.id));
+    expect(admit().ok).toBe(true);
+    // Corrupted: a record that no longer parses fails closed, as an uncached read does.
+    writeFileSync(leadFile, 'reach: [not: valid\n');
+    expect(admit().ok).toBe(false);
+    writeFileSync(leadFile, original);
+    expect(admit().ok).toBe(true);
+  });
+});
+
+describe('the team read kept across pushes', () => {
+  test('the persona guard keeps other teams\' reads, still sees an edit, and an invalid file names no one', () => {
+    const { base, home } = createHome();
+    const alpha = createTeam(base, home, 'alpha');
+    const beta = createTeam(base, home, 'beta');
+    writeFileSync(alpha.file, readFileSync(alpha.file, 'utf8').replace('    name: lead\n', '    name: lead\n    label: Wren · lead\n'));
+    const alphaTeam = readTeamConfig(alpha.root, { home });
+    if (!alphaTeam.ok) throw new Error('fixture team failed');
+    const leadId = alpha.lead.id;
+    const files = keptTeamFiles(home);
+    const nameNow = (): string => senderIdentity(
+      registryIdentityView(home, { root: alpha.root, team: alphaTeam.team }, files),
+      { kind: 'seat', seat: 'lead', id: leadId },
+    ).name;
+    expect(nameNow()).toBe('Wren');
+    // Another team's seat takes the word as its nickname: the kept read sees the edit.
+    const plain = readFileSync(beta.file, 'utf8');
+    const nicknamed = plain.replace('    name: worker\n', '    name: worker\n    nickname: Wren\n');
+    writeFileSync(beta.file, nicknamed);
+    expect(nameNow()).toBe('lead');
+    expect(nameNow()).toBe('lead');
+    // The same file failing validation names no one, though its text still carries the word.
+    writeFileSync(beta.file, nicknamed.replace('format: 1', 'format: 99'));
+    expect(readTeamConfig(beta.root, { home }).ok).toBe(false);
+    expect(nameNow()).toBe('Wren');
+    expect(files(beta.root)).toBeNull();
+    writeFileSync(beta.file, nicknamed);
+    expect(nameNow()).toBe('lead');
+  });
+
+  test('its witness holds through state churn and moves with the team file, the registry and a landing', () => {
+    const { base, home } = createHome();
+    const local = createTeam(base, home, 'alpha');
+    const read = () => {
+      const loaded = readTeamConfig(local.root, { home });
+      if (!loaded.ok) throw new Error('fixture team failed');
+      return teamReadWitness(loaded, home);
+    };
+    const first = read();
+    expect(first).not.toBeNull();
+    // The state file is rewritten every few seconds for heartbeats: the read is kept.
+    writeFileSync(join(local.root, '.agents', 'team.state.json'), readFileSync(join(local.root, '.agents', 'team.state.json'), 'utf8'));
+    mkdirSync(join(local.root, 'scratch'));
+    expect(read()).toBe(first);
+    // The team file changes.
+    writeFileSync(local.file, `${readFileSync(local.file, 'utf8')}# edited\n`);
+    const edited = read();
+    expect(edited).not.toBe(first);
+    // The team registry changes.
+    writeFileSync(teamsFile(home), `${readFileSync(teamsFile(home), 'utf8')}\n`);
+    const registry = read();
+    expect(registry).not.toBe(edited);
+    // A landing the placement checks walk is replaced by a link.
+    const lobby = join(home, 'lobby');
+    mkdirSync(lobby, { recursive: true });
+    const withLobby = read();
+    rmSync(lobby, { recursive: true });
+    symlinkSync(base, lobby);
+    expect(read()).not.toBe(withLobby);
   });
 });

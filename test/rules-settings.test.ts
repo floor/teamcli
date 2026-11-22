@@ -22,7 +22,7 @@ const PANE =
   "A lead may type or choose in a seat's pane when `team send` cannot reach it or a dialog blocks it: read the pane before and after, and never type into the owner's own pane.";
 const SELF = 'A lead in dev mode may bring back a stopped seat, and build when no watcher runs.';
 const SCOPE =
-  "The owner's reserved scope: public releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.";
+  "The owner's reserved scope: major releases, spending, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.";
 
 const made: string[] = [];
 afterEach(() => {
@@ -167,6 +167,29 @@ describe('the generated rules carry the lead rules', () => {
     expect(text).toContain(SCOPE);
   });
 
+  test('with no policy the reserved scope lists major releases, and an added word keeps all four floor words', () => {
+    const w = world();
+    const unset = workOf(w);
+    expect(unset.ownerReservedScope.from).toBe('default');
+    expect(unset.ownerReservedScope.value).toEqual([
+      'major releases',
+      'spending',
+      'credentials',
+      "the owner's machine",
+    ]);
+    expect(unset.ownerReservedScope.value).not.toContain('public releases');
+    expect(set(w, 'team', 'owner.reserved-scope', 'travel').ok).toBe(true);
+    const added = workOf(w);
+    expect(added.ownerReservedScope.value).toEqual([
+      'travel',
+      'major releases',
+      'spending',
+      'credentials',
+      "the owner's machine",
+    ]);
+    expect(added.ownerReservedScope.value).not.toContain('public releases');
+  });
+
   test('the reserved scope can add words, but its floor cannot be narrowed away', () => {
     const w = world();
     expect(set(w, 'team', 'owner.reserved_scope', 'spending; travel').ok).toBe(true);
@@ -176,13 +199,13 @@ describe('the generated rules carry the lead rules', () => {
     expect(work.ownerReservedScope.value).toEqual([
       'spending',
       'travel',
-      'public releases',
+      'major releases',
       'credentials',
       "the owner's machine",
     ]);
     const lead = w.team.seats.find((s) => s.name === 'lead')!;
     expect(rulesOf(w.team, lead, w.root, work)).toContain(
-      "- The owner's reserved scope: spending, travel, public releases, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
+      "- The owner's reserved scope: spending, travel, major releases, credentials, the owner's machine (OS and system settings, accounts and logins, keychain, hardware). Checkouts, seats and team config belong to the teams. A reserved decision is made on the owner's own device; no relay carries it.",
     );
   });
 

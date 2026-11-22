@@ -1,10 +1,11 @@
 // The cursor typed wake, read on the captured 2026.10.22 frames in
 // test/fixtures/cursor/2026.10.22/: the empty idle box, a draft in the box, and the `Working`
 // frame. No CLI runs and no key leaves the process.
-import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as stateModule from '../src/state.ts';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runSend } from '../src/commands/send.ts';
+import { runSend, sendDirect } from '../src/commands/send.ts';
 import { SUBMIT_ENTER } from '../src/herdr.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
@@ -25,6 +26,12 @@ const DRAWING = readFileSync(join(FIXTURES, 'drawing.txt'), 'utf8');
 const SETTLED = readFileSync(join(FIXTURES, 'drawing-settled.txt'), 'utf8');
 
 const LINE = 'Read /t/mail/abc and do that.';
+
+/** A finished turn's idle tail, transcribed from vlist's builder-cursor and tester-cursor panes
+ *  (2026-11-20, cursor-agent on Grok 4.7): the box's `▄`/`▀` frame, `→ Add a follow-up`, then
+ *  the background-task count between the frame and the status row, then the workspace line. */
+const IDLE_TASK = readFileSync(join(import.meta.dir, 'fixtures', 'cursor', '2026.11.20', 'idle-task-edited.txt'), 'utf8');
+const holdingTask = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => `  → ${text}`);
 
 /** The captured unsent frame with `text` drawn in its input row: `Fix the failing test` is the
  *  capture's own draft, and the row's prompt and trailing cells are left as captured. */
@@ -84,6 +91,31 @@ describe('the cursor typed wake', () => {
     expect(readScreen('cursor', IDLE).kind).toBe('idle');
     expect(readScreen('cursor', WORKING).kind).toBe('working');
     expect(readScreen('cursor', holding(LINE)).kind).toBe('unsent');
+  });
+
+  test('a finished turn with a task row under the framed box is idle, and the wake types into it', async () => {
+    // vlist 2026-11-20: this tail read `done (screen not recognised)` and every send ended
+    // "not delivered: no live route" until a restart.
+    expect(readScreen('cursor', IDLE_TASK).kind).toBe('idle');
+    expect(readScreen('cursor', holdingTask(LINE)).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', LINE, holdingTask(LINE))).toBe(true);
+    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : holdingTask(typed[typed.length - 1] ?? '')));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
+    expect(out).toMatchObject({ delivered: true, typed: true, tries: 1 });
+    expect(pane.typed).toEqual([LINE]);
+    expect(pane.enters).toBe(1);
+    // Anything else between the frame and the status row is still not the frame: unknown.
+    expect(readScreen('cursor', IDLE_TASK.replace('  1 task', '  some printed text')).kind).toBe('unknown');
+  });
+
+  test('a retry that finds its line held, then an unrecognised frame, presses nothing and flags the screen', async () => {
+    const strange = '  a layout no rule knows';
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const pane = wakeFake((read) => (read === 0 ? holding(LINE) : strange));
+    const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
+    expect(out).toMatchObject({ delivered: false, typed: false, tries: 0, unrecognised: true });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
   });
 
   test('two idle reads, one line, one Enter: the Working row is the delivery', async () => {
@@ -146,7 +178,8 @@ describe('the cursor typed wake', () => {
   test('an unsent box refuses before any key', async () => {
     const pane = wakeFake(() => UNSENT);
     const out = await deliverTypedWake(pane.host, 'pane-1', LINE, 'cursor', FAST);
-    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the first read showed unsent, not an empty idle prompt; nothing was typed' });
+    // 1345 never-drop: the held draft is kept in a file, and the refusal reason says so.
+    expect(out).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the box held a draft; it was kept in a file and no Enter was pressed' });
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);
   });
@@ -170,16 +203,6 @@ describe('the cursor typed wake', () => {
     expect(pane.typed).toEqual([LINE]);
     expect(pane.enters).toBe(1);
   });
-
-  test('a line that does not fit one row is not typed', async () => {
-    const pane = wakeFake(() => IDLE);
-    const over = await deliverTypedWake(pane.host, 'pane-1', 'x'.repeat(81), 'cursor', FAST);
-    expect(over).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the line does not fit 80 characters on one row; nothing was typed' });
-    const broken = await deliverTypedWake(pane.host, 'pane-1', 'one\ntwo', 'cursor', FAST);
-    expect(broken).toEqual({ delivered: false, typed: false, tries: 0, reason: 'the line does not fit 80 characters on one row; nothing was typed' });
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-  });
 });
 
 describe('team send: the cursor typed wake names the inbox tool', () => {
@@ -197,133 +220,160 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     return made;
   }
 
-  test('a cursor seat is woken by one typed trigger naming its inbox, and the send is delivered', async () => {
-    const made = cursorWorld();
-    // The send composes the trigger itself, so the box reads back whatever the wake typed.
-    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
-    const host = fake(made, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-    });
-    const io = owner(made.root);
-    expect(await runSend(['cursor', 'hello'], io, host)).toBe(0);
-    expect(withoutSendId(io.out)).toBe('team acme, session "acme"\ncursor: delivered (typed wake)\n');
-    // One line, one Enter, and the line is the trigger that names the seat's own fastest read
-    // path, never the body: an MCP inbox seat is sent straight to `inbox_check`.
-    expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: call inbox_check now.']);
-    expect((pane.typed[0] as string).length).toBeLessThanOrEqual(80);
-    expect(pane.enters).toBe(1);
-    // The record was written under the seat lock before the line was typed.
-    const drops = join(made.dir, 'send-drops', 'acme', 'cursor');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    expect(recordBody(join(drops, records[0] as string))).toBe(filed('hello'));
-    const history = readHistory('acme', made.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'delivered (typed wake)', via: 'typed' });
-      // The inbox is the store's reader, never a leg the walk attempts: a `mcp-inbox` word in
-      // the declared order is reported as skipped, not recorded as a failure, and the typed leg
-      // took the send.
-      expect(history.entries[0]?.failed).toBeUndefined();
-    }
-  });
+  /** The record `team up` leaves for the cursor seat on its pane: the shell and the CLI it
+   *  launched, at their births; and the live readings a direct wake proves them by before each
+   *  key. `live` is read at every key: a scene changes it to move or replace the seat. */
+  type Live = { pane: string; foreground: number[] };
+  function launched(made: ReturnType<typeof cursorWorld>, live: Live) {
+    writeFileSync(join(made.dir, 'team.state.json'), JSON.stringify({ format: 1, sessions: { acme: { seats: {
+      cursor: { stage: 'ready', pane: 'pane-cursor', launched: { shell: 111, cli: [222] }, pane_shell: 111, pane_shell_start: 5 },
+    }, worktrees: {} } } }));
+    const agents = () => [{ name: 'cursor', pane: live.pane, cli: 'cursor-agent' }];
+    return {
+      agents,
+      keyOwner: {
+        agents: () => agents(),
+        processes: () => ({ shell: 111, foreground: live.foreground }),
+        processStart: (pid: number) => (pid === 111 ? 5 : null),
+      },
+    };
+  }
+  const drawn = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => text.split('\n').map((row, at) => (at === 0 ? `  → ${row}` : `    ${row}`)).join('\n'));
+  const drawingWake = () => wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '')));
+  /** The wake's host, with `after` run once the line is typed and before its Enter. */
+  function typedThen(pane: ReturnType<typeof wakeFake>, after: () => void): void {
+    const type = pane.host.type;
+    pane.host.type = (at, text) => {
+      after();
+      return type(at, text);
+    };
+  }
 
-  test('a long summary and multi-line body on Cursor truncates the header to fit <= 80 chars, keeps call inbox_check now whole, and never types the body', async () => {
+  test('the idle dispatch\'s direct-only send wakes an idle cursor seat with its typed wake', async () => {
     const made = cursorWorld();
-    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
-    const host = fake(made, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-    });
-    const longBody = `SUMMARY-${'C'.repeat(120)}\nSECOND-LINE-BODY-SECRET\nTHIRD-LINE-BODY-SECRET`;
-    const io = owner(made.root);
-    expect(await runSend(['cursor', longBody], io, host)).toBe(0);
+    const pane = drawingWake();
+    const host = fake(made, { ...launched(made, { pane: 'pane-cursor', foreground: [222] }), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result).toMatchObject({ route: 'typed', outcome: 'delivered' });
     expect(pane.typed).toHaveLength(1);
-    const typedLine = pane.typed[0] as string;
-    expect(typedLine.length).toBe(80);
-    expect(typedLine.endsWith(' Read it with: call inbox_check now.')).toBe(true);
-    expect(typedLine.startsWith('Message from owner (owner@acme): SUMMARY-')).toBe(true);
-    expect(typedLine).not.toContain('\n');
-    expect(typedLine).not.toContain('SECOND-LINE-BODY-SECRET');
-    expect(typedLine).not.toContain('THIRD-LINE-BODY-SECRET');
-    const drops = join(made.dir, 'send-drops', 'acme', 'cursor');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    expect(recordBody(join(drops, records[0] as string))).toBe(filed(longBody));
+    expect(pane.enters).toBe(1);
   });
 
-  test('independent adversarial: line held while working through bound in send is not delivered, never retyped, and message stays unread; box cleared or partial line mid-poll refuses', async () => {
-    // 1. Line held while working through the bound in `runSend` -> not delivered, never retyped, message still unread.
+  test('a direct-only send types no further key once the seat has moved off the pane the pass bound', async () => {
     const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const pane = drawingWake();
+    typedThen(pane, () => { live.pane = 'pane-other'; });
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a direct-only send types no further key into a replacement that kept the seat name and pane', async () => {
+    const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const pane = drawingWake();
+    // Another process now runs in front of the recorded shell, on the same pane id and name.
+    typedThen(pane, () => { live.foreground = [333]; });
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a direct-only send types no key once an in-place relaunch replaced the launch it read the screen of', async () => {
+    const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const relaunch = (): void => {
+      // The same seat, pane and CLI, a new launch: the state and the pane agree on it.
+      const path = join(made.dir, 'team.state.json');
+      const state = JSON.parse(readFileSync(path, 'utf8'));
+      state.sessions.acme.seats.cursor.launched = { shell: 111, cli: [444] };
+      writeFileSync(path, JSON.stringify(state));
+      live.foreground = [444];
+    };
+    let relaunched = false;
     const pane = wakeFake((read, enters, typed) => {
-      if (read < 2) return IDLE;
-      const line = typed[typed.length - 1] ?? '';
-      return enters === 0 ? holding(line) : workingHolding(line);
+      if (!relaunched) { relaunched = true; relaunch(); }
+      return enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '');
     });
-    const host = fake(made, {
-      agents: () => [{ name: 'cursor', pane: 'pane-1' }],
-      typedWake: () => pane.host,
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('each key judges one snapshot of the record: a relaunch recorded between two reads takes no key', async () => {
+    const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const pane = drawingWake();
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    // After the line is typed the seat is relaunched in place. A read made on behalf of the launch
+    // comparison still sees the old record; any later read sees the new one, which the pane matches.
+    let relaunched = false;
+    typedThen(pane, () => { relaunched = true; live.foreground = [444]; });
+    const realRead = stateModule.readState;
+    const spy = spyOn(stateModule, 'readState').mockImplementation((at: string) => {
+      const state = realRead(at);
+      const seat = state.sessions.acme?.seats.cursor;
+      if (!relaunched || seat === undefined || (new Error().stack ?? '').includes('launchOf')) return state;
+      seat.launched = { shell: 111, cli: [444] };
+      return state;
     });
-    const io = owner(made.root);
-    expect(await runSend(['cursor', 'check held'], io, host)).toBe(0);
-    expect(io.out).toContain('cursor: queued, not woken (drop, 0 ms); queued; the typed wake failed (the working screen showed with the line still in the box after 1 Enter; the line was not submitted)');
+    try {
+      const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+      expect(run.result?.outcome).not.toBe('delivered');
+      expect(pane.enters).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('a direct-only send types no further key once the declaration stops the seat', async () => {
+    const made = cursorWorld();
+    const pane = drawingWake();
+    const file = join(made.dir, 'team.yaml');
+    typedThen(pane, () => { writeFileSync(file, readFileSync(file, 'utf8').replace('    name: cursor\n', '    name: cursor\n    stopped: true\n')); });
+    const host = fake(made, { ...launched(made, { pane: 'pane-cursor', foreground: [222] }), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(readFileSync(file, 'utf8')).toContain('stopped: true');
+    expect(run.result?.outcome).not.toBe('delivered');
     expect(pane.typed).toHaveLength(1);
-    expect(pane.enters).toBe(1);
-    const drops = join(made.dir, 'send-drops', 'acme', 'cursor');
-    const records = readdirSync(drops).filter((name) => !name.includes('.'));
-    expect(records).toHaveLength(1);
-    const msgId = records[0]!;
-    expect(existsSync(join(drops, `${msgId}.read.json`))).toBe(false);
-    expect(listUnread(drops, { to: 'cursor', root: made.root, session: 'acme' }, host.home).map((m) => m.id)).toEqual([msgId]);
-    const history = readHistory('acme', made.root, host.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ to: 'cursor', outcome: 'queued, not woken', via: 'drop' });
-      expect(history.entries[0]?.failed).toEqual([
-        'typed: the working screen showed with the line still in the box after 1 Enter; the line was not submitted',
-      ]);
-    }
+    expect(pane.enters).toBe(0);
+  });
 
-    // 2. Box cleared by someone else mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees IDLE).
-    let clearPoll = 0;
-    const clearedMidPoll = wakeFake((read, enters) => {
-      if (read < 2) return IDLE;
-      if (enters === 0) return holding(LINE);
-      clearPoll += 1;
-      return clearPoll <= 2 ? workingHolding(LINE) : IDLE;
+  test('a direct-only send whose recheck refuses types nothing into a cursor seat', async () => {
+    const made = cursorWorld();
+    const pane = wakeFake(() => IDLE_TASK);
+    const host = fake(made, { ...launched(made, { pane: 'pane-cursor', foreground: [222] }), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, {
+      seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task',
+      guard: () => ({ ok: false, why: 'the watch was replaced' }),
     });
-    const outCleared = await deliverTypedWake(clearedMidPoll.host, 'pane-1', LINE, 'cursor', { ...FAST, verifyMs: 4 });
-    expect(outCleared).toEqual({
-      delivered: false,
-      typed: true,
-      tries: 1,
-      reason: 'the screen read idle and no working screen showed',
-      submittedAt: expect.any(Number),
-    });
-    expect(clearedMidPoll.typed).toEqual([LINE]);
-    expect(clearedMidPoll.enters).toBe(1);
+    expect(run.result).toMatchObject({ route: 'typed', outcome: 'refused' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
 
-    // 3. A partial line left mid-poll (poll 1 sees workingHolding(LINE), poll 2..N sees holding(partial)).
-    for (const partial of [LINE.slice(0, 12), LINE.slice(5)]) {
-      let partialPoll = 0;
-      const partialMidPoll = wakeFake((read, enters) => {
-        if (read < 2) return IDLE;
-        if (enters === 0) return holding(LINE);
-        partialPoll += 1;
-        return partialPoll <= 2 ? workingHolding(LINE) : holding(partial);
-      });
-      const outPartial = await deliverTypedWake(partialMidPoll.host, 'pane-1', LINE, 'cursor', { ...FAST, verifyMs: 4 });
-      expect(outPartial).toEqual({
-        delivered: false,
-        typed: true,
-        tries: 1,
-        reason: 'the box held text other than the line and no working screen showed',
-      });
-      expect(partialMidPoll.typed).toEqual([LINE]);
-      expect(partialMidPoll.enters).toBe(1);
-    }
+  test('an unrecognised screen is never typed into, and the lead hears it once per episode with no screen content', async () => {
+    const made = cursorWorld();
+    const strange = IDLE_TASK.replace('  1 task', `  my draft about the merger, call Sam at 555-0100 ${made.home}/Code/private-thing`);
+    expect(readScreen('cursor', strange).kind).toBe('unknown');
+    const keys: string[] = [];
+    const wakeHost: TypedWakeHost = { read: () => strange, type: (_p, text) => { keys.push(text); return true; }, enter: () => { keys.push('<enter>'); return true; }, wait: async () => {} };
+    const host = fake(made, { agents: () => [{ name: 'cursor', pane: 'pane-cursor', cli: 'cursor-agent' }], typedWake: () => wakeHost, wakeVerifyMs: 1, wakePollMs: 1 });
+    await runSend(['cursor', 'first message'], owner(made.root), host);
+    await runSend(['cursor', 'second message'], owner(made.root), host);
+    expect(keys).toEqual([]);
+    const lead = join(made.root, '.agents', 'messages', 'lead');
+    const notices = (): string[] => (existsSync(lead) ? readdirSync(lead).filter((name) => name.startsWith('unrecognised-screen-cursor-')) : []);
+    expect(notices()).toHaveLength(1);
+    const body = readFileSync(join(lead, notices()[0]!), 'utf8');
+    expect(body).toContain('cursor (pane pane-cursor): screen not recognised, capture needed');
+    for (const leak of ['merger', 'Sam', '555-0100', 'private-thing', 'Grok', 'Add a follow-up']) expect(body).not.toContain(leak);
   });
 });

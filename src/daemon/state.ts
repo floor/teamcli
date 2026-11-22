@@ -1,16 +1,20 @@
 // The one machine daemon's state record (`<home>/.config/team/daemon.state.json`, mode 0600).
 // The daemon writes it at start and refreshes `heartbeatAt` while it serves; `team status`,
 // `team check` and the daemon's own health answer read it through this module.
-import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
+import { closeSync, constants, fstatSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, openSync, renameSync, writeFileSync } from '../host/guarded-fs.ts';
+import { chmod, mkdir, rename, writeFile } from '../host/guarded-fs-promises.ts';
 import { pidAlive } from '../state.ts';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
+import { reaperRecordOf, type ReaperRecord } from '../orphan-reaper.ts';
 import { daemonStatePath, machineConfigDir } from './paths.ts';
 
 /** Which features the running build actually carries. `absent` means the handler is not built;
- *  it is not the policy value `off`. */
-export type DaemonFeatures = { broker: 'on' | 'off' | 'absent' };
+ *  it is not the policy value `off`. `watch` says whether this daemon was started to host a
+ *  watch per route (`--watch`); older records carry no field, and a reader takes that as
+ *  not known. */
+export type DaemonFeatures = { broker: 'on' | 'off' | 'absent'; watch?: 'on' | 'off' };
 
 /** A request the daemon has been working on longer than its stuck threshold. */
 export type DaemonStuckRequest = { id: string; op: string; since: string; ageMs: number };
@@ -137,6 +141,19 @@ export type DaemonRootState = {
    * the daemon's own loop exactly as before the isolation.
    */
   chores?: DaemonChoresState;
+  /**
+   * The daemon-start restore's reading while it has not run for this route: `stopped` while the
+   * session waits for the owner to attach it (the attach watch runs the pass then), `load` while
+   * the load guard holds it, `load-bound` once its retry bound was reached. Absent once the pass
+   * ran, and in older records. Display data: a malformed one is left out.
+   */
+  restore?: DaemonRootRestore;
+};
+
+export type DaemonRootRestore = {
+  reason: 'stopped' | 'load' | 'load-bound';
+  since: string;
+  detail?: string;
 };
 
 /**
@@ -205,6 +222,14 @@ export type DaemonState = {
   /** The mailbox router's last heartbeat, when this daemon started one. Absent on a daemon
    *  that has no router, and null until the child has answered a beat. */
   mailbox?: { heartbeatAt: string | null };
+  /** The process this user's orphans are handed to, besides pid 1, read at the daemon's start
+   *  (src/orphan-reaper.ts). Absent on a daemon that has none to record, and in older records. */
+  reaper?: ReaperRecord;
+  /** The temporary folder the daemon answers, written at its start; absent in older records. */
+  tempDir?: string;
+  /** The fence capability level this daemon enforces (rfc-event-comms §3): 2 from E6. An older
+   *  record carries none, and its level is unknown: it blocks activation. */
+  floorLevel?: number;
 };
 
 export type DaemonStateRead =
@@ -279,6 +304,7 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
   const roots = rootsOf(record.roots);
   if (roots === null) return null;
   const mailbox = mailboxOf(record.mailbox);
+  const reaper = reaperRecordOf(record.reaper);
   return {
     format: 1,
     ...(typeof record.nativeFeedOwner === 'string' && /^[a-f0-9]{32}$/.test(record.nativeFeedOwner)
@@ -298,10 +324,20 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
         ? record.heartbeatSeconds
         : null,
     socket: record.socket as string,
-    features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
+    features: {
+      broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'],
+      ...((features as Record<string, unknown>).watch === 'on' || (features as Record<string, unknown>).watch === 'off'
+        ? { watch: (features as Record<string, unknown>).watch as 'on' | 'off' }
+        : {}),
+    },
     stuck: requests,
     roots,
     ...(mailbox === undefined ? {} : { mailbox }),
+    ...(reaper === undefined ? {} : { reaper }),
+    ...(typeof record.tempDir === 'string' && record.tempDir.startsWith('/') && record.tempDir.length <= 4096
+      ? { tempDir: record.tempDir } : {}),
+    ...(typeof record.floorLevel === 'number' && Number.isInteger(record.floorLevel) && record.floorLevel > 0
+      ? { floorLevel: record.floorLevel } : {}),
   };
 }
 
@@ -343,6 +379,7 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
     const presence = presenceOf(entry.presence);
     const firstPass = firstPassOf(entry.firstPass);
     const chores = choresOf(entry.chores);
+    const restore = restoreOf(entry.restore);
     roots.push({
       root: entry.root,
       ...(entry.source === 'registry' ? { source: 'registry' as const } : {}),
@@ -358,9 +395,24 @@ function rootsOf(raw: unknown): DaemonRootState[] | null {
       ...(presence === null ? {} : { presence }),
       ...(firstPass === null ? {} : { firstPass }),
       ...(chores === null ? {} : { chores }),
+      ...(restore === null ? {} : { restore }),
     });
   }
   return roots;
+}
+
+/** A route's restore reading, or null when absent or malformed (display data, never fatal). */
+function restoreOf(raw: unknown): DaemonRootRestore | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  if (entry.reason !== 'stopped' && entry.reason !== 'load' && entry.reason !== 'load-bound') return null;
+  if (typeof entry.since !== 'string' || entry.since === '') return null;
+  if (!(entry.detail === undefined || typeof entry.detail === 'string')) return null;
+  return {
+    reason: entry.reason,
+    since: entry.since,
+    ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+  };
 }
 
 /**

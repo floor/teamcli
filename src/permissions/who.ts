@@ -25,6 +25,7 @@ import {
   callerVerdict,
   describeCaller,
   detachedRefusal,
+  logTag,
   mayChangeTeamVerdict,
   mayPauseTeamVerdict,
   noPaneRefusal,
@@ -32,6 +33,9 @@ import {
   type CallerVerdict,
   type SeatStanding,
 } from '../caller.ts';
+import { join } from 'node:path';
+import { logLine } from '../log.ts';
+import { leadsOwnTeamAdmits } from '../leads-authority.ts';
 import { readTeams, teamIdOf, type RosterEntry } from '../registry/teams.ts';
 import { activeGrants } from './grants.ts';
 import { COMMAND_GATES, type Gate } from './map.ts';
@@ -291,6 +295,29 @@ export function gateVerdict(
   now: () => Date = () => new Date(),
 ): CallerVerdict {
   const gate = COMMAND_GATES[command];
+  const askedAt = now();
+  // The team's own lead and operator, placed on the recorded pane, run the command before any
+  // owner refusal or terminal ask. An unreadable registry stays closed. A command on the
+  // exclusion list is not this rule's to open.
+  const leads = leadsOwnTeamAdmits({ caller, team, at, home, root, command, now: askedAt });
+  const plain = gateVerdictPlain(caller, team, root, home, command, at, gate, now);
+  if (leads !== null && plain.kind !== 'ok' && rosterOf(home, root).kind !== 'unreadable') {
+    logLine(join(root, '.agents'), command, logTag(caller), leads.warning, askedAt);
+    return { kind: 'ok' };
+  }
+  return plain;
+}
+
+function gateVerdictPlain(
+  caller: Caller,
+  team: { orchestrator: string; operator: string; seats: readonly { name: string; role: string }[] },
+  root: string,
+  home: string,
+  command: string,
+  at: SeatStanding,
+  gate: Gate | undefined,
+  now: () => Date,
+): CallerVerdict {
   // The module's own detached refusal, before any record is read: a row carrying `terminal`
   // refuses a run with no terminal exactly as its command does.
   if (gate !== undefined && gate.terminal !== undefined && detachedRefusal(caller, gate.terminal) !== undefined) {

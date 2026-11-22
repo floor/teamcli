@@ -14,7 +14,8 @@ block scalars, a second document and duplicate keys are refused, with the line n
 Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
 behind it before it is stored. The format is walked below, by example; after it, this page
 documents the sections one by one: `tasks`, `seats`, `delivery_order`, `messaging.store`,
-`webhook`, `sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
+`webhook`, `sender_name`, `desktop_control`, `grant`, `delegates`, tempo, and `budgets` with the
+format.
 
 ## Editing with team config
 
@@ -232,7 +233,7 @@ project or the session.
 
 The Claude Code profile is tested with CLI 2.1.288 to 2.1.302 (`claude`).
 
-The Codex profile is tested with CLI 0.157.0 to 0.161.0. Its status line is read for a weekly figure
+The Codex profile is tested with CLI 0.157.0 to 0.167.0. Its status line is read for a weekly figure
 (`weekly N% left`) when the pane is wide enough to show the number; a cut line is not a figure.
 Every launch also pins the profile's feature set, appended last as `-c features.<pair>` words, so
 every seat presents the same settings to the one background server they share.
@@ -381,6 +382,123 @@ More fields exist — `tools`, `trust`, `machine`, `limits`, `watch`, `visibilit
 `releases` — and the comments `team init` writes name them; validation refuses what it cannot
 check, and this build acts on what [the commands](commands/README.md) read.
 
+## The entity's projects root: `{root}`
+
+Each entity has one projects root per machine: the folder its repositories sit directly under.
+On one machine that may be `~/Code/acme`; on a server where the entity has an account of its own,
+`/home/acme/repos`. Each machine names it outright; it is never derived from the home. A
+repository's folder under the root need not carry its remote's name: `{root}/v4` is whatever folder
+is there. A team file names it with one word, `{root}`, in place of the full path, so the same
+file reads on every machine:
+
+```yaml
+entity: acme
+rules:
+  - "Never switch, reset or commit in {root}/site itself; work only in your worktree."
+  - Docs for this team live in {root}/docs/projects/site/.
+seats:
+  - role: implementer
+    name: builder
+    launch: zsh {root}/docs/tools/as-acme.sh codex -m gpt-6.1-sol
+    brief: "{root}/docs/briefs/builder.md"
+```
+
+The root itself is the machine's, never the team file's: it is the entity's `root:` in the
+owner's entities file, set and read with [`team config`](commands/config.md):
+
+```sh
+team config set acme.root ~/Code/acme    # on this machine
+team config get acme.root
+team config unset acme.root
+```
+
+- The word is filled when the file is read, in every value it writes — a launch line, a rule, a
+  seat's folder, a brief, a trust path — and never in a key. It reads as the absolute folder, so
+  `~/Code/acme` fills `{root}/docs` as the home's full path. `${root}`, the shell's own variable,
+  is left alone, and a `{secret:<entry>}` word on the same launch line is filled as before.
+- A value that starts with the word is quoted (`"{root}/site"`): unquoted, YAML reads the brace as
+  a map, and the reader says so.
+- A folder of an entity holds only letters, digits and `/ . _ - @ +` after a leading `~/`: a
+  launch line carries it as it is, so a space, a quote, `$`, a backtick, a backslash, any other
+  `~` (a pattern word to some shells' globbing) or any of `;|&<>()*?[]{}` is refused when the
+  folder is set. It is an absolute path or `~/…`, never the filesystem's root, the home
+  itself, a folder above the home, or a path with a `..` segment.
+- The entities file is not signed, so a folder is bound to the owner's charter where there is one:
+  the word is filled with the folder's real path (every link resolved), and that path must exist
+  and lie inside one of the charter's roots, or the file is refused. On a machine with no charter
+  the folder is filled as the entities file writes it, and `team doctor` warns that it is bound to
+  no signature.
+- A seat's `cwd` and `workspace.path` take an absolute path when it comes from the word and lies
+  inside the entity's folders (`cwd: "{root}/site"`, `path: "{worktrees}/site/{task}"`); an
+  absolute path the file writes itself is still refused.
+- `team down` and `team status` read a team whose folder this machine no longer names, leaving
+  the word as written and leaving out any `trust` entry that writes it, so a running team can
+  still be shown and stopped; every command that launches refuses it.
+- A file that writes `{root}` on a machine where its entity names no root, or that names no
+  `entity:`, is refused when it is read — by `up`, `doctor`, `check` and every other command — on
+  the first line that writes it, with the command that sets one. A launch never runs a literal
+  `{root}`. A file that does not write the word reads exactly as before.
+- The entity's and the home project's rules (`<entity>.rules`, `project.<id>.rules`) read the word
+  the same way, and a rule whose word this machine cannot fill refuses the team as the file's own
+  word would, even when the team file writes none; a launch refuses the seat on the same rules
+  it would compose, the registry's home project included.
+- In a launch line or a setup step, a line that holds a command substitution, a here-document or
+  `eval` is never rewritten by `team migrate --root` or an editor: its paths are listed and left.
+- Setting the root of an entity, or moving it, changes what its `{root}` teams read at their next
+  read: a running seat keeps the line it was launched with until it is launched again. An
+  approval is bound to the paths as they were filled in when it was signed, so moving a root needs
+  fresh approvals for the teams that write the word.
+- An editor that writes a value back — `team swap`, `team add`, `team rename`,
+  `team launchers migrate` — writes it with the words: a line it adds or changes that holds a full
+  path inside the entity's folders is written as `{root}/…` or `{worktrees}/…` again, so a seat
+  swapped on one machine keeps a file that reads on every other. A line the editor did not touch,
+  and a value the owner sets with `team config`, is kept as written. In a shell line (a launch
+  line, a setup step) a path is written as the word only where that keeps what the line runs:
+  `~/…` inside quotes and `$HOME/…` inside single quotes are text to the shell, not the home, and
+  stay as written.
+- [`team doctor`](commands/doctor.md) warns about every value that writes a full path inside the
+  entity's folders on this machine, and [`team migrate --root`](commands/migrate.md) rewrites those
+  paths as `{root}/…` and `{worktrees}/…`: `--dry-run` first lists each line it would change.
+
+### What the root check protects, and what it does not
+
+The checks bind the words to what the owner signed: a folder is filled only with a real path that
+holds no shell character, and, on a machine with a charter, only inside a charter root that still
+resolves to what was signed. A link put in place of a signed root, a link inside a root that leads
+out of it, and an edit of the entities file to a folder outside the charter are each refused when
+the team is read, and the charter is verified on every read. What they do not do is hold a folder
+still between that read and the moment a seat's shell runs its line: a process of the same account
+can rename a checked folder and put a link in its place in between. An account can always change
+its own folders; these checks keep the team's words and the owner's signature in step, and are no
+boundary between processes of one account. A machine with no charter binds the folders to nothing,
+and `team doctor` says so.
+
+### The worktrees folder: `{worktrees}`
+
+An entity's worktrees sit in one folder per machine too: `<root>/worktrees` unless the entity's
+entry names another. On a laptop that is `~/Code/acme/worktrees`, inside the root; on a server it
+may sit beside the root, `/home/acme/worktrees` next to `/home/acme/repos`. A team file names it
+`{worktrees}`, with the same rules as `{root}`: filled in every value, quoted at the start of a
+value, refused on a machine whose entity names neither a worktrees folder nor a root it sits
+under.
+
+```sh
+team config set acme.worktrees ~/worktrees    # beside the root, on this machine
+team config unset acme.worktrees              # back to <root>/worktrees
+```
+
+A full path inside the worktrees folder is written as `{worktrees}/…` by the rewrite and the
+editors, even where the folder sits inside the root. [`team setup`](commands/setup.md) signs the
+charter over each entity's root, and over its worktrees folder when that folder lies outside the
+root.
+
+### The vault under the root
+
+The `vault-root` policy, the folder seats keep notes and memory under, takes `{root}/…` and
+`{worktrees}/…` as well as an absolute or `~/` path, and reads the entity's folders on the machine
+that reads it. Where the entity names no such folder the policy names no vault there, seats get no
+vault rule, and `team doctor` says why.
+
 ## `tasks`
 
 Names the team's one task source. It is an owner section: only the owner writes it. Omitted, it
@@ -521,6 +639,13 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
 
+`channel` is optional on a seat: omitted, or `on`, every claude-code seat is given the team-inbox
+channel by `team up` and `team restart`. `off` leaves that seat's launch and its MCP pair alone.
+The pair is written in the seat's lobby folder, or in the seat's own worktree. A seat whose cwd
+is the owner's checkout keeps a pair that is already there, and no second pair is written. The
+key is part of the seat's digest only when it says `off`, and a record that writes none keeps
+every digest it had.
+
 `watch_wake` is optional on a seat: `on` or `off`, the seat's own word on the watch's typed
 retry. The retry is on exactly where the seat's CLI profile declares `typed_wake` (Muse, Cursor,
 Antigravity, Grok and Codex today) and the key is omitted; `on` on a profile with no typed wake is
@@ -551,11 +676,12 @@ digest it had.
 
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
 authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
-explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
-seat's own launch to declare `crossSessionInbound: accept`; with no `inbound` word, a seat
-TeamCLI launched is authorized by that launch alone (its generated settings file carries the
-attestation), while a session launched some other way is dialed only when the record says
-`accept`. A frame the socket takes is `delivered (socket)` at the frame; a frame the receiver's
+explicit opt-out — and an omitted key keeps the socket out. A send also needs the seat's own
+launch to declare `crossSessionInbound: accept`; a launch's accept alone authorizes nothing. The
+socket is an opt-in because the receiving CLI frames every socket frame as a message from another
+Claude session, which mislabels senders on other CLIs. A Claude seat receives through its
+development channel; a declared socket is walked only after a channel that is not connected or
+did not complete. A frame the socket takes is `delivered (socket)` at the frame; a frame the receiver's
 box then holds at its dialog is recorded once as `held` by the daemon's presence pass, which
 looks at the receiving pane after a socket delivery — the sender never waits on the box. The
 socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
@@ -588,7 +714,7 @@ The order a send to this team's seats walks. It is not an owner section: writing
 is an ordinary change, and a record that writes none reads as the default order `typed, drop`;
 none of `socket`, `native`, `headless-resume` or `session` is ever in that default. The order
 names the legs the seat accepts, and the walk that tries them is the owner's cascade (ADR
-`zeus-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
+`architect-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
 them, then the ones the word names, in its own order — then the sender-posted `webhook` where the
 seat declares an adapter row (no order names it), then the typed leg, then the mailbox. A receiving CLI whose profile declares
 its own session call walks that call wherever an order's `typed` word stands — the call is the
@@ -626,8 +752,7 @@ delivery_order: [typed]
 - The seven legs: `socket` is this build's own frame on the receiving Claude session's
   cross-session socket, a signed copy written first, dialed only for a seat whose launch
   declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
-  explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
-  by its launch; `native` is the sender's own cross-session SendMessage, recorded by the sender
+  explicit `hold` or `refuse` opts out, and with no word the socket is never dialed; `native` is the sender's own cross-session SendMessage, recorded by the sender
   with `--confirm`; `mcp-inbox` is no longer one of the legs — the MCP inbox is
   the store's reader, so the name is retired: a word that still names it is read as an alias
   and dropped from the order, and the walk never sees it;
@@ -847,6 +972,55 @@ sender_name: nickname
   sender's team as the send wrote it, so a cross-team sender whose seat name another team also
   uses reads by its address in the feed when the registry holds that team; a line from a build
   that recorded none reads the plain seat name, never a guessed nickname.
+
+## `desktop_control`
+
+Whether a seat may control the computer: computer use, the user's browser, desktop apps, and the
+connectors that act under the user's own accounts (ChatGPT apps, claude.ai connectors). On by
+default, as seats have always run. Set it `false` for a seat that must not touch the user's apps,
+on that seat, or on the team for every seat that writes none; a seat's own word always wins.
+
+```yaml
+seats:
+  - role: reviewer
+    name: checker
+    cli: codex
+    launch: codex -m gpt-6.1-sol
+    desktop_control: false
+```
+
+- The word is `true` or `false`. Any other value is `desktop_control must be true or false`.
+- The word in force is read nearest first: a signed seat setting (`team settings set <seat>
+  desktop_control false`), the seat's own key, a signed setting at a wider level, this file's
+  top-level `desktop_control`, then `true`. `team settings <seat>` shows the value and where it
+  comes from.
+- It is read at launch: a change takes the seat's next start (`team restart <seat>`).
+- On, nothing is placed: the seat runs with the user's own configuration.
+- Off, a Codex seat's launch line, its recorded recipe and the start words of the app-server
+  TeamCLI runs for it carry `-c features.<name>=false` for `computer_use`, `browser_use`,
+  `browser_use_external`, `in_app_browser`, `browser_use_full_cdp_access` and `apps` (the
+  ChatGPT apps and connectors, whose tools act under the user's ChatGPT account). They also turn
+  off the computer and browser MCP servers a desktop app registers in the user's Codex config
+  (`cua_repl`, `node_repl`), the connectors' `codex_apps` server, and the bundled computer-use
+  and browser plugins (`-c plugins.<id>.enabled=false`). Each server is pinned as
+  `-c mcp_servers.<name>.command=/usr/bin/false -c mcp_servers.<name>.enabled=false`: Codex
+  refuses `enabled=false` alone for a server its config does not hold, and the pair is accepted
+  whether the server is absent or a local (stdio) server. A server of that name with a `url`
+  transport makes Codex refuse the pair, and the seat does not start.
+- Off, a Claude Code seat's settings file denies `mcp__computer-use`, `mcp__claude-in-chrome`,
+  `mcp__Claude_Browser` and every claude.ai connector tool (`mcp__claude_ai_*`), and sets
+  `disableClaudeAiConnectors`. A seat whose launch line names its own `--settings` gets no
+  settings file from TeamCLI, and none of this.
+- `team check` (and `team doctor`, as a missing item) names a running seat set `false` whose
+  recorded launch line lacks those pins, with `team restart <seat>` as the repair, and a seat
+  whose managed app-server was started without them. A seat on the default is never named.
+- A per-seat difference holds where a seat's turns run under its own configuration: a Codex seat
+  on the app-server TeamCLI starts for it (the `codex-daemon` policy, on by default) or launched
+  with `--no-daemon`. A Codex seat that attaches to the machine's shared background server runs
+  its turns under that server's configuration: its feature set must match every other seat's
+  there (Codex shows "Background server has incompatible feature settings" otherwise), and its
+  own MCP and plugin pairs do not reach that server. Seats with different `desktop_control`
+  words cannot share one background server.
 
 ## `grant`
 

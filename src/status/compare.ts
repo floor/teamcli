@@ -1,11 +1,14 @@
+import { WATCH_MISSING_REPAIR } from '../daemon/watch_display.ts';
 import { homedir } from 'node:os';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
 import type { HerdrAgent, HerdrWorkspace, PaneProcesses } from '../herdr.ts';
 import { herdrCommand } from '../herdr.ts';
+import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
-import { restoreProof, type RestoreProof } from '../launch/restore-proof.ts';
+import { featureDialog } from '../launch/reboot.ts';
+import { restoreProof, restoreWorktreeOf, type RestoreProof, type RestoreWorktree } from '../launch/restore-proof.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
@@ -16,12 +19,14 @@ import {
   type InboundDeclaration,
 } from '../send/inbound.ts';
 import { seatAgent } from '../send/resolve.ts';
+import { strayWebhookOf } from '../send/webhook.ts';
 import { findTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { watchLabel } from '../watch/pane.ts';
+import { outOfTokensState } from '../quota/token-fallback.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
 import { launchModelWhenUnread, modelDiffers, recordSignedModel, runningModel, seatModel, wrapperSeat } from './statusline.ts';
 
@@ -114,11 +119,18 @@ export type Difference = {
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
 
+/** A wait whose cause passes with the screen: nothing is owed to the dialog once the pane reads a
+ *  free prompt. Every other classification keeps its waiting row. */
+function passingWait(classification: string | undefined): boolean {
+  return classification === 'provider error' || classification === 'rate limit';
+}
+
 /** The one row a seat shows while it waits, ahead of the ordinary launch-stopped and unnamed rows. */
 function waitingView(
   name: string,
   recorded: SeatState | undefined,
   trust: boolean,
+  lead = false,
 ): { state: string; stored: string; difference: Difference } | null {
   const waiting = recorded?.waiting;
   if (!waiting) return null;
@@ -149,11 +161,14 @@ function waitingView(
   const phrase = `waiting for owner (${waiting.classification})`;
   const isTrust = waiting.classification === 'trust';
   const answer = trust && isTrust;
-  const repair = answer
-    ? `team answer ${name} trust, or the owner answers the dialog in the pane, then team up`
-    : isTrust
-      ? 'the owner answers the dialog in the pane, then team up'
-      : 'the owner runs team up';
+  const asks = 'the lead asks its parent orchestrator (team send)';
+  const repair = lead
+    ? asks
+    : answer
+      ? `team answer ${name} trust, or the owner answers the dialog in the pane, then team up`
+      : isTrust
+        ? 'the owner answers the dialog in the pane, then team up'
+        : 'the owner runs team up';
   return {
     state: phrase,
     stored: 'waiting-owner',
@@ -323,6 +338,14 @@ export function compare(
   continuityIds?: ReadonlyMap<string, string | null>,
   route?: ReachRoute,
   daemon?: WatchDaemonReading,
+  queuedDrops?: ReadonlySet<string>,
+  /** The daemon health reading says this session's hosted watch is running: the same phase the
+   *  status note `watch: running in the daemon` reports. A session with no pane-watch record is
+   *  not missing a watch while that is true. */
+  hostedWatchRunning = false,
+  /** The repair a missing or stale watch names, from the caller's daemon reading
+   *  (`watchRepairOf`); absent, the generic one. */
+  watchRepair: string = WATCH_MISSING_REPAIR,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -370,7 +393,7 @@ export function compare(
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
           : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane,
-              restoreProofAt(seat, recorded, live, agent.pane, recordedSession));
+              restoreProofAt(seat, recorded, live, agent.pane, recordedSession, route === undefined ? undefined : restoreWorktreeOf(team, route.root, state, seat.name)));
         rows.push({ ...found.row, ...idField });
         if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
@@ -381,6 +404,11 @@ export function compare(
       // seat no per-seat restart is offered (a lead is never removed or restarted alone), and
       // the whole-team restart it would take is never the repair: the note says what the
       // process is, and the lead reads it.
+      // The conversation came back on a process team did not launch: the same unproven channel.
+      if (continuity === 'restored' && verdict === 'replaced') {
+        const unproven = channelPushUnprovenNote(seat, team);
+        if (unproven !== undefined) notes.push(unproven);
+      }
       if (continuity === 'restored' && usesLauncher(seat)) {
         if (isLeadSeat(team, seat.name)) {
           notes.push(`${seat.name}: started by a launcher; team cannot tell its process from the one it launched`);
@@ -401,7 +429,32 @@ export function compare(
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
       const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered);
-      const held = waitingView(seat.name, recorded, trust);
+      if (seat.cli === 'codex' && agent.status !== 'working' && featureDialog(live.screens[agent.pane] ?? null)) {
+        rows.push({ name: seat.name, ...idField, state: 'Codex settings dialog', model, pane: agent.pane,
+          ...(recorded?.start_cwd ? { start_cwd: recorded.start_cwd } : {}) });
+        differences.push({ what: `${seat.name}: Codex settings dialog`,
+          repair: isLeadSeat(team, seat.name) ? relaunchRepair(team, seat.name, 'plain') : `team restart ${seat.name}` });
+        continue;
+      }
+      const waitedOn = waitingView(
+        seat.name,
+        recorded,
+        trust,
+        (team.orchestrator !== '' && seat.name === team.orchestrator)
+          || (team.operator !== '' && seat.name === team.operator),
+      );
+      // A wait recorded at a provider error or a usage wall owes no answer: the screen that
+      // caused it is gone once the pane draws a free prompt again. Seen 2026-11-16: an operator
+      // read "waiting for owner (provider error)" for as long as the record stood, while its
+      // pane sat at a ready prompt. The live reading wins there, and a note names the stale
+      // record; a dialog that owes an answer (trust, permission, a question) keeps its row.
+      const held = waitedOn !== null && !shell && passingWait(recorded?.waiting?.classification)
+        && readScreen(seat.cli, live.screens[agent.pane]).kind === 'idle'
+        ? null
+        : waitedOn;
+      if (waitedOn !== null && held === null) {
+        notes.push(`${seat.name}: the recorded wait (${recorded?.waiting?.classification}) is over: its pane reads a ready prompt`);
+      }
       if (held) {
         rows.push({
           name: seat.name,
@@ -442,15 +495,28 @@ export function compare(
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = word === 'idle' || word === 'done';
       const isUnsent = quiet && screen.kind === 'unsent';
+      const unsentSince = recorded?.unsent_since === undefined ? NaN : Date.parse(recorded.unsent_since);
+      // Held past `unsent_after`, with a drop still queued: the row is this state, never idle.
+      const blockedUnsent = isUnsent
+        && queuedDrops?.has(seat.name) === true
+        && !Number.isNaN(unsentSince)
+        && now.getTime() - unsentSince >= watch.unsentAfter * 1000;
       // A quiet seat on a screen no profile reads: herdr's word alone would show a bare done (the
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
       const quotaOut = quiet && switchReason === undefined ? quotaOutText(screen) : null;
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined ? ` (${switchReason})` : '';
-      const stateText = quotaOut !== null
-        ? `${quotaOut}${seat.parked ? ', parked' : ''}`
-        : `${word}${mark}${seat.parked ? ', parked' : ''}`;
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined && switchReason !== 'out of tokens' ? ` (${switchReason})` : '';
+      // Out of tokens replaces herdr's idle or done. A profile wall that already named a reset
+      // keeps its own quota word.
+      const tokens = outOfTokensState(screen);
+      const stateText = blockedUnsent
+        ? `blocked: unsent input${seat.parked ? ', parked' : ''}`
+        : tokens !== null
+          ? `${tokens}${seat.parked ? ', parked' : ''}`
+          : quotaOut !== null
+            ? `${quotaOut}${seat.parked ? ', parked' : ''}`
+            : `${word}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
         ...idField,
@@ -560,7 +626,7 @@ export function compare(
       // Herdr lists no agent of this name: the pane is the seat only when the shared proof holds,
       // and the proof is what `team up` will read before it re-ties anything.
       const found = cannotTie(seat, held, live.screens[held], team, false,
-        restoreProofAt(seat, recorded, live, held, continuitySessionOf(continuityIds, declared.name, recorded?.agent_session)));
+        restoreProofAt(seat, recorded, live, held, continuitySessionOf(continuityIds, declared.name, recorded?.agent_session), route === undefined ? undefined : restoreWorktreeOf(team, route.root, state, seat.name)));
       rows.push({ ...found.row, ...idField });
       if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
@@ -682,10 +748,11 @@ export function compare(
       const unread = quiet && tempScreen.kind === 'unknown';
       // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
       const quotaOut = quiet ? quotaOutText(tempScreen) : null;
+      const tokens = outOfTokensState(tempScreen);
       rows.push({
         name,
         ...idField,
-        state: `${quotaOut ?? `${tempWord}${unread ? ' (screen not recognised)' : ''}`}, temporary`,
+        state: `${tokens ?? quotaOut ?? `${tempWord}${unread ? ' (screen not recognised)' : ''}`}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
@@ -734,15 +801,33 @@ export function compare(
   // is not the watch now, and the note says so rather than printing the dead process as it.
   if (state.watch) notes.push(...watchNotes(state.watch, daemon, now));
 
+  // A webhook row whose routine runs another CLI than the seat's own: the send never counts it
+  // and the bus never posts to it, so the row is flagged where the lead reads the team.
+  for (const seat of team.seats) {
+    if (seat.stopped === true || seat.webhook === undefined) continue;
+    const stray = strayWebhookOf(seat.webhook, seat.cli);
+    if (stray !== null) {
+      notes.push(`${seat.name}: its webhook runs as ${stray.target}, not as its ${stray.cli}; messages take the seat's own route, and the webhook row is not used (remove it, or point it at a routine that runs as ${stray.cli})`);
+    }
+  }
+
   if (live.running && anyRunning) {
     const beat = state.watch ? Date.parse(state.watch.heartbeat) : NaN;
-    if (!state.watch) {
-      differences.push({ what: 'no watch has run for this session', repair: `team watch --session ${session}` });
-    } else if (!(now.getTime() - beat <= 2 * watch.interval * 1000)) {
+    // A pane-watch record is one watch. The daemon's hosted watch for this session is the
+    // other, and `up` writes no pane record once the daemon carries it. The gap is real only
+    // when neither is running. The repair is the daemon's, not a pane `team watch`.
+    if (!state.watch && !hostedWatchRunning) {
+      differences.push({
+        what: 'no watch has run for this session',
+        repair: watchRepair,
+        who: "the team's lead",
+      });
+    } else if (state.watch && !(now.getTime() - beat <= 2 * watch.interval * 1000)) {
       const minutes = Number.isFinite(beat) ? Math.round((now.getTime() - beat) / 60_000) : null;
       differences.push({
         what: `the watch's last pass was ${minutes === null ? 'never recorded' : `${pluralCount(minutes, 'minute')} ago`}`,
-        repair: `team watch --session ${session}`,
+        repair: watchRepair,
+        who: "the team's lead",
       });
     }
   }
@@ -846,9 +931,11 @@ function restoreProofAt(
   live: Live,
   pane: string,
   recordedSession: string | undefined,
+  worktree?: RestoreWorktree,
 ): RestoreProof | null {
   if (!recorded || recorded.pane !== pane) return null;
   return restoreProof({
+    ...(worktree === undefined ? {} : { worktree }),
     seat,
     recorded,
     agents: live.agents,
@@ -861,7 +948,37 @@ function restoreProofAt(
 
 /** A program is in front and the stored session does not tie it to the launch. The repair is to
  *  look. `up` does not close this pane. */
+/** The evidence this note rests on, and only that: the pane's process is not the one team
+ *  launched, so it was not started from the seat's launch line, and the development-channel flag
+ *  that line carries is not proven on it. Nothing here reads the live process's options or the
+ *  client's channel capability, so the note never says the flag is missing or that push is off:
+ *  herdr's own resume of a restored Claude pane is known to drop the flag (Claude Code then logs
+ *  "not in --channels list"), and a process started by hand with the flag keeps it. The repair
+ *  relaunches through the seat's own line, resuming its conversation; a lead's own seat is
+ *  relaunched by another lead or the owner, never by itself. */
+export function channelPushUnprovenNote(seat: Seat, team: TeamFile): string | undefined {
+  if (seat.cli !== 'claude-code' || !channelLaunchEnabled(seat.launch)) return undefined;
+  const repair = isLeadSeat(team, seat.name)
+    ? `when it is idle, another lead or the owner runs team restart ${seat.name} --resume <its conversation id>`
+    : `when it is idle, team restart ${seat.name} --resume <its conversation id>`;
+  return `${seat.name}: channel push not confirmed: the process in its pane was not started from its launch line, so its channel flag cannot be checked (a terminal-host resume drops it); if messages reach it only at its next turn, ${repair}`;
+}
+
 function cannotTie(
+  seat: Seat,
+  pane: string,
+  screen: string | undefined,
+  team: TeamFile,
+  namedOnPane: boolean,
+  proof: RestoreProof | null = null,
+): { row: Row; difference?: Difference; note?: string } {
+  const found = cannotTieRow(seat, pane, screen, team, namedOnPane, proof);
+  const pushOff = channelPushUnprovenNote(seat, team);
+  if (pushOff === undefined) return found;
+  return { ...found, note: found.note === undefined ? pushOff : `${found.note}; ${pushOff}` };
+}
+
+function cannotTieRow(
   seat: Seat,
   pane: string,
   screen: string | undefined,

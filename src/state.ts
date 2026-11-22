@@ -1,6 +1,9 @@
+import { currentRunMemo } from './run-memo.ts';
+import { hostedCommit } from './host/request-scope.ts';
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, existsSync, fstatSync, readFileSync, statSync } from 'node:fs';
+import { linkSync, mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from './host/guarded-fs.ts';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
 import { handoverPath } from './handover/paths.ts';
@@ -87,12 +90,17 @@ export type SeatState = {
   watcher?: CliWatcher;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
+  /** When the watch first saw this seat's box holding unsent text, while that reading stands.
+   *  Cleared the moment the box is anything else. Status reads it against `unsent_after`. */
+  unsent_since?: string;
   pane?: string;
   /** The herdr workspace, so a later command can close it without listing agents. */
   workspace?: string;
   /**
    * The folder the seat's launch line was run in, when the state records it. A resumed seat's
    * pane keeps that folder, so its launch line is checked there, never against the file's.
+   * Always an absolute path (`startFolderOf`): an older record that held the declared relative
+   * cwd is read against the team root.
    */
   start_cwd?: string;
   cli_version?: string;
@@ -202,6 +210,11 @@ export type SeatState = {
   effort?: string;
   /** The launch command of that idle record. Stored for the registry; reload does not compare it. */
   launch_line?: string;
+  /** Whether the command this seat's latest launch ran carried the team's development channel,
+   *  written immediately before that command runs: the one fact the seat's inbox server reads to
+   *  advertise the channel (a launch that fell back runs without it). Absent on records written
+   *  before the field: the server then follows the declaration's opt-in. */
+  channel_launch?: boolean;
   // `own_commits` is the home for a temporary seat whose end is `merged:` and that has no worktree.
   // A seat in a worktree keeps that record on the worktree instead.
   temporary?: { like: string; until: string; task?: string; own_commits?: boolean };
@@ -391,6 +404,14 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * The start folder of a seat whose record a relaunch dropped while its pane may still run,
+   * by seat name, exactly as the record held it (a value that is no path is kept as it is). It is
+   * held apart from `retained_seats`, so a record with no id keeps it too. The client key's
+   * placement check reads it as a seat's own folder until the relaunch writes the seat's record
+   * again, which takes it (`keptStartFolder`) and removes it.
+   */
+  retained_start_cwd?: Record<string, unknown>;
   /**
    * The general seat brief delivered to each seat: the record's id and when it landed, written by
    * the launch that wrote the drop. `team check` reads it to name a seat the brief never reached;
@@ -712,6 +733,97 @@ export function resetReadStateCallCount(): void {
   readStateCalls = 0;
 }
 
+/** The last state each file held, by the file's identity: see `readStateShared`. `text` is the
+ *  file as it was read for `state`, or null when the file moved during that read. */
+const sharedStates = new Map<string, { key: string; racy: boolean; text: string | null; state: Readonly<State> }>();
+
+/** How close to its last change a file is still "racy": its times may not move on the next write.
+ *  Linux stamps a file with the kernel's coarse clock (one tick, up to 10 ms), so two same-size
+ *  writes inside one tick, the second into a freed inode the rename reuses, keep one key. The
+ *  margin, ten ticks, follows git's racy-clean rule: such a file is compared by its text. */
+const RACY_NS = 100_000_000n;
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+/** The file's bytes and identity from one open: the key is the opened file's own stat, so the
+ *  text, the key and the parse below all describe the same file, whatever a rename does to the
+ *  path in between. Absent: null. */
+function readKeyed(path: string): { key: string; changedNs: bigint; text: string } | null {
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    return {
+      key: `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`,
+      changedNs: stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs,
+      text: readFileSync(fd, 'utf8'),
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The state for a caller that only reads it, such as the presence pass polling every seat: one
+ *  frozen object, parsed again only when the file changes. The key is the opened file's inode,
+ *  size and times; a file changed within the racy margin of its read is also compared by its text,
+ *  so a write the times cannot show is still seen. The text compared, the key and the state parsed
+ *  come from one open of the file, so a cached state is never another version's. A caller that
+ *  edits the state uses `readState` or `updateState`. */
+export function readStateShared(dir: string): Readonly<State> {
+  const path = join(dir, STATE_FILE);
+  const hit = sharedStates.get(path);
+  // A settled entry is served on the path's stat alone: its key, text and state were taken from
+  // one open file, so an equal key names those very bytes.
+  if (hit !== undefined && !hit.racy) {
+    try {
+      const stat = statSync(path, { bigint: true });
+      if (hit.key === `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`) return hit.state;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (hit.key === 'absent') return hit.state;
+    }
+  }
+  const read = readKeyed(path);
+  const key = read === null ? 'absent' : read.key;
+  const racy = read !== null && BigInt(Date.now()) * 1_000_000n - read.changedNs < RACY_NS;
+  if (hit?.key === key && (!hit.racy || (read !== null && hit.text === read.text))) {
+    if (hit.racy) sharedStates.set(path, { key, racy, text: hit.text, state: hit.state });
+    return hit.state;
+  }
+  if (read === null) {
+    // The empty state of the absence this read observed: a second look at the path could find a
+    // file created since and keep its state under the absent key.
+    const state = deepFreeze<State>({ format: 1, sessions: sessionMap() });
+    sharedStates.set(path, { key, racy, text: null, state });
+    return state;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read.text) as unknown;
+  } catch {
+    // A truncated prefix from a writer that is not the atomic one: the ordinary read, with its
+    // retry, and nothing is kept to compare.
+    const state = deepFreeze(readState(dir));
+    sharedStates.set(path, { key: 'unkeyed', racy: true, text: null, state });
+    return state;
+  }
+  readStateCalls += 1;
+  const state = deepFreeze(stateOf(path, dir, parsed));
+  sharedStates.set(path, { key, racy, text: read.text, state });
+  return state;
+}
+
 export function readState(dir: string): State {
   readStateCalls += 1;
   const path = join(dir, STATE_FILE);
@@ -724,6 +836,11 @@ export function readState(dir: string): State {
   } catch {
     throw new Error(`${path} is not valid JSON; move it aside and run the command again`);
   }
+  return stateOf(path, dir, parsed);
+}
+
+/** The state a parsed file holds, cleaned at the read door; a value that is no state throws. */
+function stateOf(path: string, dir: string, parsed: unknown): State {
   const state = parsed as Partial<State> | null;
   if (!state || typeof state !== 'object' || state.format !== 1 || typeof state.sessions !== 'object' || !state.sessions) {
     throw new Error(`${path} is not a team state of format 1; move it aside and run the command again`);
@@ -812,6 +929,7 @@ export function readState(dir: string): State {
       if (seat.version !== undefined && typeof seat.version !== 'string') delete seat.version;
       if (seat.effort !== undefined && typeof seat.effort !== 'string') delete seat.effort;
       if (seat.launch_line !== undefined && typeof seat.launch_line !== 'string') delete seat.launch_line;
+      if (seat.channel_launch !== undefined && typeof seat.channel_launch !== 'boolean') delete seat.channel_launch;
       if (seat.last_active !== undefined && typeof seat.last_active !== 'string') delete seat.last_active;
       // The presence fence and cursor enter from the file like every other value. The fence is
       // consumer evidence, so a malformed one is dropped whole — the consumer's answer is then
@@ -1019,6 +1137,7 @@ export function updateState<T>(
   change: (state: State) => T,
   options: { waitMs?: number; writeWhen?: (result: T) => boolean } = {},
 ): T {
+  hostedCommit('updateState');
   return withLock(dir, () => {
     const state = readState(dir);
     const result = change(state);
@@ -1088,6 +1207,9 @@ function writeTemporary(path: string, text: string, random: () => string, mode?:
  * the only file this call created — leaving the live name as it was.
  */
 export function writeAtomic(path: string, text: string, options: { random?: () => string } = {}): void {
+  hostedCommit('writeAtomic');
+  // A policy, state or config file written in this run may change what a team text validates to.
+  currentRunMemo()?.teamLoads.clear();
   const random = options.random ?? (() => randomBytes(10).toString('hex'));
   const temporary = writeTemporary(path, text, random, 0o600);
   try {
@@ -1407,4 +1529,63 @@ export function reclaimLockDir(dir: string, options: { youngMs?: number } = {}):
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'kept';
   }
+}
+
+/**
+ * The start folder a seat record keeps: absolute, resolved against the team root exactly as a
+ * declared cwd is (`resolve(root, cwd)`), so every reader of the record — a client key's
+ * placement check above all — reads a real folder and never a path relative to its own working
+ * folder. Undefined stays undefined: a record with no folder keeps none.
+ */
+export function startFolderOf(root: string, cwd: unknown): string | undefined {
+  if (typeof cwd !== 'string' || cwd === '' || cwd.includes('\0')) return undefined;
+  return isAbsolute(cwd) ? cwd : resolve(root, cwd);
+}
+
+/**
+ * The start folder a record write keeps. `fresh` is the folder of a workspace this write created
+ * (or one the patch itself names): it always wins, so a replacement workspace never keeps an
+ * older folder, and it repairs a malformed one. Without fresh evidence the prior folder stands,
+ * made absolute; a prior value that is no path at all is kept as it was, never dropped, so the
+ * placement check keeps refusing it (with its repair) rather than fall back to the declaration.
+ */
+export function keptStartFolder(root: string, fresh: unknown, prior: unknown): string | undefined {
+  const now = startFolderOf(root, fresh);
+  if (now !== undefined) return now;
+  if (prior === undefined) return undefined;
+  return startFolderOf(root, prior) ?? (prior as string);
+}
+
+/**
+ * Takes the folder a relaunch carried for `name` (`retained_start_cwd`), when the record being
+ * written holds placement of its own again: the fresh workspace's folder, or a prior one. Removes
+ * the session map once it is empty. The record write calls it in the same state update.
+ */
+export function retireCarriedStartFolder(session: SessionState, name: string): void {
+  const carried = session.retained_start_cwd as unknown;
+  // A map that is not one is left as it is: the launch refused it before any side effect
+  // (`carriedStartFolderProblem`), and the placement check keeps refusing it.
+  if (carried === null || typeof carried !== 'object' || Array.isArray(carried)) return;
+  delete (carried as Record<string, unknown>)[name];
+  if (Object.keys(carried).length === 0) delete session.retained_start_cwd;
+}
+
+/**
+ * Why a session's carried start folders (`retained_start_cwd`) cannot be read: present, and not a
+ * map by seat name. A launch refuses on it before any side effect, with its repair, so a record
+ * write never meets it mid-launch; the map is kept as it is, since it is placement evidence the
+ * client key's check still refuses on. Null when the map is absent or reads.
+ */
+export function carriedStartFolderProblem(session: Pick<SessionState, 'retained_start_cwd'> | undefined, sessionName: string, stateDir: string): string | null {
+  const carried = session?.retained_start_cwd as unknown;
+  if (carried === undefined) return null;
+  if (carried !== null && typeof carried === 'object' && !Array.isArray(carried)) return null;
+  return `the carried start folders of session "${sessionName}" in ${join(stateDir, STATE_FILE)} are not a map by seat name: nothing was launched; fix or remove the \`retained_start_cwd\` field of that session, then run it again`;
+}
+
+/** A seat record's start folder when it is a path: a value an older or hand-edited record holds
+ *  that is no string is no folder to read, and a reader that would use it as one reads none. */
+export function recordedStartFolder(seat: { start_cwd?: unknown } | undefined): string | undefined {
+  const cwd = seat?.start_cwd;
+  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined;
 }

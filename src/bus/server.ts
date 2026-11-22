@@ -17,21 +17,9 @@ import { readStateFile, writeStateFile } from '../file-write.ts';
 //   cursor was rotated out or the subscriber's buffer overflowed, and either returns the batch
 //   (`follow: false`) or streams live events (`follow: true`).
 // Runs an initial `reconcilePass` on startup and every `reconcileIntervalMs` thereafter.
-import {
-  chmodSync,
-  closeSync,
-  fstatSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { connect, createServer, type Socket } from 'node:net';
+import { closeSync, fstatSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
+import { dialing, serving, socketRuntime, type Conn, type ConnEvents, type SocketError } from '../runtime/bun-socket.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { canonicalTeam } from '../file/team-config.ts';
@@ -74,6 +62,7 @@ import { makeWebhookDelivery, type WebhookFacts } from './webhook.ts';
 import { recordWebhookDelivery } from './webhook-record.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 import { RECORD_NAME, verifiedArrival } from './arrival.ts';
+import { hostedCommit } from '../host/request-scope.ts';
 
 /** The serving bus's process marker, beside its socket. */
 export function busMarkerPath(root: string): string {
@@ -434,28 +423,23 @@ type Probe = 'live' | 'stale' | 'none';
 
 function probeSocket(path: string): Promise<Probe> {
   return new Promise((done) => {
-    const socket = connect(path);
     let settled = false;
     const settle = (probe: Probe): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      conn.destroy();
       done(probe);
     };
+    const Bun = socketRuntime();
+    const { conn, options, refused } = dialing(path, {
+      open: () => settle('live'),
+      close: (error) => settle(error?.code === 'ECONNREFUSED' ? 'stale' : 'none'),
+    });
     // A connect that neither completes nor errors would otherwise wait forever, and `busListening`
     // and the start walk both await it. The bound answers unreachable instead.
-    const timer = setTimeout(() => {
-      socket.destroy();
-      settle('none');
-    }, PROBE_TIMEOUT_MS);
-    socket.once('connect', () => {
-      socket.destroy();
-      settle('live');
-    });
-    socket.once('error', (error) => {
-      socket.destroy();
-      settle((error as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? 'stale' : 'none');
-    });
+    const timer = setTimeout(() => settle('none'), PROBE_TIMEOUT_MS);
+    Bun.connect(options).catch(refused);
   });
 }
 
@@ -630,7 +614,7 @@ export function parseBusAnswer(line: string): BusAnswer | null {
 }
 
 type LiveSubscriber = {
-  socket: Socket;
+  socket: Conn;
   seat: string;
   kinds: Set<EventKind> | null;
   queue: string[];
@@ -827,7 +811,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       confirmed = undefined;
     }
 
-    const sockets = new Set<Socket>();
+    const sockets = new Set<Conn>();
     const subscribers = new Set<LiveSubscriber>();
 
     // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
@@ -1014,23 +998,24 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       return run;
     };
 
-    const server = createServer((socket) => {
-      sockets.add(socket);
-      socket.once('close', () => sockets.delete(socket));
-      serveBusConnection(socket, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam);
-    });
-
-    const failure = await new Promise<{ code?: string } | null>((done) => {
-      server.once('error', (error) => done({ code: (error as NodeJS.ErrnoException).code }));
-      server.listen(path, () => done(null));
-    });
-    if (failure) return { kind: 'bind-failed', code: failure.code };
+    hostedCommit('Bun.listen');
+    const Bun = socketRuntime();
+    let server: ReturnType<typeof Bun.listen>;
+    try {
+      server = Bun.listen(
+        serving(path, (socket) => {
+          sockets.add(socket);
+          socket.onClose(() => sockets.delete(socket));
+          return serveBusConnection(socket, input, home, now, bufferLimit, subscribers, fanOut, resolveSeat, routingTeam);
+        }),
+      );
+    } catch (error) {
+      return { kind: 'bind-failed', code: (error as SocketError).code };
+    }
 
     try {
       chmodSync(path, 0o600);
     } catch {}
-
-    server.on('error', (error) => input.stderr(`team bus: ${error.message}\n`));
 
     // The process marker `team status` and `team check` read without dialling the socket: this
     // pid, while it serves. A marker whose pid is gone is a bus that died; `team up` starts one.
@@ -1096,7 +1081,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
           subscribers.clear();
           for (const socket of sockets) socket.destroy();
           clearBusMarker(input.root);
-          await new Promise<void>((done) => server.close(() => done()));
+          server.stop(true);
         })();
         return closingPromise;
       },
@@ -1118,7 +1103,7 @@ function flushSubscriber(sub: LiveSubscriber, subscribers: Set<LiveSubscriber>):
     }
     const ok = sub.socket.write(next);
     if (!ok) {
-      sub.socket.once('drain', () => {
+      sub.socket.onDrain(() => {
         sub.flushing = false;
         flushSubscriber(sub, subscribers);
       });
@@ -1129,7 +1114,7 @@ function flushSubscriber(sub: LiveSubscriber, subscribers: Set<LiveSubscriber>):
 }
 
 function serveBusConnection(
-  socket: Socket,
+  socket: Conn,
   input: StartBusInput,
   home: string,
   now: () => Date,
@@ -1138,13 +1123,11 @@ function serveBusConnection(
   fanOut: (record: SignedEventRecord) => void,
   resolveSeat: SeatRecipientResolver,
   routingTeam: TeamRoutingRoles,
-): void {
-  socket.on('error', () => socket.destroy());
+): ConnEvents {
   socket.setTimeout(REQUEST_IDLE_MS, () => socket.destroy());
-  socket.setEncoding('utf8');
   let buffer = '';
   let handled = false;
-  socket.on('data', (chunk: string) => {
+  const text = (chunk: string): void => {
     if (handled) return;
     buffer += chunk;
     const at = buffer.indexOf('\n');
@@ -1165,7 +1148,8 @@ function serveBusConnection(
         socket.destroy();
       },
     );
-  });
+  };
+  return { text };
 }
 
 /** Serves one request. Synchronous except for a subscribe's catch-up read, which is sliced: the
@@ -1173,7 +1157,7 @@ function serveBusConnection(
  *  retained log, and the holding list the subscription registers with keeps the window between
  *  that read and the live feed exact. */
 async function dispatchBusRequest(
-  socket: Socket,
+  socket: Conn,
   line: string,
   input: StartBusInput,
   home: string,
@@ -1351,7 +1335,7 @@ async function dispatchBusRequest(
     : null;
   if (sub !== null) {
     subscribers.add(sub);
-    socket.once('close', () => subscribers.delete(sub));
+    socket.onClose(() => subscribers.delete(sub));
   }
   const dropSub = (): void => {
     if (sub !== null) subscribers.delete(sub);
@@ -1453,7 +1437,7 @@ async function dispatchBusRequest(
   flushSubscriber(sub, subscribers);
 }
 
-function answerOnce(socket: Socket, value: BusAnswer): void {
+function answerOnce(socket: Conn, value: BusAnswer): void {
   const line = encodeBusLine(value);
   if (line.length > MAX_BUS_ANSWER_BYTES) {
     socket.end(encodeBusLine({ ok: false, at: 'write', message: 'the bus answer exceeded the maximum frame size' }));
@@ -1491,7 +1475,7 @@ function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<
     let settled = false;
     let connected = false;
     let buffer = '';
-    const socket = connect(busSocket(root));
+    hostedCommit('Bun.connect');
     const finish = (outcome: BusAsk) => {
       if (settled) return;
       settled = true;
@@ -1499,13 +1483,7 @@ function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<
       socket.destroy();
       done(outcome);
     };
-    const timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
-    socket.setEncoding('utf8');
-    socket.once('connect', () => {
-      connected = true;
-      socket.write(encodeBusLine(request));
-    });
-    socket.on('data', (chunk: string) => {
+    const read = (chunk: string): void => {
       buffer += chunk;
       const at = buffer.indexOf('\n');
       if (at < 0) {
@@ -1518,9 +1496,18 @@ function askBus(root: string, request: BusRequest, deadlineMs: number): Promise<
         return;
       }
       finish({ kind: 'answer', answer: parsed });
+    };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(busSocket(root), {
+      open: () => {
+        connected = true;
+        socket.write(encodeBusLine(request));
+      },
+      text: read,
+      close: () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }),
     });
-    socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
-    socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
+    const timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
+    Bun.connect(options).catch(refused);
   });
 }
 
@@ -1560,6 +1547,58 @@ export async function nudgeBus(
   return { kind: 'nudged', event: answer.event, duplicate: answer.duplicate };
 }
 
+/** How a nudge that does not wait for the bus's answer ended: `sent` once the request line was
+ *  handed to the bus's socket, `unavailable` when nothing listens there, `deadline` when the
+ *  connect or the write did not finish in time. */
+export type BusNudgeSent = { kind: 'sent' } | { kind: 'unavailable' } | { kind: 'deadline' };
+
+/**
+ * The same nudge as `nudgeBus`, without waiting for the bus's answer. A sender that only
+ * announces its record (`announceArrival`) never reads the answer, yet waited for it: on a bus
+ * busy with its first pass the answer came after the 250 ms bound, so every send paid the whole
+ * bound (2026-11-17: 252 ms of a 0.68 s send). The bus serves a request as soon as its line is
+ * read, synchronously for a nudge, and a closed client does not stop that: it re-reads and
+ * verifies the record exactly as before. This waits only until the line is written to the socket,
+ * then closes it.
+ */
+export function nudgeBusNoWait(
+  root: string,
+  record: { session: string; seat: string; record_id: string },
+  options: { deadlineMs?: number } = {},
+): Promise<BusNudgeSent> {
+  return new Promise((done) => {
+    let settled = false;
+    let connected = false;
+    hostedCommit('Bun.connect');
+    const finish = (outcome: BusNudgeSent) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // A unix socket hands written bytes straight to the bus's receive queue, so closing at
+      // once loses nothing; `end` would keep this process alive until the busy bus answered.
+      socket.destroy();
+      done(outcome);
+    };
+    const timer = setTimeout(
+      () => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }),
+      options.deadlineMs ?? BUS_DEADLINE_MS,
+    );
+    // The bus's answer, if it comes before the socket closes, is not read. `sent` once the kernel
+    // has taken the whole line, now or on a later drain.
+    const Bun = socketRuntime();
+    const { conn: socket, options: dial, refused } = dialing(busSocket(root), {
+      open: () => {
+        connected = true;
+        const line = encodeBusLine({ op: 'nudge', session: record.session, seat: record.seat, record_id: record.record_id });
+        if (socket.write(line)) finish({ kind: 'sent' });
+        else socket.onDrain(() => finish({ kind: 'sent' }));
+      },
+      close: () => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }),
+    });
+    Bun.connect(dial).catch(refused);
+  });
+}
+
 export type BusSubscribeOutcome =
   | { kind: 'events'; events: SignedEventRecord[]; cursor: number }
   | {
@@ -1586,7 +1625,6 @@ export function subscribeBusOnce(
     let settled = false;
     let connected = false;
     let buffer = '';
-    const socket = connect(busSocket(root));
     const finish = (outcome: BusSubscribeOutcome) => {
       if (settled) return;
       settled = true;
@@ -1594,13 +1632,7 @@ export function subscribeBusOnce(
       socket.destroy();
       done(outcome);
     };
-    const timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
-    socket.setEncoding('utf8');
-    socket.once('connect', () => {
-      connected = true;
-      socket.write(encodeBusLine(full));
-    });
-    socket.on('data', (chunk: string) => {
+    const read = (chunk: string): void => {
       buffer += chunk;
       const at = buffer.indexOf('\n');
       if (at < 0) {
@@ -1642,8 +1674,17 @@ export function subscribeBusOnce(
         return;
       }
       finish({ kind: 'wrong' });
+    };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(busSocket(root), {
+      open: () => {
+        connected = true;
+        socket.write(encodeBusLine(full));
+      },
+      text: read,
+      close: () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }),
     });
-    socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
-    socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
+    const timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
+    Bun.connect(options).catch(refused);
   });
 }

@@ -18,6 +18,7 @@ import {
 } from '../caller.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
+import { addressedTeam } from '../registry/binding.ts';
 import { readLaunchedTeam } from '../file/team-text.ts';
 import type { Problem } from '../file/types.ts';
 import { agentList, sessionState, workspaceList, type HerdrAgent } from '../herdr.ts';
@@ -116,16 +117,21 @@ export async function runOrder(argv: string[], io: Io, sources: OrderSources = r
     ?? (args.values.session !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) return callerRefused(out, flagRefusal);
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const binding = args.values.file !== undefined ? { kind: 'unbound' as const } : addressedTeam(sources.home ?? homedir(), io.cwd, undefined, io);
+  const launched = args.values.file !== undefined || binding.kind === 'bound' ? undefined : launchedTeamFile(io, sources.home);
   const readOptions = {
     home: sources.home,
     ...(args.values.session !== undefined ? { session: args.values.session } : {}),
   };
-  const loaded = args.values.file
-    ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
-    : launched !== undefined
-      ? readLaunchedTeam(launched, readOptions)
-      : readTeamConfig(io.cwd, readOptions);
+  const loaded = binding.kind === 'unreadable' || binding.kind === 'ambiguous'
+    ? { ok: false as const, errors: [{ line: 0, message: binding.message }] }
+    : args.values.file !== undefined
+      ? readTeamConfig(io.cwd, { ...readOptions, file: args.values.file })
+      : binding.kind === 'bound'
+        ? readTeamConfig(binding.team.root, readOptions)
+        : launched !== undefined
+          ? readLaunchedTeam(launched, readOptions)
+          : readTeamConfig(io.cwd, readOptions);
   if (!loaded.ok) {
     return configuration(out, loaded.errors.map((problem) => `${where(problem)}${plainText(problem.message)}`).join('\n'));
   }

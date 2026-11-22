@@ -575,6 +575,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       prompt: false,
       history: { lastWorking: undefined, idleSince: undefined },
       liveness: { idle_lead_seconds: 300, idle_owner_seconds: 1800, blind_after_seconds: 600 },
+      queued: false,
       ...overrides,
     });
 
@@ -603,8 +604,9 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
         ctx,
       ),
     ];
-    // 4 attention + 1 missing + 2*2 provider-error (operator + :owner) = 9 reports -> 7 deduplicated events.
-    expect(realReports.length).toBe(9);
+    // 1345: 4 attention + 1 missing + 2 rate-limit twins + 1 provider-error (owner, single) = 8
+    // reports -> 6 deduplicated events.
+    expect(realReports.length).toBe(8);
 
     await publishWatchReportsToBus(
       root,

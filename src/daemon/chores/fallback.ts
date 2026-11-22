@@ -22,10 +22,19 @@ import {
   type SweepRootResult,
 } from '../fallback-sweep.ts';
 import type { ChoresPass } from './child.ts';
+import { sweepCountsAreNews } from '../sweep-said.ts';
+import { inboxArchivePass, type InboxArchiveDeps, type InboxArchivePass } from './inbox-archive.ts';
+
 import type { ChoresChildConfig } from './protocol.ts';
+
+/** Drop-store refusals this process has already said. */
+const SAID_DROP_REFUSALS = new Set<string>();
 
 /** The notes a host's log should carry for one finished root, in the daemon's own words. A
  *  skipped root names why and stops there; counts appear only when a pass has some. */
+/** The most distinct drop notes one process remembers having said. */
+const SAID_DROP_LIMIT = 500;
+
 function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): string[] {
   const notes: string[] = [];
   if (entry.note !== null) notes.push(`fallback sweep: ${entry.note}`);
@@ -34,7 +43,7 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
     return notes;
   }
   const report = entry.report;
-  if (report !== null && (report.escalated.length > 0 || report.refused.length > 0 || report.unreadable.length > 0)) {
+  if (report !== null && sweepCountsAreNews('chores', entry.root, report)) {
     notes.push(
       `fallback sweep: escalated ${String(report.escalated.length)}, refused ${String(report.refused.length)}, unreadable ${String(report.unreadable.length)}`,
     );
@@ -54,8 +63,27 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
     }
   }
   if (drops !== null) {
+    // An entry the pass left alone is said once per process and entry, like a refusal.
+    for (const why of drops.skipped ?? []) {
+      const said = `drop store: left an entry it does not know where it is (${why}); the rest is archived`;
+      if (!SAID_DROP_REFUSALS.has(said)) {
+        // The set is bounded: past its size it starts over, so a long-lived child cannot grow it
+        // without end (an entry said again after that is one line more, not a stream).
+        if (SAID_DROP_REFUSALS.size >= SAID_DROP_LIMIT) SAID_DROP_REFUSALS.clear();
+        SAID_DROP_REFUSALS.add(said);
+        notes.push(said);
+      }
+    }
     if (drops.refused !== null) {
-      notes.push(`drop store: refused (${drops.refused})`);
+      // The same refusal every pass is one fact, not a stream: said once per process and reason
+      // (2026-11-13: one line every 30 s for a runtime that cannot archive). Archiving only moves
+      // mail already read; delivery and the inbox are unaffected.
+      const said = `drop store: archiving read mail is off (${drops.refused}); delivery and the inbox are unaffected`;
+      if (!SAID_DROP_REFUSALS.has(said)) {
+        if (SAID_DROP_REFUSALS.size >= SAID_DROP_LIMIT) SAID_DROP_REFUSALS.clear();
+        SAID_DROP_REFUSALS.add(said);
+        notes.push(said);
+      }
     } else if (drops.reclaimed.length > 0) {
       notes.push(
         `drop store: archived ${String(drops.archived.length)}, reclaimed ${String(drops.reclaimed.length)}`,
@@ -73,7 +101,57 @@ function passNotes(entry: SweepRootResult, drops: DropRetirementReport | null): 
  * one; a hand-built token without it names the root and the sweep reads that root's team file,
  * refusing it by name when it no longer validates, exactly as a bare root does.
  */
-export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
+/** The notes one daily inbox-archive pass adds, or none. */
+function inboxArchiveNotes(pass: InboxArchivePass): string[] {
+  if (pass.kind === 'load') {
+    return pass.first
+      ? [`drops archive: the daily run waits, load ${pass.perCore.toFixed(1)} per core is above the limit`]
+      : [];
+  }
+  if (pass.kind !== 'ran') return [];
+  const notes: string[] = [];
+  if (pass.moved > 0 || pass.unread > 0) {
+    notes.push(`drops archive: moved ${String(pass.moved)} read, ${String(pass.unread)} unread to seats at rest${pass.done ? '' : '; more next pass'}`);
+  }
+  for (const why of pass.refused) notes.push(`drops archive: ${why}`);
+  if (pass.notice === 'failed') notes.push("drops archive: the lead's line was not sent; it is tried again");
+  return notes;
+}
+
+/** Hands the child's loop a turn once the slice is spent; false when the child is stopping. */
+function yieldWhenDue(slices: Parameters<ChoresPass>[0]['slices']): () => Promise<boolean> {
+  let sliceStart = Date.now();
+  return async () => {
+    if (slices.stopping()) return false;
+    if (Date.now() - sliceStart < slices.sliceMs) return true;
+    const more = await slices.yield();
+    sliceStart = Date.now();
+    return more && !slices.stopping();
+  };
+}
+
+/** The daily run's line to the lead, through the daemon's own send and its notice admission. */
+function leadNotice(home: string): NonNullable<InboxArchiveDeps['notify']> {
+  return async ({ root, session, lead, body, id }) => {
+    const [{ realHost }, { sendDaemonDirect }] = await Promise.all([
+      import('../../commands/send.ts'),
+      import('../../reminder/direct-send.ts'),
+    ]);
+    const said: string[] = [];
+    const sent = await sendDaemonDirect(
+      { reminder: 'drops-archived', due: id, recipients: [{ root, session, seat: lead }], notice: 'drops-archived' },
+      { root, seat: lead, body, id },
+      { ...realHost, home },
+      { stdout: (text) => said.push(text), stderr: (text) => said.push(text) },
+    );
+    return { ok: sent.ok, text: sent.text };
+  };
+}
+
+export function createFallbackPass(
+  config: ChoresChildConfig,
+  inboxDeps: InboxArchiveDeps = {},
+): ChoresPass {
   /** The instant of each root's last pass, so retirement keeps its slower cadence per root. */
   const lastStorePass = new Map<string, number>();
   return async ({ route, at, slices }) => {
@@ -148,6 +226,25 @@ export function createFallbackPass(config: ChoresChildConfig): ChoresPass {
         }
       }
     }
-    return passNotes(entry, drops);
+    const notes = passNotes(entry, drops);
+    if (housekeeping && entry.why === null && route.teamFile !== undefined && !slices.stopping()) {
+      try {
+        const pass = await inboxArchivePass({
+          root: entry.root,
+          home: config.home,
+          team: route.teamFile,
+          now: at,
+          deps: {
+            notify: inboxDeps.notify ?? leadNotice(config.home),
+            yieldTurn: inboxDeps.yieldTurn ?? yieldWhenDue(slices),
+            ...(inboxDeps.loadPerCore !== undefined ? { loadPerCore: inboxDeps.loadPerCore } : {}),
+          },
+        });
+        notes.push(...inboxArchiveNotes(pass));
+      } catch (error) {
+        notes.push(`drops archive: the daily run stopped (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+    return notes;
   };
 }

@@ -1,10 +1,12 @@
+import { clearUnrecognisedScreen, leadOfRoot, noteUnrecognisedScreen } from '../../send/unrecognised-screen.ts';
+import { recordDeliveredBody } from '../../send/readable-wake.ts';
 // The wake child: one daemon-admitted typed wake, run in its own process.
 //
 // The daemon's send server answers `handed` at acceptance and never waits for the screen; this
 // child owns the walk from there. It re-reads the seat live (one pane, not a bare shell), takes
 // the seat lock, runs `deliverTypedWake` with the pane host, and writes its outcome — the history
-// line, the trace step and the log line — before it exits. Nothing here types on its own: the
-// walk is the one module that does, and this child only binds it to a session.
+// line, the fallback episode, the trace step and the log line — before it exits. Nothing here
+// types on its own: the walk is the one module that does, and this child only binds it to a session.
 //
 // The wake marker beside the staged copy is the reservation the daemon took before it spawned
 // this child. A marker that reads `sent` or `read` is an earlier wake's: this request is the same
@@ -15,16 +17,18 @@
 // child killed mid-walk leaves `reserved`, which is what was known at that point, and the
 // watch's own retry in the project's drop folder is still there to wake the seat.
 import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { PaneProcesses } from '../../herdr.ts';
 import { acquireSeatLock } from '../../launch/seat-lock.ts';
 import { logLine } from '../../log.ts';
 import { appendHistory } from '../../send/history.ts';
+import { noteTypedWake } from '../../send/fallback-events.ts';
 import { legStep } from '../../send/steps.ts';
 import type { TypedWakeHost, TypedWakeResult } from '../../send/typed-wake.ts';
 import { markWake, releaseWake, wakeMarkAt, wakePath } from '../../send/wake-marker.ts';
 import { findSeatAgent, isBareShellPane, type SeatAgents } from '../seat-live.ts';
 import type { WakeChildRequest } from './token.ts';
+import { seatMailDirIn } from '../../queue/mail-tree.ts';
 
 /** What the child may read and run. The real entry binds herdr and the typed walk; a scene
  *  hands in its own answers, so no pane is typed into and no session is touched. */
@@ -75,6 +79,11 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
     const outcome = delivered ? 'delivered (typed wake)' : 'unreachable';
     const submitMs = sinceStaged(walked?.submittedAt);
     const workingMs = sinceStaged(walked?.workingAt);
+    const noted = noteTypedWake({
+      root: request.root, home: request.home, project: request.project, session: request.session, seat: request.seat,
+      id: request.id, outcome: delivered ? 'delivered' : 'unreachable', reason, at: new Date(at), ms,
+    });
+    if (!noted.ok) logLine(request.dir, 'send', request.from, `${request.seat}: the typed-wake fallback outcome was not recorded (${noted.reason})`, deps.now());
     try {
       appendHistory(request.project, request.root, request.home, {
         ts: at,
@@ -168,7 +177,12 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
     const host = deps.wakeHost(request.session);
     const walk = await deps.walk(host, found.pane, request.line, request.cli);
     const ms = Math.max(0, deps.now().getTime() - request.stagedAt);
+    const seatDrops = seatMailDirIn(request.dir, request.session, request.seat);
     if (!walk.delivered) {
+      // An unrecognised screen, refused before any key: the seat's lead hears it once.
+      if (walk.unrecognised === true) {
+        noteUnrecognisedScreen({ dropDir: seatDrops, root: request.root, session: request.session, home: request.home, seat: request.seat, pane: found.pane, lead: leadOfRoot(request.root, request.home), at: deps.now() });
+      }
       // A key that went out, with no proof the line is still unsent, may already have been
       // submitted. The reservation stays, and a second request for this id cannot reserve it.
       if (submissionUnproven(walk)) {
@@ -179,6 +193,8 @@ export async function serveWakeChild(request: WakeChildRequest, deps: WakeChildD
       record(walk.reason, false, ms, walk);
       return { outcome: 'failed', reason: walk.reason };
     }
+    clearUnrecognisedScreen(seatDrops);
+    recordDeliveredBody({ dropDir: seatDrops, id: request.id, root: request.root, session: request.session, seat: request.seat, home: request.home, wake: request.line, via: 'typed' });
     markWake(marker, {
       id: request.id,
       at: deps.now().toISOString(),

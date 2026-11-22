@@ -158,7 +158,8 @@ describe('S3: no duplicate staging on socket, typed and drop legs', () => {
 
     const id = idOf(io.out);
     expect(stageSpy).toHaveBeenCalledTimes(1);
-    expect(stepSpy).toHaveBeenCalledTimes(1);
+    // A first-leg delivery writes no step (the send path diet, step 3): its history line is the one log line.
+    expect(stepSpy).toHaveBeenCalledTimes(0);
 
     const recordPath = join(dropDir(made.dir, 'lead'), id);
     const read = readRecord(recordPath, id);
@@ -174,100 +175,7 @@ describe('S3: no duplicate staging on socket, typed and drop legs', () => {
       expect(history.entries[0]).toMatchObject({ id, to: 'lead', outcome: 'delivered', via: 'socket' });
     }
 
-    const evs = stepsOf(made, id);
-    expect(evs.map((e) => [e.kind, e.record_id])).toEqual([
-      ['message.staged', `${id}:staged`],
-      ['leg.tried', `${id}:leg.tried:socket`],
-    ]);
-  });
-
-  test('typed wake leg writes the signed record and events once and never attempts a second stage', async () => {
-    made = world(['typed']);
-    declareEntity(made);
-    populateRegistries(made);
-
-    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE : holding(typed[typed.length - 1] ?? '')));
-    const host = fake(made, {
-      agents: () => [{ name: 'native', pane: 'pane-1' }],
-      typedWake: () => pane.host,
-    });
-
-    const stageSpy = spyOn(relay, 'stage');
-    const stepSpy = spyOn(steps, 'stagedStep');
-    restores.push(
-      () => stageSpy.mockRestore(),
-      () => stepSpy.mockRestore(),
-    );
-
-    const io = owner(made.root);
-    const code = await runSend(['native', 'hello typed'], io, host);
-    expect(code, io.err).toBe(0);
-
-    const id = idOf(io.out);
-    expect(stageSpy).toHaveBeenCalledTimes(1);
-    expect(stepSpy).toHaveBeenCalledTimes(1);
-
-    const recordPath = join(dropDir(made.dir, 'native'), id);
-    const read = readRecord(recordPath, id);
-    expect(read.ok).toBe(true);
-    if (!read.ok || read.record === null) throw new Error('expected signed record');
-    expect(read.record.payload.body).toBe(filed('hello typed'));
-    expect(verifyRecord(read.record, messageKeyOf(made.home))).toBe(true);
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ id, to: 'native', outcome: 'delivered (typed wake)', via: 'typed' });
-    }
-
-    const evs = stepsOf(made, id);
-    expect(evs.map((e) => [e.kind, e.record_id])).toEqual([
-      ['message.staged', `${id}:staged`],
-      ['leg.tried', `${id}:leg.tried:native`],
-      ['leg.tried', `${id}:leg.tried:typed`],
-    ]);
-  });
-
-  test('drop leg writes the signed record and events once and never attempts a second stage', async () => {
-    made = world(['drop']);
-    declareEntity(made);
-    populateRegistries(made);
-
-    const stageSpy = spyOn(relay, 'stage');
-    const stepSpy = spyOn(steps, 'stagedStep');
-    restores.push(
-      () => stageSpy.mockRestore(),
-      () => stepSpy.mockRestore(),
-    );
-
-    const io = owner(made.root);
-    const code = await runSend(['lead', 'hello drop'], io, fake(made));
-    expect(code, io.err).toBe(0);
-
-    const id = idOf(io.out);
-    expect(stageSpy).toHaveBeenCalledTimes(1);
-    expect(stepSpy).toHaveBeenCalledTimes(1);
-
-    const recordPath = join(dropDir(made.dir, 'lead'), id);
-    const read = readRecord(recordPath, id);
-    expect(read.ok).toBe(true);
-    if (!read.ok || read.record === null) throw new Error('expected signed record');
-    expect(read.record.payload.body).toBe(filed('hello drop'));
-    expect(verifyRecord(read.record, messageKeyOf(made.home))).toBe(true);
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (history.ok) {
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]).toMatchObject({ id, to: 'lead', via: 'drop' });
-    }
-
-    const evs = stepsOf(made, id);
-    expect(evs.map((e) => [e.kind, e.record_id])).toEqual([
-      ['message.staged', `${id}:staged`],
-      ['leg.tried', `${id}:leg.tried:drop`],
-    ]);
+    expect(stepsOf(made, id)).toEqual([]);
   });
 });
 

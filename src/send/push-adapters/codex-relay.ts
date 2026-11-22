@@ -1,3 +1,4 @@
+import { RUNTIME_WAKE_MAX } from '../readable-wake.ts';
 // Narrow reusable Codex (`0.161.0`) relay adapter bridge for the committed sender walk
 // (`785d63e1f`, `src/commands/send.ts` + `src/send/fallback-walk.ts` + `packages/relay`).
 //
@@ -28,14 +29,11 @@
 //     `read` vs `sent (unconfirmed)` classification stay in `src/commands/send.ts` (the send command).
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { createConnection } from 'node:net';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { readTeamConfig } from '../../file/team-config.ts';
-import {
-  stage as relayStage,
-  type CopyTarget,
-  type RelayReceipt as PackageRelayReceipt,
-} from '../../../packages/relay/index.js';
+import { dialing, socketRuntime, type SocketError } from '../../runtime/bun-socket.ts';
+import type { CopyTarget, RelayReceipt as PackageRelayReceipt } from '../../../packages/relay/index.js';
+import { relayStage } from '../relay-stage.ts';
 import {
   resolveCodexDaemonPolicy,
   type CodexDaemonResolution,
@@ -63,7 +61,6 @@ import {
 import { readState, type SeatState } from '../../state.ts';
 import type { AttemptOutcome, RelayReceipt as WalkRelayReceipt } from '../fallback-events.ts';
 import type { WalkAttempt } from '../fallback-walk.ts';
-import { TRIGGER_MAX } from '../native.ts';
 import {
   pushPointer,
   type PushSender,
@@ -374,17 +371,16 @@ export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNative
   if (
     pointer === null
     || pointer === ''
-    || pointer.includes('\n')
     || pointer.includes('\r')
     || pointer.includes('\0')
-    || pointer.length > TRIGGER_MAX
+    || Buffer.byteLength(pointer, 'utf8') > RUNTIME_WAKE_MAX
   ) {
     return {
       status: 'refused',
       reason:
-        pointer === null || pointer.length > TRIGGER_MAX
-          ? `the pointer would exceed ${String(TRIGGER_MAX)} characters`
-          : 'the runtime pointer is not a valid single line',
+        pointer === null || Buffer.byteLength(pointer, 'utf8') > RUNTIME_WAKE_MAX
+          ? `the runtime message would exceed ${String(RUNTIME_WAKE_MAX)} bytes`
+          : 'the runtime message is empty or contains a carriage return or NUL byte',
     };
   }
 
@@ -557,7 +553,7 @@ export function resolveCodexAttemptEndpoint(
   return { ok: true, socketPath: socket, remote: `unix://${socket}` };
 }
 
-function encodeMaskedWsTextFrame(text: string): Buffer {
+export function encodeMaskedWsTextFrame(text: string): Buffer {
   const payload = Buffer.from(text, 'utf8');
   const mask = randomBytes(4);
   let header: Buffer;
@@ -587,7 +583,7 @@ const MAX_SERVER_FRAME_BYTES = 1024 * 1024;
 /** While the handshake is incomplete, anything past this is not a handshake this probe reads. */
 const MAX_HANDSHAKE_BYTES = 16 * 1024;
 
-function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer; error?: string } {
+export function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer; error?: string } {
   const frames: string[] = [];
   let offset = 0;
   while (offset + 2 <= buffer.length) {
@@ -671,7 +667,6 @@ export function queryCodexAppServerThreadRead(input: {
   }
 
   return new Promise((resolve) => {
-    const socket = createConnection({ path: socketPath });
     let settled = false;
     let upgraded = false;
     let initSent = false;
@@ -698,7 +693,14 @@ export function queryCodexAppServerThreadRead(input: {
       });
     }, budgetMs);
 
-    socket.on('error', (err: NodeJS.ErrnoException) => {
+    const failed = (err: SocketError | undefined): void => {
+      if (err === undefined) {
+        done({
+          ok: false,
+          reason: 'codex app-server control socket closed before thread/read completed',
+        });
+        return;
+      }
       const code = err.code ?? 'error';
       if (code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ENOTSOCK') {
         done({
@@ -711,18 +713,9 @@ export function queryCodexAppServerThreadRead(input: {
         ok: false,
         reason: `codex app-server control socket failed (${code})`,
       });
-    });
+    };
 
-    socket.on('close', () => {
-      if (!settled) {
-        done({
-          ok: false,
-          reason: 'codex app-server control socket closed before thread/read completed',
-        });
-      }
-    });
-
-    socket.on('connect', () => {
+    const opened = (): void => {
       const req = [
         'GET /rpc HTTP/1.1',
         'Host: localhost',
@@ -734,9 +727,9 @@ export function queryCodexAppServerThreadRead(input: {
         '',
       ].join('\r\n');
       socket.write(req);
-    });
+    };
 
-    socket.on('data', (chunk: Buffer) => {
+    const read = (chunk: Uint8Array): void => {
       buffer = Buffer.concat([buffer, chunk]);
       if (!upgraded) {
         const headerEnd = buffer.indexOf('\r\n\r\n');
@@ -837,7 +830,10 @@ export function queryCodexAppServerThreadRead(input: {
           return;
         }
       }
-    });
+    };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, { open: opened, bytes: read, close: failed });
+    Bun.connect(options).catch(refused);
   });
 }
 

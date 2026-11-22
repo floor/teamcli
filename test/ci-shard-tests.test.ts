@@ -1,4 +1,8 @@
 import { expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runTestFiles } from '../scripts/ci-test-files.ts';
 import {
   UNTIMED_MS,
   appendUnits,
@@ -15,20 +19,24 @@ import {
   weights,
 } from '../scripts/ci-shard-tests.ts';
 
-test('a split file becomes its parts, each a fraction of its time', () => {
-  const all = units(['test/a.test.ts', 'test/exit-codes.test.ts', 'test/a.test.ts']);
-  expect(all).toEqual([
-    'test/a.test.ts',
-    'test/exit-codes.test.ts#0/6',
-    'test/exit-codes.test.ts#1/6',
-    'test/exit-codes.test.ts#2/6',
-    'test/exit-codes.test.ts#3/6',
-    'test/exit-codes.test.ts#4/6',
-    'test/exit-codes.test.ts#5/6',
-  ]);
-  const w = weights(all, { 'test/a.test.ts': 10, 'test/exit-codes.test.ts': 600 }, () => 100);
-  expect(w.get('test/exit-codes.test.ts#2/6')).toBe(100);
-});
+test('the full-suite parent stops a spinning file, names it, and still runs the next file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ci-file-timeout-'));
+  try {
+    const next = join(root, 'next-ran');
+    writeFileSync(join(root, 'hang.test.ts'), "import { test } from 'bun:test'; test('spins', () => { for (;;) {} });\n");
+    writeFileSync(join(root, 'next.test.ts'), `import { test } from 'bun:test'; import { writeFileSync } from 'node:fs'; test('writes', () => writeFileSync(${JSON.stringify(next)}, 'yes'));\n`);
+    const log: string[] = [];
+    const started = performance.now();
+    expect(runTestFiles(['hang.test.ts', 'next.test.ts'], {
+      root, timeoutMs: 500, stdio: 'pipe', log: (line) => log.push(line),
+    })).toBe(1);
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(log).toContain('Test file timed out after 500 ms: hang.test.ts');
+    expect(existsSync(next)).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 5_000);
 
 test('every unit lands in exactly one shard, longest first to the lightest', () => {
   const files = ['t/a', 't/b', 't/c', 't/d', 't/e'];
@@ -50,8 +58,6 @@ test('an untimed unit weighs the measured average when the assignment is made, n
   const w = assignmentWeights(['test/new.test.ts', 'test/old.test.ts'], { 'test/old.test.ts': 1200 }, (f) => sizes[f] ?? 0);
   expect(w.get('test/new.test.ts')).toBe(UNTIMED_MS);
   expect(w.get('test/old.test.ts')).toBe(1200);
-  const part = assignmentWeights(['test/exit-codes.test.ts#1/6'], {}, () => 0);
-  expect(part.get('test/exit-codes.test.ts#1/6')).toBe(Math.round(UNTIMED_MS / 6));
 });
 
 test('the packed plan is checked in as a sorted unit-to-shard map', () => {
@@ -74,17 +80,12 @@ test('--write keeps every placed unit and appends newcomers heaviest first to th
   expect(base.units).toEqual({ 't/a': 0 });
 });
 
-const TRACKED = ['test/a.test.ts', 'test/exit-codes.test.ts'];
+const TRACKED = ['test/a.test.ts', 'test/b.test.ts'];
 const CLEAN = {
   shards: 2,
   units: {
     'test/a.test.ts': 0,
-    'test/exit-codes.test.ts#0/6': 1,
-    'test/exit-codes.test.ts#1/6': 1,
-    'test/exit-codes.test.ts#2/6': 0,
-    'test/exit-codes.test.ts#3/6': 0,
-    'test/exit-codes.test.ts#4/6': 1,
-    'test/exit-codes.test.ts#5/6': 0,
+    'test/b.test.ts': 1,
   },
 };
 
@@ -104,27 +105,13 @@ test('--check names a test file with no shard, a stray unit and an empty shard',
     shards: 2,
     units: {
       'test/a.test.ts': 0,
-      'test/exit-codes.test.ts#0/6': 0,
-      'test/exit-codes.test.ts#1/6': 0,
-      'test/exit-codes.test.ts#2/6': 0,
-      'test/exit-codes.test.ts#3/6': 0,
-      'test/exit-codes.test.ts#4/6': 0,
-      'test/exit-codes.test.ts#5/6': 0,
+      'test/b.test.ts': 0,
     },
   };
   expect(assignmentProblems(oneShard, TRACKED).join('\n')).toContain('shard 1: no units');
 });
 
-test('--check refuses a split file assigned whole, split into the wrong parts or outside its shard', () => {
-  const whole = { ...CLEAN, units: { ...CLEAN.units, 'test/exit-codes.test.ts': 0 } };
-  expect(assignmentProblems(whole, TRACKED).join('\n')).toContain('cannot be assigned whole');
-
-  const wrong = { ...CLEAN, units: { ...CLEAN.units, 'test/exit-codes.test.ts#0/3': 0 } };
-  expect(assignmentProblems(wrong, TRACKED).join('\n')).toContain('not 3');
-
-  const notSplit = { ...CLEAN, units: { ...CLEAN.units, 'test/a.test.ts#0/4': 0 } };
-  expect(assignmentProblems(notSplit, TRACKED).join('\n')).toContain('not split');
-
+test('--check refuses a unit placed outside the shard range', () => {
   const outside = { ...CLEAN, units: { ...CLEAN.units, 'test/a.test.ts': 5 } };
   expect(assignmentProblems(outside, TRACKED).join('\n')).toContain('shard 5 is outside 0..1');
 });
@@ -144,23 +131,6 @@ test('--record reads the unit lines a shard log prints from its JUnit report', (
   expect(times['test/b.test.ts']).toBe(10);
 });
 
-test('--record still reads the older group form and attributes a part to its unit', () => {
-  const groups = timingsFromLog([
-    '2026-11-02T12:00:00.0000000Z ##[group]test/a.test.ts:',
-    '2026-11-02T12:00:01.0000000Z ##[group]test/b.test.ts:',
-    '2026-11-02T12:00:04.0000000Z Ran 2 tests across 2 files. [4.00s]',
-  ].join('\n'));
-  expect(groups['test/a.test.ts']).toBe(1000);
-  expect(groups['test/b.test.ts']).toBe(3000);
-
-  const part = timingsFromLog([
-    '2026-11-02T12:00:00.0000000Z Part 1/4 of test/exit-codes.test.ts',
-    '2026-11-02T12:00:00.1000000Z ##[group]test/exit-codes.test.ts:',
-    '2026-11-02T12:00:05.0000000Z Ran 3 tests across 1 file. [4.90s]',
-  ].join('\n'));
-  expect(part['test/exit-codes.test.ts#1/4']).toBe(4900);
-});
-
 const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="2" assertions="0" failures="0" skipped="0" time="2.0">
   <testsuite name="test/a.test.ts" file="test/a.test.ts" tests="1" assertions="0" failures="0" skipped="0" time="1.234" hostname="host">
@@ -171,9 +141,8 @@ const JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
   </testsuite>
 </testsuites>`;
 
-test('a JUnit report gives each file its suite time, and a label the sum for a split part', () => {
+test('a JUnit report gives each file its suite time', () => {
   expect(unitTimesFromJunit(JUNIT)).toEqual({ 'test/a.test.ts': 1234, 'test/b.test.ts': 500 });
-  expect(unitTimesFromJunit(JUNIT, 'test/exit-codes.test.ts#0/4')).toEqual({ 'test/exit-codes.test.ts#0/4': 1734 });
   const subMs = `<testsuite name="test/fast.test.ts" time="0.000100"></testsuite>`;
   expect(unitTimesFromJunit(subMs)).toEqual({ 'test/fast.test.ts': 1 });
   expect(weights(['test/fast.test.ts'], { 'test/fast.test.ts': 0 }, () => 100).get('test/fast.test.ts')).toBe(1);
@@ -295,9 +264,6 @@ const NESTED_JUNIT = `<?xml version="1.0" encoding="UTF-8"?>
 
 test('a nested describe suite is not a second unit and does not add its time again', () => {
   expect(unitTimesFromJunit(NESTED_JUNIT)).toEqual({ 'test/live-delivery-rebind-independent.test.ts': 1500 });
-  expect(unitTimesFromJunit(NESTED_JUNIT, 'test/live-delivery-rebind-independent.test.ts#0/1')).toEqual({
-    'test/live-delivery-rebind-independent.test.ts#0/1': 1500,
-  });
   const unnamed = `<testsuite name="not a unit path" time="1.0"></testsuite>`;
   expect(unitTimesFromJunit(unnamed)).toEqual({ 'not a unit path': 1000 });
 });
@@ -312,7 +278,4 @@ test('describe rows without the outer suite add up under their file', () => {
   // Whatever runner wrote the report, no describe row may mark its file covered: with no outer
   // suite, the file's time is the describes' sum, and one describe must not hide the others.
   expect(unitTimesFromJunit(DESCRIBES_ONLY_JUNIT)).toEqual({ 'test/future-runner.test.ts': 1500 });
-  expect(unitTimesFromJunit(DESCRIBES_ONLY_JUNIT, 'test/future-runner.test.ts#0/1')).toEqual({
-    'test/future-runner.test.ts#0/1': 1500,
-  });
 });

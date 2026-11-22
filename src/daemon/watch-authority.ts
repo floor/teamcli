@@ -36,7 +36,7 @@
 
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { WatchSources } from '../commands/watch.ts';
+import { activateDeadPaneWatchAsync, paneProcessesOnce, realWatchSources, releaseSettledPaneReads, watchTakeoverVerdictAsync, type WatchSources } from '../commands/watch.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
 import { emptySession, LockBusyError, pidAlive, readState, updateState } from '../state.ts';
@@ -120,6 +120,17 @@ export type HostedWatchAuthorityInput = {
    */
   brokerWork?: BrokerWorkSource;
 };
+
+/** Whether the daemon's hosted watch would become the active watch for this session. The same
+ *  rule as `activateDeadPaneWatch`: the recorded pane is gone, a shell, or other, the heartbeat
+ *  is older than three watch intervals, and there is no live pid. Reads the state and writes
+ *  nothing. `active` is that answer; `reason` is why. */
+export async function daemonWatchVerdict(
+  root: string, session: string, sources: WatchSources,
+): Promise<{ active: boolean; reason: string }> {
+  const verdict = await watchTakeoverVerdictAsync(root, session, sources);
+  return { active: verdict.take, reason: verdict.reason };
+}
 
 function textOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -263,7 +274,12 @@ async function runAuthoritativeHost(
   const clock = input.now ?? (() => new Date());
   const alive = input.alive ?? pidAlive;
   const processInfo = input.processInfo
-    ?? ((pane: string) => input.base?.processes?.(pane, input.route.session) ?? null);
+    ?? ((pane: string) => paneProcessesOnce(
+      input.base ?? {},
+      pane,
+      input.route.session,
+      { timeoutMs: 10_000 },
+    ));
   const host = createWatchHost(stateDir, input.route.session, { now: clock, alive });
   const loss = new AbortController();
   let lost = false;
@@ -308,6 +324,9 @@ async function runAuthoritativeHost(
   // non-authoritative report or changed binding is a loss, at once. The boolean tells the host
   // whether effects are still live, so it never settles a wait true after a loss.
   const pulse = (_at: Date): boolean => {
+    // A beat reuses a proof read that is still pending. One that has already settled is dropped
+    // here, so this beat's own proof can look again when nothing is in flight.
+    releaseSettledPaneReads();
     if (lost) return false;
     try {
       const changed = bindingLoss();
@@ -430,6 +449,15 @@ async function runAuthoritativeHost(
       return 0;
     }
     setPulse(pulse);
+    // A recorded pane watch that is not alive — pane gone, a shell, or other; heartbeat older
+    // than three intervals; no live pid — is dropped so this host acquires and becomes the
+    // active watch. A live pane watch is left standing and the host stays on standby. No pane
+    // is started.
+    await activateDeadPaneWatchAsync(input.route.root, input.route.session, {
+      ...(input.base ?? realWatchSources),
+      alive,
+      now: clock,
+    });
     // Acquire before the first pass. Lock contention is retried on the existing fixed tick, and
     // so is a live pane watch once it has been asked to hand over; the route's binding is re-read
     // before every attempt so a record cleared or repointed while this host waited stands the
@@ -521,12 +549,14 @@ async function runAuthoritativeHost(
     if (epoch === undefined) return 0;
 
     const proxy: HostedLoop = {
-      signal: loss.signal,
-      async wait(ms) {
+      // The run sees both ends: the authority lost, or the host stopped (a daemon shutdown). A
+      // reader that only watches the signal (the outbox relay's tick) stops at either.
+      signal: AbortSignal.any([loop.signal, loss.signal]),
+      async wait(ms, options) {
         // A loss that happened during the pass must end the loop now: an aborted signal alone
         // never settles a wait registered after the abort.
         if (loss.signal.aborted) return false;
-        const ok = await loop.wait(ms);
+        const ok = await loop.wait(ms, options);
         if (!ok) return false;
         // Second gate before the next cycle: the beat that released this wait has already run,
         // and the captured authority must still be the record's. This is the liveness gate
@@ -536,6 +566,8 @@ async function runAuthoritativeHost(
       cycled(at) {
         loop.cycled(at);
       },
+      // A nudge ends the wait early; the wait above still asks the authority before the pass.
+      ...(loop.nudge === undefined ? {} : { nudge: () => loop.nudge?.() }),
       standby(why) {
         // A standing-down watch emits nothing from here on.
         setEffects('blocked');

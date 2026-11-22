@@ -15,21 +15,21 @@
 // is a visible skip; a list named on the command line, or one that exists but cannot be read,
 // validated or parsed, is a refusal (exit 2), never a clean result.
 //
-//   bun scripts/check-public-names.ts [--root <dir>] [--file <team file>]
+//   bun scripts/check-public-names.ts [--root <dir>] [--file <policy file>]
 //                                     [--private-names <file>] [--private-phrases <file>]
 //
 // `--root` is the tree scanned, the current folder by default; it must be a git work tree.
-// `--file` is the policy file, `.github/team.yaml` under the current folder by default, not
+// `--file` is the policy file, `.github/policy.yaml` under the current folder by default, not
 // under `--root`, so a synthetic tree can be scanned with the real project's policy.
 //
 // Exit 0 when the tracked tree is clean, 1 when a name matches, 2 when the check cannot run
-// (an unreadable or invalid team file, an undeclared ticket-id pattern, git cannot list the
+// (an unreadable or invalid policy file, an undeclared ticket-id pattern, git cannot list the
 // tree, a private list that is present but unusable). A hit names the path, the line, the source
 // label, the class and the entry ordinal, never the matched text or the private expression, so a
 // failure never echoes the name into a public log. A clean run names how many tracked files it
 // read and how many private rules ran.
 import { resolve } from 'node:path';
-import { fromTeamFile } from '../src/check/config.ts';
+import { loadConfig } from '../src/check/load.ts';
 import {
   defaultPrivateListPaths,
   readPrivateList,
@@ -37,7 +37,6 @@ import {
   type PrivateSource,
 } from '../src/check/private-names.ts';
 import { publicNameRules, scanPublicNames } from '../src/check/public-names.ts';
-import { loadTeamFile } from '../src/file/load.ts';
 
 function exit(message: string): never {
   console.error(`public-names:check: ${message}`);
@@ -46,7 +45,7 @@ function exit(message: string): never {
 
 if (import.meta.main) {
   let root = process.cwd();
-  let file = '.github/team.yaml';
+  let file = '.github/policy.yaml';
   let privateNames: string | undefined;
   let privatePhrases: string | undefined;
   const argv = process.argv.slice(2);
@@ -70,10 +69,10 @@ if (import.meta.main) {
     }
   }
 
-  const loaded = loadTeamFile(process.cwd(), { file, checkOnly: true });
+  const loaded = loadConfig(process.cwd(), file, undefined, { ledger: false });
   if (!loaded.ok) exit(loaded.errors.map((problem) => problem.message).join('; '));
 
-  const built = publicNameRules(fromTeamFile(loaded.team));
+  const built = publicNameRules(loaded.config);
   if ('problem' in built) exit(built.problem);
 
   const scan = scanPublicNames(resolve(root), built.rules);

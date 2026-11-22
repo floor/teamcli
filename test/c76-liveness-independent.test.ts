@@ -440,6 +440,7 @@ describe('the hosted pass yields between its sub-steps', () => {
       atMachine: { ticks: number; marker: boolean } | undefined;
       hostedBeats: number;
       code: number;
+      out: string;
     };
 
     const scene = async (hosted: boolean): Promise<Seam> => {
@@ -488,7 +489,7 @@ describe('the hosted pass yields between its sub-steps', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runWatch([], io, sources);
       if (interval !== undefined) clearInterval(interval);
-      return { atMachine: observed.atMachine, hostedBeats, code };
+      return { atMachine: observed.atMachine, hostedBeats, code, out: io.out };
     };
 
     const hosted = await scene(true);
@@ -502,12 +503,10 @@ describe('the hosted pass yields between its sub-steps', () => {
 
     const cli = await scene(false);
     expect(cli.code).toBe(0);
-    expect(cli.atMachine).toBeDefined();
-    // A command-line watch has no host and no yield: the same two timers armed at the same seam
-    // have not run when the very next synchronous sub-step asks.
+    // A hand-run watch returns the daemon status and never starts the pass, so no machine step is recorded.
+    expect(cli.atMachine).toBeUndefined();
     expect(cli.hostedBeats).toBe(0);
-    expect(cli.atMachine?.marker).toBe(false);
-    expect(cli.atMachine?.ticks).toBe(0);
+    expect(cli.out).toBe('team watch: the daemon does not host session c76-crew\n');
   });
 });
 

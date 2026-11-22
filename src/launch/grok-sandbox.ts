@@ -16,12 +16,14 @@
 // `~/.grok/sandbox.toml`): a project `.grok/sandbox.toml` would put a machine-specific map
 // inside a repository, and the user-level file is read when the project has none.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { chmodSync, mkdirSync } from '../host/guarded-fs.ts';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { syncChildTimeout } from '../child.ts';
 import { cliHookStatePath } from './cli-hook.ts';
 import { tomlString, writePrivateAtomic } from './private-file.ts';
 import { parseToml } from './toml.ts';
+import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** The filesystem root Grok reads beside its own home, and the profile TeamCLI keeps there. */
 export interface GrokSandbox {
@@ -171,7 +173,9 @@ function agentGrants(root: string, session: string, seat: string): string[] {
   const agents = join(root, '.agents');
   const grants: string[] = [];
   if (oneSegment(session) && oneSegment(seat)) {
-    grants.push(realFolder(join(agents, 'send-drops', session, seat)));
+    grants.push(realFolder(seatMailDirIn(agents, session, seat)));
+    // E7b revision 3: the seat's stamped folder, where its stamped mail and their receipts sit.
+    grants.push(realFolder(seatMailDirIn(agents, session, seat, 'stamped')));
     grants.push(realFolder(join(agents, 'messages', seat)));
   }
   const state = cliHookStatePath(agents, session, seat);

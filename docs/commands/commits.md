@@ -113,6 +113,7 @@ The commit a person wrote needs no signature:
 
 ```console
 $ team commits check HEAD~2 ; echo "exit $?"
+team commits check: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 COMMIT      STATUS  DETAIL
 <sha>  exempt  Review the copy
 team commits check: 1 commit checked, 1 by a human or a merge: ok
@@ -123,6 +124,7 @@ The newest commit signs, but leaks a line the file forbids:
 
 ```console
 $ team commits check HEAD ; echo "exit $?"
+team commits check: line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read
 COMMIT      STATUS   DETAIL
 <sha>  refused  Tidy the logs
 difference: commit <sha> "Tidy the logs", line 5: forbidden pattern ^Claude-Session: — "Claude-Session: 8f21c4a9"
