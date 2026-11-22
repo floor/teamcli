@@ -90,7 +90,7 @@ describe('an empty shell prompt, read from the screen', () => {
     expect(bareShellEmptyPrompt('~/Code/acme\n❯ echo #')).toBe(false);
     expect(bareShellEmptyPrompt('~/Code/acme\n❯ cat >')).toBe(false);
     expect(bareShellEmptyPrompt('~/Code/acme\n❯ cat <<EOF\n>')).toBe(false);
-    expect(bareShellEmptyPrompt('jvial@mac acme %')).toBe(false);
+    expect(bareShellEmptyPrompt('user@mac acme %')).toBe(false);
     // No folder line above the prompt.
     expect(bareShellEmptyPrompt('❯')).toBe(false);
     expect(bareShellEmptyPrompt('some output\n❯')).toBe(false);

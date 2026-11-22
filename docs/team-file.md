@@ -714,7 +714,7 @@ The order a send to this team's seats walks. It is not an owner section: writing
 is an ordinary change, and a record that writes none reads as the default order `typed, drop`;
 none of `socket`, `native`, `headless-resume` or `session` is ever in that default. The order
 names the legs the seat accepts, and the walk that tries them is the owner's cascade (ADR
-`zeus-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
+`architect-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
 them, then the ones the word names, in its own order — then the sender-posted `webhook` where the
 seat declares an adapter row (no order names it), then the typed leg, then the mailbox. A receiving CLI whose profile declares
 its own session call walks that call wherever an order's `typed` word stands — the call is the

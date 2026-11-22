@@ -738,7 +738,7 @@ export function liveLineOf(
 /**
  * Workspaces that carry a declared seat's own label while no seat record names them: a host
  * restart restores a stopped or missing seat's workspace as a bare shell under its old title
- * ("Automedon · tester", "Tiresias · reviewer" in vlist, 2026-11-16), and nothing else ever
+ * (a tester's and a reviewer's workspaces in one project, 2026-11-16), and nothing else ever
  * closes it. Only a seat that is stopped, or whose record names another workspace or none, is
  * offered; a workspace whose label names no declared seat is never offered. Each is planned as a
  * sweep, which closes it only from fresh readings: every pane bare at its own shell, no pane
@@ -4461,8 +4461,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       const keep = restoreKeepOf(seat.name);
       if (keep !== undefined) seats[index] = { ...seat, restoreKeep: keep, sweep: undefined };
       // A restore pass repaints a seat that stays with the model its pane shows now: the host
-      // restart dropped line 2, and painting the file's line put a stale model back (Agamemnon,
-      // 2026-11-16). One screen read, for a kept, adopted or restored seat only.
+      // restart dropped line 2, and painting the file's line put a stale model back (an orchestrator
+      // seat, 2026-11-16). One screen read, for a kept, adopted or restored seat only.
       const now = seats[index]!;
       if (internal?.restore === true && now.pane !== undefined
         && (now.restoreKeep !== undefined || now.adopted !== undefined || now.restored !== undefined)) {

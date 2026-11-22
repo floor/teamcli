@@ -2161,7 +2161,7 @@ function hookReceiver(answer: (hit: HookHit) => Response = () => new Response('o
 }
 
 /** The team file with a webhook row on the helper seat: the leg the cascade places between a
- *  channel-class leg and the typed line (ADR zeus-message-path, D2). `body: inbox` needs no log
+ *  channel-class leg and the typed line (ADR architect-message-path, D2). `body: inbox` needs no log
  *  signer, so the scene carries no part of the bus. */
 function hookTeamText(root: string, lobby: string, cli: 'claude-code' | 'muse', urlFile: string, secretFile: string): string {
   const row = `    webhook:

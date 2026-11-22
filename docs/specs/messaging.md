@@ -350,7 +350,7 @@ it, and the header says the record is missing; it is never granted. Every other 
    `DELIVERY_LEGS`).
 2. The order is the `delivery-order` policy of the receiving seat's chain — entity, project, team,
    seat — because the order says how that seat's messages may travel, and it names the legs the
-   seat accepts. The walk that uses it is the owner's cascade (ADR `zeus-message-path`, D1):
+   seat accepts. The walk that uses it is the owner's cascade (ADR `architect-message-path`, D1):
    channel-class legs first — the seat's serving `channel` ahead of them, then the ones the chain
    names, in its own order — then the webhook, then typed (where the seat's profile declares a
    typed wake), then the mailbox. The fallback order is `typed`,

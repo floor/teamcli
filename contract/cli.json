@@ -2305,6 +2305,24 @@
             },
             {
               "hidden": false,
+              "name": "--no-presence",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--no-send-server",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--no-watch",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--presence",
               "repeatable": false,
               "takesValue": false
@@ -2329,6 +2347,12 @@
             },
             {
               "hidden": false,
+              "name": "--send-server",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--watch",
               "repeatable": false,
               "takesValue": false
@@ -2345,7 +2369,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]"
+            "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -2437,6 +2461,12 @@
             },
             {
               "hidden": false,
+              "name": "--send-server",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--started-by",
               "repeatable": false,
               "takesValue": true
@@ -2459,7 +2489,7 @@
           "positionals": [],
           "subcommands": [],
           "usage": [
-            "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]"
+            "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]"
           ],
           "who": {
             "gate": "owner-only",
@@ -2583,8 +2613,8 @@
       ],
       "usage": [
         "team daemon status [--json]",
-        "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
-        "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]",
+        "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]",
+        "team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]",
         "team daemon restart [--dry-run] [--json]",
         "team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]",
         "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
@@ -3112,7 +3142,7 @@
       ],
       "usage": [
         "team drops [--follow] [--json]",
-        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]",
+        "team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>] [--due]",
         "team drops archive [--dry-run] [--json]",
         "team drops archive --unread [--seat <seat>] [--json]"
       ],
@@ -6518,6 +6548,257 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "queues",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "activate",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team queues activate"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "turning on at-least-once delivery changes every seat of the root: the owner, or the owner's dev-mode admission for a placed lead"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "deactivate",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team queues deactivate"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the rollback to dark changes every seat of the root: the owner, or the owner's dev-mode admission for a placed lead, as activate"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "prove",
+          "positionals": [
+            {
+              "name": "seat",
+              "optional": true,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queues prove [<seat>]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "a channel proof probe is placed in another seat's delivery: the owner, or the owner's dev-mode admission for a placed lead, as activate"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "reader",
+          "positionals": [
+            {
+              "name": "on|off",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team queues reader <on|off>"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the reader switch moves every seat's reader at once: the owner, or the owner's dev-mode admission for a placed lead, as activate"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "status",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team queues status"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the report reads the root's floor state, the reader switch and each seat queue's check; it drains, signs and moves nothing and asks for no caller"
+          }
+        }
+      ],
+      "usage": [
+        "team queues status",
+        "team queues activate",
+        "team queues prove [<seat>]",
+        "team queues deactivate",
+        "team queues reader <on|off>"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "every verb but status changes what every seat of the root does: the owner, or the owner's dev-mode admission for a placed lead, as the daemon's rows; status states its own row"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -9202,10 +9483,17 @@
       ],
       "hidden": false,
       "name": "up",
-      "positionals": [],
+      "positionals": [
+        {
+          "name": "seat...",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
       "subcommands": [],
       "usage": [
         "team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]",
+        "team up <seat...> [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]",
         "team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]",

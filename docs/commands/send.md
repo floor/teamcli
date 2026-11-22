@@ -18,7 +18,7 @@ saying so. The record is the message: it carries the body, the sender, the
 rule that admitted the send, and the thread it belongs to, and its name is the send's id.
 A record waiting in a seat's folder is answered with [team reply](reply.md), which writes the
 answer as a record on the same thread, cites the record it answers, and publishes the seat's
-signed read receipt beside it (ADR `zeus-message-path`, D3). A plain `team send` back to the
+signed read receipt beside it (ADR `architect-message-path`, D3). A plain `team send` back to the
 sender is an answer too: it marks the newest message that sender delivered this seat read
 (`read_by: answered-by-send`), and only the newest — an older message from the same sender, a
 message from anyone else, and one delivered after this send keep waiting. `team ack <id>` marks
@@ -30,7 +30,7 @@ folder like any other. The receiving seat's
 delivery order names the legs it accepts: with no declaration it is `typed, drop`, and `socket`,
 `native`, `headless-resume` and `session` join it only where a default below or a declared word
 adds one; `channel` joins where the seat's server is serving. The order the walk tries them in is the owner's cascade (ADR
-`zeus-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
+`architect-message-path`, D1): the channel-class legs first — the seat's serving `channel` ahead of
 them, then the ones the chain names, in its own order: `socket`, `native`, `headless-resume`,
 `session` — then the sender-posted `webhook` where the seat declares an adapter row (no order
 names it), then the `typed` leg where the seat's profile declares a typed wake, then the drop
@@ -720,7 +720,7 @@ characters; the sentence is kept whole and the header gives way to it. The templ
 the sentence — an agent seat always learns where to read the signed record — and no sentence
 carries the message's id except one: a socket delivery's single re-wake says `ack <id> or reply`,
 naming the message its frame carried, because either act settles that exact record (ADR
-`zeus-message-path`, D3).
+`architect-message-path`, D3).
 
 A socket frame is not a message-display line. The frame an agent seat receives opens with the
 single compact header line (`from <name> (<short rule>):`, `Client <Display> (owner relay):`, or

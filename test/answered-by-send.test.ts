@@ -1,4 +1,4 @@
-// A seat's `team send` is its own answer (ADR `zeus-message-path`, D3). The send settles the
+// A seat's `team send` is its own answer (ADR `architect-message-path`, D3). The send settles the
 // NEWEST message the addressed seat delivered to the sending seat before the send's own instant,
 // and only that one: a recipient that sent three messages and is answered once keeps the other
 // two waiting. Only a delivery the history names as a frame, a channel push or a native handoff

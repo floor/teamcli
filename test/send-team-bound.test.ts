@@ -134,7 +134,7 @@ test('a seat sending to its own seat is refused, by the resolved aim; the same n
   const own = { seat: 'orchestrator', root: w.alpha, session: 'alpha' };
   expect(selfAddressed(alphaLead, 'orchestrator', own, w.alpha)).toContain('that is your own seat');
   // The written words do not decide: a nickname that resolved to the sender's own seat is the sender.
-  expect(selfAddressed(alphaLead, 'Atlas', own, w.alpha)).toContain('Atlas: that is your own seat');
+  expect(selfAddressed(alphaLead, 'Nova', own, w.alpha)).toContain('Nova: that is your own seat');
   const other = resolveTarget(w.home, `orchestrator@${teamIdOf(w.beta)}`, testIo(w.alpha, alphaLead), live) as Target;
   expect(selfAddressed(alphaLead, 'orchestrator', { seat: other.agent.reach.seat, root: other.team.root, session: other.agent.reach.session }, w.alpha)).toBeNull();
   expect(selfAddressed(alphaLead, 'worker', { seat: 'worker', root: w.alpha, session: 'alpha' }, w.alpha)).toBeNull();

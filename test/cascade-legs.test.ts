@@ -1,4 +1,4 @@
-// ADR zeus-message-path D1: a send walks the owner's cascade — the channel-class legs the
+// ADR architect-message-path D1: a send walks the owner's cascade — the channel-class legs the
 // receiving seat's delivery_order names, then the typed leg, then the drop file — and stops at
 // the first leg taken. `mcp-inbox` is a retired name, no longer a leg: the MCP inbox is the
 // store's reader (the same records `team drops --read` reads), and a push from an MCP server is

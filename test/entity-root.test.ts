@@ -386,9 +386,9 @@ describe('the charter team setup signs by default', () => {
   });
 
   test('a machine with two entities signs both roots, in the file\'s order, once each', () => {
-    const home = homeWith('floor:\n  root: ~/Code/floor\nradiooooo:\n  root: ~/Code/radiooooo/\nother:\n  root: ~/Code/floor\n');
-    for (const folder of ['Code/floor', 'Code/radiooooo']) mkdirSync(join(home, folder), { recursive: true });
-    expect(defaultProjectRoots(home)).toEqual({ ok: true, roots: [join(home, 'Code', 'floor'), join(home, 'Code', 'radiooooo')] });
+    const home = homeWith('floor:\n  root: ~/Code/floor\nacme:\n  root: ~/Code/acme/\nother:\n  root: ~/Code/floor\n');
+    for (const folder of ['Code/floor', 'Code/acme']) mkdirSync(join(home, folder), { recursive: true });
+    expect(defaultProjectRoots(home)).toEqual({ ok: true, roots: [join(home, 'Code', 'floor'), join(home, 'Code', 'acme')] });
   });
 
   test('no entity names a root: refused, with the command that sets one; a folder found is only a suggestion', () => {

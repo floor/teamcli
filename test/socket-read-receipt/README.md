@@ -4,7 +4,7 @@ Independent, test-only coverage for socket delivery honesty. An accepted socket 
 delivers a message, and a delivery is not a read: only the seat writes the signed read
 receipt, verified against the message key — `inbox_read`, `team drops --read`, the CLI
 hook's receipt, `team ack`, a `team reply` (which writes one beside its `replied`
-receipt), or the seat's own `team send` back to the sender (ADR `zeus-message-path`, D3).
+receipt), or the seat's own `team send` back to the sender (ADR `architect-message-path`, D3).
 Acceptance therefore writes no receipt, and a record whose frame was taken but never read
 stays unread — `team messages` lists it as unacked, the watch's unread pass re-wakes a
 socket delivery once at the normal window and, when no seat read comes, the sender and
