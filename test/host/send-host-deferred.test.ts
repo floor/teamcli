@@ -56,17 +56,27 @@ test('work that settles within the bound still sees the request environment, and
 
 test('work still pending past the bound makes the host recycle after answering', async () => {
   const started = Date.now();
-  const result = await runHostedLine(request(ownEnv()), peer, {
-    cliEntry: 'cli.js',
-    ownEnv: ownEnv(),
-    callerSources: sources,
-    main: async () => { deferHosted(new Promise(() => {})); return 0; },
-  });
-  expect(result.answer).toMatchObject({ kind: 'ran', code: 0 });
-  expect(result.recycle).toContain('deferred callback');
-  const took = Date.now() - started;
-  expect(took).toBeGreaterThanOrEqual(DEFERRED_WAIT_MS - 5);
-  expect(took).toBeLessThan(DEFERRED_WAIT_MS + 500);
+  // Pending past the bound, and released once the recycle is seen: the real host exits here, but
+  // this suite shares one process with later hosted-request files, which must not inherit it.
+  let release: () => void = () => {};
+  const pending = new Promise<void>((settle) => { release = settle; });
+  try {
+    const result = await runHostedLine(request(ownEnv()), peer, {
+      cliEntry: 'cli.js',
+      ownEnv: ownEnv(),
+      callerSources: sources,
+      main: async () => { deferHosted(pending); return 0; },
+    });
+    expect(result.answer).toMatchObject({ kind: 'ran', code: 0 });
+    expect(result.recycle).toContain('deferred callback');
+    const took = Date.now() - started;
+    expect(took).toBeGreaterThanOrEqual(DEFERRED_WAIT_MS - 5);
+    expect(took).toBeLessThan(DEFERRED_WAIT_MS + 500);
+  } finally {
+    release();
+    await pending;
+  }
+  expect(await settleHostedDeferred(50)).toBe(0);
 });
 
 test('the audit: the send path\'s one fire-and-forget continuation is registered with the host', () => {
