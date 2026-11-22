@@ -4,9 +4,9 @@
 // outside the temporary folder and the suite's declared scratch roots is refused. Nothing is
 // unlinked.
 import { execFileSync } from 'node:child_process';
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parkInRuntimeTrash } from '../src/file/runtime-trash.ts';
 
 /** Whether `path` really stands inside `base`, read through any symlink on either side: a link
@@ -44,6 +44,19 @@ function stands(path: string): boolean {
   }
 }
 
+let privateTrashHome: string | null = null;
+
+/** The home whose dated runtime trash receives a folder from `parent`: the parent itself, as
+ *  always, unless it is a shared folder (another user's, or writable by others, such as a Linux
+ *  /tmp with the sticky bit). There another user may already hold `.config`, so the folder goes
+ *  to one private home this process makes under the temporary folder. */
+function trashHomeFor(parent: string): string {
+  const seen = lstatSync(parent);
+  if (seen.uid === process.getuid?.() && (seen.mode & 0o022) === 0) return parent;
+  privateTrashHome ??= realpathSync(mkdtempSync(join(tmpdir(), 'team-fixture-trash-')));
+  return privateTrashHome;
+}
+
 /** Remove fixture folders after a test: one trash call for the whole list when the command is
  *  on PATH, otherwise one guarded move into the dated runtime trash per folder. `quiet` keeps a
  *  trash that ran but refused a folder from failing a cleanup that never failed the test before.
@@ -71,6 +84,6 @@ export function discardFixtures(
     if (!allowed(path, options.roots ?? [])) {
       throw new Error(`refusing to remove ${path}: it is not inside the temporary folder ${tmpdir()} or a declared fixture root`);
     }
-    parkInRuntimeTrash(path, dirname(path), new Date());
+    parkInRuntimeTrash(path, trashHomeFor(dirname(path)), new Date());
   }
 }
