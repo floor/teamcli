@@ -1457,6 +1457,14 @@ function clearKeyOf(entry: YamlEntry): string {
   return value;
 }
 
+/** The presses that clear `text` with an `exit_clear` key: once for a key that empties the whole
+ *  box, once per character for `backspace` — plus one per row break, which a wrap may hide as a
+ *  space. A backspace on an empty box deletes nothing, so a press too many is harmless. */
+export function clearPresses(key: string, text: string): string[] {
+  if (key !== 'backspace') return [key];
+  return Array.from({ length: Math.max(1, [...text].length + text.split('\n').length - 1) }, () => key);
+}
+
 /** One key list of the `input` block: a non-empty list of the keys above, spelled as herdr
  *  spells them. */
 function inputKeysOf(entry: YamlEntry, key: string): readonly string[] {

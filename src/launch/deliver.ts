@@ -1,6 +1,6 @@
 import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 import { reportedLiveAgent } from './agent.ts';
-import { herdrUnreliable, profileFor } from '../profiles/index.ts';
+import { clearPresses, herdrUnreliable, profileFor } from '../profiles/index.ts';
 import type { RulesFileWrite } from './rules-file.ts';
 import {
   classifyComposer, listedPlaceholderEquals, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
@@ -81,7 +81,8 @@ export function keyName(key: string): string {
   if (key === 'ctrl+c') return 'Ctrl-C';
   if (key === 'ctrl+u') return 'Ctrl+U';
   if (key === 'escape') return 'Esc';
-  return 'Backspace';
+  // A backspace deletes one character: `team` presses it once per character it clears.
+  return 'Backspace until empty';
 }
 
 /** The refusal for a rules file that could not be written: nothing was typed, nothing sent, and
@@ -280,7 +281,7 @@ function stoppedOn(cli: string, stop: Stop, screen: string | undefined, line: st
  *  Only an unsent composer on an idle CLI that is still the pane's foreground: a key into a
  *  dialog, a turn, or a shell would answer something this run did not type. No key on the
  *  delivery leaves the refusal as it is. */
-async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<Refusal> {
+async function clearTypedLine(cli: string, why: Refusal, io: Delivery, line: string): Promise<Refusal> {
   const key = why.clearKey ?? null;
   if (key === null || !io.key) return why;
   const names = profileFor(cli)?.processNames ?? [];
@@ -294,7 +295,7 @@ async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<
   };
   const resting = () => io.status() === 'idle' || io.status() === 'done' || wordless();
   if (readScreen(cli, io.screen()).kind !== 'unsent' || !resting() || !live()) return why;
-  if (!io.key(key)) return { ...why, cleared: 'undelivered' };
+  if (!clearPresses(key, line).every((k) => io.key!(k))) return { ...why, cleared: 'undelivered' };
   const after = await settleScreen('unsent', () => readScreen(cli, io.screen()).kind, io);
   if (after === 'idle' && resting() && live()) return { ...why, cleared: 'yes' };
   return { ...why, cleared: 'stayed', kind: after };
@@ -496,7 +497,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   const readBackStop = async (): Promise<false> => {
     const why = stoppedOn(cli, 'read-back', io.screen(), line);
     if (resumed) return report(why);
-    return report(await clearTypedLine(cli, why, io));
+    return report(await clearTypedLine(cli, why, io, line));
   };
   if (!resumed) {
     if (start !== 'idle') {

@@ -55,7 +55,7 @@ import { removeInbox, type InboxRemoval } from '../mcp/register.ts';
 import { boxHoldsOther, boxHoldsText, boxHoldsTextAndEmptyRow, DRAW_WAIT_MS, EXIT_COMPLETION_SETTLE_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
-import { abandonAnswerKeys, isNotStartedScreen } from '../profiles/profile.ts';
+import { abandonAnswerKeys, clearPresses, isNotStartedScreen } from '../profiles/profile.ts';
 import { logLine } from '../log.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
@@ -346,6 +346,9 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
   // exit the CLI never runs is cleared. The profile declares the row itself as the composer's
   // own (`own_rows`), which is what makes the box read back while the row is drawn.
   const completion = profileFor(cli)?.exitCompletion ?? false;
+  // The profile's clearing key, pressed as often as the exit text needs (a backspace once per
+  // character), the caller check before each press.
+  const pressClear = (key: string): boolean => clearPresses(key, text).every((k) => live() && io.sendKey(k));
   // The reading that decides a key, waiting out the pane's late drawing — the one wait the exit
   // typing, the watch's nudge and delivery share (settleScreen in launch/deliver.ts).
   const settle = (undrawn: Screen['kind']): Promise<Screen['kind']> => settleScreen(undrawn, kindOf, io);
@@ -400,7 +403,7 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
         return { left: `its exit was not confirmed; the text could not be cleared; the screen was reading ${frame}; left running` };
       }
     }
-    if (!io.sendKey(clear)) {
+    if (!pressClear(clear)) {
       return { left: `its exit was not confirmed; the clearing key (${clear}) was not delivered; the text was left; left running` };
     }
     const after = await settle('unsent');
@@ -527,7 +530,7 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     // cleared. The kind alone does not tell a newer draft from the text.
     if (kindOf() !== 'unsent' || !holds()) return false;
     if (key === null) return false;
-    if (!io.sendKey(key)) return false;
+    if (!pressClear(key)) return false;
     const after = await settle('unsent');
     // The wait can swallow the CLI as well: the caller check precedes the typing, exactly as it
     // precedes every key.
@@ -589,7 +592,7 @@ export async function typeExit(io: ExitIo, cli: string, text: string): Promise<E
     }
     return { left: `its exit was not confirmed; its box holds text that is not only the exit text${otherRow()}; nothing more was sent; left running` };
   }
-  if (!io.sendKey(key)) {
+  if (!pressClear(key)) {
     return { left: `its exit was not confirmed; the clearing key (${key}) was not delivered; the text was left; left running` };
   }
   const after = await settle('unsent');
@@ -1462,7 +1465,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
         const unsent = rows.map((row) => row.trimEnd()).join('\n').trim();
         const stamp = sources.now().toISOString().replace(/[:.]/g, '-');
         abandonPlan = {
-          answerKeys: [profile.exitClear ?? 'ctrl+u'],
+          answerKeys: clearPresses(profile.exitClear ?? 'ctrl+u', unsent),
           ...(unsent !== '' ? { unsentText: unsent, saveTo: join(current.dir, 'abandoned-input', `${name.replace(/[^\w.-]/g, '_')}-${stamp}.txt`) } : {}),
         };
       }
