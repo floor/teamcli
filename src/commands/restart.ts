@@ -704,8 +704,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     // (a first launch can record the legacy `launch:` text): the plan carries the conversation
     // onto the resolved line, and the check before the stop verifies it. The ownership proof
     // above stands for every seat.
-    const judgedByResolver = internal.selfRequest !== undefined && declared.launcher !== undefined;
-    const carried = judgedByResolver ? null : resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
+    const carried = selfLineFromResolver(internal.selfRequest, declared) ? null : resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
     if (carried !== null && carried.kind !== 'line') {
       return notReadyRefused(
         out,
@@ -1209,7 +1208,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // The caller's plain words for why no conversation is carried; the drop below replaces them
   // with its own reason, so the context line always names the decision that stood last.
   let resumeNote = input.resumeNote;
-  if (input.resume !== undefined) {
+  if (input.resume !== undefined && selfLineFromResolver(input.selfRequest, next)) {
+    // The launcher's resolved line runs, not this recipe: the plan carries the conversation onto
+    // it (`resumeRequired`), and the check before the stop verifies the final target.
+    resumed = input.resume;
+  } else if (input.resume !== undefined) {
     const carried = resumeCarry(next.cli, planSeat.launch, input.resume);
     if (carried.kind === 'line') {
       planSeat.launch = carried.line;
@@ -2810,7 +2813,7 @@ function queueSelfRestart(out: Io, json: boolean, input: {
   // now. A seat on a launcher never runs its `launch:` text (the launcher's resolved line is the
   // one it runs, and the plan carries the conversation onto it), so that text is not judged
   // here; the daemon's run checks the final resolved line before the stop for every seat.
-  const carried = declared.launcher !== undefined ? null : resumeCarry(declared.cli, declared.launch, held.agent_session);
+  const carried = selfLineFromResolver(true, declared) ? null : resumeCarry(declared.cli, declared.launch, held.agent_session);
   if (carried !== null && carried.kind === 'refuse') {
     refuse(out, json, 'restart', {
       id: 'restart.continuity',
@@ -2963,6 +2966,17 @@ function abandonWorkingRefused(out: Io, json: boolean, name: string): number {
 /** A self-restart's rule for an observation before the stop: the request's own pane, free at a
  *  recognised empty prompt — no draft, dialog, unread screen, exit text or taken pane. Null
  *  when the stop may go on; the deferral (nothing stopped) otherwise. */
+/**
+ * The one rule every self-restart check uses for which line it judges: a seat on a launcher
+ * runs the launcher's resolved line, never its `launch:` text or a recorded recipe (a first
+ * launch can record the legacy text), so those are never judged for a self-restart; the plan
+ * carries the conversation onto the resolved line and the check before the stop verifies it.
+ * A seat with no launcher runs its own line, and that line is judged as before.
+ */
+function selfLineFromResolver(self: SelfRequest | true | undefined, seat: Pick<Seat, 'launcher'>): boolean {
+  return self !== undefined && seat.launcher !== undefined && seat.launcher !== '';
+}
+
 /** Whether the planned launch of `name` names `conversation` as its resume target; the
  *  continuity refusal otherwise. */
 function selfResumeProblem(name: string, cli: string, plan: readonly Step[], conversation: string): { kind: 'continuity'; message: string } | null {

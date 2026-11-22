@@ -581,8 +581,11 @@ describe('team restart for a self-restart request', () => {
     expect([...moved.harness.closed, ...switched.harness.closed]).toEqual([]);
   });
 
-  test('end to end through the daemon pass: a launcher seat whose recorded recipe is the legacy fixed-session line resumes', async () => {
-    const LEGACY = 'claude --model claude-opus-5-5 --session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b';
+  for (const LEGACY of [
+    'claude --model claude-opus-5-5 --session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b',
+    'claude --model claude-opus-5-5 --continue',
+    'claude --model claude-opus-5-5 --resume 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b',
+  ]) test(`end to end through the daemon pass: a launcher seat whose legacy line is "${LEGACY.slice(31)}" queues and resumes its conversation`, async () => {
     const fixture = makeFixture((root) => YAML(root).replace(`  - ${root}\n`, `  - ${root}\n  - ${join(root, '..', 'work')}\n`).replace(
       '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
       `    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: ${LEGACY}\n    launcher: claude-code\n    cwd: ../work\n`,
@@ -616,6 +619,7 @@ describe('team restart for a self-restart request', () => {
     expect(harness.ran).toHaveLength(1);
     expect(harness.ran[0]?.command).toContain('--resume sess-latest');
     expect(harness.ran[0]?.command).not.toContain('0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b');
+    expect(harness.ran[0]?.command).not.toContain('--continue');
     expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
   });
 });

@@ -1369,6 +1369,18 @@ describe('team restart <seat>', () => {
     const launcherIo = testIo(onLauncher.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
     expect(await runRestart(['worker', '--self'], launcherIo, makeHarness(onLauncher).sources), launcherIo.err).toBe(0);
     expect(existsSync(selfRestartPath(onLauncher.dir, 'acme', 'worker'))).toBe(true);
+    // A legacy `--continue` or `--resume <other id>` on a launcher seat's unused line queues too.
+    for (const legacy of ['--continue', '--resume 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b']) {
+      const other = makeFixture(yaml.replace('--session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n', `${legacy}\n    launcher: claude-code\n    cwd: .\n`));
+      updateState(other.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.worker = {
+          stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+        } as never;
+      });
+      const otherIo = testIo(other.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+      expect(await runRestart(['worker', '--self'], otherIo, makeHarness(other).sources), otherIo.err).toBe(0);
+      expect(existsSync(selfRestartPath(other.dir, 'acme', 'worker'))).toBe(true);
+    }
   });
 
   test('--self for another seat\'s pane is refused: no seat queues another\'s restart', async () => {
