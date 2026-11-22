@@ -263,7 +263,12 @@ export async function runSelfRestartsForRoute(input: { home: string; root: strin
   const launchFile = launchTeamFile(loaded);
   return runSelfRestarts({
     home: input.home, root: loaded.root, dir: dirname(loaded.path), team, sources, caller: OWNER,
-    deps: realRelaunchDeps(input.home, loaded.root, team.session, team.orchestrator),
+    deps: {
+      // The seat's own request rides into the restart, which enforces it under its run lock.
+      restart: (argv, io, request) => runRestart(argv, io, { ...restartRealSources, home: input.home }, { selfRequest: request }),
+      // The notice goes to the lead in the request's own session.
+      notify: (one) => writeRuntimeNotice({ home: input.home, root: loaded.root, session: one.session, lead: one.lead, id: one.id, body: one.body, at: new Date().toISOString() }).ok,
+    },
     ...(launchFile === undefined ? {} : { launchFile }),
   });
 }

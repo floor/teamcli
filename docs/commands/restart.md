@@ -108,7 +108,11 @@ queues it: the caller must be placed on that seat's recorded pane in that sessio
 every seat caller gives. Any other caller is refused (`restart.self-caller`), so `--self` opens no
 way for one seat to restart another; restarting another seat keeps the rules below. A seat whose
 record holds no launch or conversation, or a human's pane, is refused (`restart.self-unrecorded`).
-This holds for every seat, the entity's main orchestrator included.
+
+The entity's main orchestrator runs in the owner's own pane. By the owner's policy it may restart
+itself this way: only that seat, proven from its own recorded pane, queues its own restart, and the
+daemon runs it for that request alone. This is the only automatic restart of that pane; the restore
+pass never restarts it and still asks the owner instead.
 
 The daemon reads the queued requests on its heartbeat and runs each one in a short-lived child
 process, so its own heartbeat never waits on the run. A request is run only when:
@@ -120,11 +124,16 @@ process, so its own heartbeat never waits on the run. A request is run only when
   running, no unsent text, no dialog. This is read again right before the restart; a seat that is
   working or holds unsent text waits for a later beat.
 
-The run is the ordinary `team restart <seat> --resume <conversation>` in the request's session, as
-the daemon, with every check above in force. It is tried once: a request is taken before the run,
-and a run that fails is said to the team's lead with its last line. A request that has waited 30
-minutes without the seat coming idle is given up and said to the lead the same way; the seat
-queues it again with `--self`. The daemon log says what each pass did.
+The daemon claims the request it verified before it acts on it; a newer request written meanwhile
+is kept. The run is the ordinary `team restart <seat> --resume <conversation>` in the request's
+session, carrying the request. Under its run lock, before anything is stopped, it checks again
+that the seat is on the request's pane with the request's launch, at an empty, recognised idle
+prompt. This is stricter than an ordinary restart: unsent text, a dialog or a screen it cannot read
+is never copied, closed or taken, and the request goes back to the queue unless a newer one
+replaced it. A different launch drops it. Any other failure is said to the team's lead, in the
+request's session, with the refusal's words. A request that has waited 30 minutes without the seat
+coming idle is given up and said to the lead the same way; the seat queues it again with
+`--self`. The daemon log says what each pass did.
 
 ## Who may run it
 

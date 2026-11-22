@@ -1366,6 +1366,39 @@ describe('team restart <seat>', () => {
     expect(json.err).toContain('--self takes no other option');
   });
 
+  test('a self-restart request is enforced under the run lock: same pane and launch, an empty idle prompt', async () => {
+    const scene = (workerScreen: 'idle' | 'unsent') => {
+      const fixture = makeFixture(withoutChannel('worker'));
+      updateState(fixture.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      });
+      return { fixture, ...makeHarness(fixture, { workerScreen }) };
+    };
+    const request = { seat: 'worker', pane: 'pane-old', launched: 'null' };
+    // Unsent text in the box: the ordinary restart would copy it; the self-restart waits.
+    const drafted = scene('unsent');
+    const draftIo = testIo(drafted.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--json'], draftIo, drafted.sources, { selfRequest: request })).toBe(1);
+    expect(draftIo.out).toContain('"id": "restart.busy"');
+    expect(draftIo.out).toContain('its self-restart waits');
+    expect(drafted.did.closed).toEqual([]);
+    // A launch other than the request's: nothing is stopped.
+    const moved = scene('idle');
+    const movedIo = testIo(moved.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], movedIo, moved.sources, { selfRequest: { ...request, launched: '{"shell":1}' } })).toBe(1);
+    expect(movedIo.err).toContain('its launch changed since its self-restart request');
+    expect(moved.did.closed).toEqual([]);
+    // A request for another seat restarts nothing.
+    const other = testIo(moved.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], other, moved.sources, { selfRequest: { ...request, seat: 'ops' } })).toBe(1);
+    expect(other.err).toContain('restarts no other seat');
+    // The same pane and launch at an empty idle prompt: restarted.
+    const ready = scene('idle');
+    const readyIo = testIo(ready.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], readyIo, ready.sources, { selfRequest: request }), readyIo.err).toBe(0);
+    expect(readyIo.out).toContain('team restart: restarted worker');
+  });
+
   test('refuses self-restart from a seat caller', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {

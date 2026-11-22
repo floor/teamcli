@@ -41,8 +41,11 @@ const TEAM = {
   seats: [{ name: 'lead', cli: 'claude-code', launch: 'claude', cwd: '.' }],
 } as unknown as TeamFile;
 
-type World = { clock: Date; status: string; screen: string; machine: Machine; restarts: string[][]; notices: { lead: string; body: string }[]; exit: number };
-const world = (): World => ({ clock: T0, status: 'working', screen: CLAUDE_IDLE, machine: CALM, restarts: [], notices: [], exit: 0 });
+type World = {
+  clock: Date; status: string; screen: string; machine: Machine; restarts: string[][]; requests: unknown[];
+  notices: { session: string; lead: string; body: string }[]; exit: number; refusal: string;
+};
+const world = (): World => ({ clock: T0, status: 'working', screen: CLAUDE_IDLE, machine: CALM, restarts: [], requests: [], notices: [], exit: 0, refusal: 'restart.not-ready' });
 
 function sourcesOf(w: World): UpSources {
   return {
@@ -56,8 +59,13 @@ function sourcesOf(w: World): UpSources {
 
 function depsOf(w: World): SelfRestartDeps {
   return {
-    restart: async (argv, io) => { w.restarts.push(argv); if (w.exit !== 0) io.stderr('team restart: the seat did not come back\n'); return w.exit; },
-    notify: (one) => { w.notices.push({ lead: one.lead, body: one.body }); return true; },
+    restart: async (argv, io, request) => {
+      w.restarts.push(argv);
+      w.requests.push(request);
+      if (w.exit !== 0) io.stdout(`${JSON.stringify({ schema: { name: 'team.error', version: 1 }, error: { id: w.refusal, message: 'the seat did not come back' } })}\n`);
+      return w.exit;
+    },
+    notify: (one) => { w.notices.push({ session: one.session, lead: one.lead, body: one.body }); return true; },
   };
 }
 
@@ -91,7 +99,9 @@ describe('the daemon runs a queued self-restart', () => {
     expect(queued()).toBe(true);
     w.machine = CALM;
     const lines = await pass(w);
-    expect(w.restarts).toEqual([['lead', '--resume', 'conv-lead', '--session', SESSION]]);
+    expect(w.restarts).toEqual([['lead', '--resume', 'conv-lead', '--session', SESSION, '--json']]);
+    // The request's own pane and launch ride into the restart, which enforces them under its lock.
+    expect(w.requests).toEqual([{ seat: 'lead', pane: 'w0:p1', launched: JSON.stringify(LAUNCHED) }]);
     expect(lines).toEqual(['lead: restarted itself with its conversation conv-lead']);
     expect(queued()).toBe(false);
     expect(hasSelfRestartRequests(dir)).toBe(false);
@@ -108,7 +118,7 @@ describe('the daemon runs a queued self-restart', () => {
     await pass(w);
     await pass(w);
     expect(w.restarts).toHaveLength(1);
-    expect(w.notices).toEqual([{ lead: 'lead', body: 'lead: self-restart failed (team restart: the seat did not come back)' }]);
+    expect(w.notices).toEqual([{ session: SESSION, lead: 'lead', body: 'lead: self-restart failed (the seat did not come back)' }]);
   });
 
   test('gives up past the bound with a report to the lead', async () => {
@@ -120,6 +130,7 @@ describe('the daemon runs a queued self-restart', () => {
     expect(w.restarts).toEqual([]);
     expect(queued()).toBe(false);
     expect(w.notices).toHaveLength(1);
+    expect(w.notices[0]!.session).toBe(SESSION);
     expect(w.notices[0]!.body).toStartWith('lead: self-restart given up: it did not come idle with an empty input line within 30 min');
   });
 
@@ -139,5 +150,37 @@ describe('the daemon runs a queued self-restart', () => {
     expect((await pass(w))[0]).toContain('does not verify; dropped unrun');
     expect(w.restarts).toEqual([]);
     expect(queued()).toBe(false);
+  });
+
+  test('a restart that found the seat busy under its lock leaves the request queued', async () => {
+    queue();
+    const w = world();
+    w.status = 'idle';
+    w.exit = 1;
+    w.refusal = 'restart.busy';
+    await pass(w);
+    expect(w.restarts).toHaveLength(1);
+    expect(queued()).toBe(true);
+    expect(w.notices).toEqual([]);
+    w.exit = 0;
+    await pass(w);
+    expect(w.restarts).toHaveLength(2);
+    expect(queued()).toBe(false);
+  });
+
+  test('a newer request published while one is claimed is kept, not consumed', async () => {
+    queue();
+    const w = world();
+    w.status = 'idle';
+    w.exit = 1;
+    w.refusal = 'restart.busy';
+    const deps = depsOf(w);
+    const newer = new Date(T0.getTime() + 1_000);
+    await runSelfRestarts({
+      home: base, root: base, dir, team: TEAM, sources: sourcesOf(w), caller: { kind: 'owner' },
+      deps: { ...deps, restart: async (argv, io, request) => { queue(newer); return deps.restart(argv, io, request); } },
+    });
+    // The claimed request did not overwrite the newer one when it went back to the queue.
+    expect(JSON.parse(readFileSync(selfRestartPath(dir, SESSION, 'lead'), 'utf8')).requested_at).toBe(newer.toISOString());
   });
 });

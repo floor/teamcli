@@ -301,7 +301,11 @@ function registryDeclaredTeam(
 export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
 export default restart;
 
-export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources): Promise<number> {
+/** What the daemon carries into a restart it runs for a seat's own queued request
+ *  (`../launch/self-restart.ts`): never a command-line word, so no caller can claim it. */
+export type SelfRequest = { seat: string; pane: string; launched: string };
+
+export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources, internal: { selfRequest?: SelfRequest } = {}): Promise<number> {
   let out = cleanedIo(io);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
@@ -794,10 +798,15 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
   }
 
+  const selfRequest = internal.selfRequest;
+  if (selfRequest !== undefined && selfRequest.seat !== name) {
+    return notReadyRefused(out, json, `${name}: a self-restart request for ${plainLine(selfRequest.seat)} restarts no other seat; left as it is`);
+  }
   const performed = await performRestart({
     out,
     json,
     notes,
+    ...(selfRequest === undefined ? {} : { selfRequest }),
     dir,
     root,
     home,
@@ -811,7 +820,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     agents,
     abandon,
     owner: clientRun === null && caller.kind === 'owner',
-    callerText: clientText ?? describeCaller(caller),
+    callerText: clientText ?? (selfRequest !== undefined ? `daemon for ${name}'s own request` : describeCaller(caller)),
     standing,
     ceilings,
     dev,
@@ -968,6 +977,11 @@ export type PerformInput = {
   resume?: string;
   /** True when `resume` was explicitly pinned via `--resume <cli-session-id>`. */
   pinnedResume?: boolean;
+  /** The seat's own queued request this run carries out: under the run lock, the seat must still
+   *  be on the request's pane with the request's launch, at an empty, recognised idle prompt —
+   *  no unsent text, no dialog, no unread screen — or nothing is stopped. Stricter than the
+   *  ordinary locked recheck, which copies a draft and closes a settings dialog. */
+  selfRequest?: SelfRequest;
   /** Plain words for the pre-close context line when `resume` is absent: no recorded
    *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
    *  The line then states why the relaunch starts a fresh conversation. */
@@ -1315,6 +1329,15 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (rechecked.kind === 'replaced') return { kind: 'replaced', takeable: rechecked.takeable };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
     if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
+    if (input.selfRequest !== undefined) {
+      if (freshRecorded?.pane !== input.selfRequest.pane || JSON.stringify(freshRecorded.launched ?? null) !== input.selfRequest.launched) {
+        return { kind: 'not-ready', message: `${name}: its launch changed since its self-restart request; left as it is` };
+      }
+      if (rechecked.agent?.pane !== input.selfRequest.pane || rechecked.where !== 'free' || rechecked.draftScreen !== undefined
+        || rechecked.settingsDialog === true || rechecked.unrecognised !== undefined || rechecked.exitInBox || rechecked.atExitQuestion || rechecked.taken === true) {
+        return { kind: 'busy', message: `${name} is not idle at an empty prompt; its self-restart waits` };
+      }
+    }
 
     // The unsent text, copied under the run lock before the pane is closed, so neither a failed
     // launch nor this process ending loses it. The copy stays until the text is read back in
