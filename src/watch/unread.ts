@@ -277,8 +277,8 @@ function recordWakeTry(dropDir: string, id: string, record: WakeTry): void {
 /** Whether a record is under the at-least-once contract (E7b). Such a record is never on this
  *  file's ladders: the one re-send scheduler offers it (src/queue/resend.ts). An unreadable stamp
  *  is not proven stamped and keeps the ladders it had. */
-function stampedRecord(dropDir: string, id: string): boolean {
-  return recordStampAt(dropDir, id) === true;
+function stampedRecord(dropDir: string, id: string, mail?: MailPass): boolean {
+  return (mail === undefined ? recordStampAt(dropDir, id) : mail.stampAt(dropDir, id)) === true;
 }
 
 /** The most messages one pass re-offers to one seat on its event legs. */
@@ -1096,13 +1096,13 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     const windowOf = (id: string): number => (id === readyBrief ? 0 : unreadAfter);
     const scanned = new Set(unread.map((one) => one.id));
     const due = unread
-      .filter((message) => !stampedRecord(dropDir, message.id)
+      .filter((message) => !stampedRecord(dropDir, message.id, mail)
         && dueForWake(dropDir, message, nowMs, windowOf(message.id), retry === null ? null : retry.tries, pendingOwned));
     // A message the scan did not list is new here, and it is due now if its window has passed.
     // One the cascade would take by webhook waits for the pass that reaches the webhook first:
     // this pass types no line ahead of a leg it has not walked for the message.
     const arrived = fresh.filter((one) => !scanned.has(one.id)
-      && !stampedRecord(dropDir, one.id)
+      && !stampedRecord(dropDir, one.id, mail)
       && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
       && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
     if (leadSeat) {
@@ -1184,7 +1184,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       if (typedDue.length === 0) {
         const after = listUnread(dropDir, context, home, mail.recordAt);
         const late = after.filter((one) => !scanned.has(one.id)
-          && !stampedRecord(dropDir, one.id)
+          && !stampedRecord(dropDir, one.id, mail)
           && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
           && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
         if (late.length === 0) continue;
@@ -1256,7 +1256,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const freshNow = listUnread(dropDir, context, home, mail.recordAt);
       const unreadNow = new Set(freshNow.map((one) => one.id));
       const arrivedNow = freshNow.filter((one) => !scanned.has(one.id)
-        && !stampedRecord(dropDir, one.id)
+        && !stampedRecord(dropDir, one.id, mail)
         && dueForWake(dropDir, one, nowMs, windowOf(one.id), retry === null ? null : retry.tries, pendingOwned)
         && !(seat.webhook !== undefined && webhookNext(seat, linesNow().get(one.id))));
       const wakeable = [
