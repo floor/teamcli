@@ -328,11 +328,14 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
     // A seat nothing can wake while it is idle is spent no attempt: the push would be a wake
     // that never lands and the episode's one attempt would be gone with it. A claim of this
     // episode was followed above, so a wake already sent is still settled and announced.
-    if (!wakeableWhileIdle(deliveryClassOf(input, seat))) continue;
+    const cls = deliveryClassOf(input, seat);
+    if (!wakeableWhileIdle(cls)) continue;
     // A typed wake proves the pane's launch by its shell anchors before each key
     // (src/launch/identity.ts `typedPaneProof`): a record without them refuses every key, so the
-    // seat is held, with no attempt spent, until a launch records them.
-    if (deliveryClassOf(input, seat) === 'typed-wake' && !shellAnchored(input.state.seats[seat])) continue;
+    // seat is held, with no attempt spent, until a launch records them. A between-turns seat is
+    // held the same way: the direct send leaves its runtime queue out, so the typed wake is the
+    // route it would take.
+    if ((cls === 'typed-wake' || cls === 'between-turns') && !shellAnchored(input.state.seats[seat])) continue;
     const captured = captureIdleClaim(input.dir, {
       session: input.team.session,
       seat,

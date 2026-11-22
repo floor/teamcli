@@ -472,6 +472,32 @@ describe('a seat nothing can wake while it is idle', () => {
     expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
   });
 
+  test('a between-turns seat whose record has no shell anchors is held too: its direct send would take the typed wake', async () => {
+    for (const anchored of [false, true]) {
+      queue([{ id: 't1', title: 'First' }]);
+      const calls: WorkPushRequest[] = [];
+      const push: WorkPush = async (request) => {
+        calls.push(request);
+        return { ok: true, outcome: 'delivered' };
+      };
+      const codex = PULL_CREW.replace(
+        `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: claude`,
+        'name: worker-2\n    cli: codex\n    vendor: test\n    model: GPT\n    version: "6.1"\n    launch: codex',
+      );
+      // A bound app-server endpoint and conversation: the seat reads as between-turns.
+      const state = stateAt(new Date(NOW - 10 * MIN).toISOString());
+      state.seats['worker-2'] = {
+        ...state.seats['worker-2']!, cli: 'codex', watcher: 'inbox', agent_session: 'ses_thread', presence_binding: 'prs_0123456789ab',
+        codex_endpoint: { url: `unix://${join(base, 'codex.sock')}`, binding: 'prs_0123456789ab', pid: 4321, started_at: '2026-10-01T00:00:00Z' },
+        ...(anchored ? { pane_shell: 111, pane_shell_start: 5 } : {}),
+      } as SessionState['seats'][string];
+      const codexIdle = readFileSync(join(import.meta.dir, 'fixtures', 'codex', '0.167.0', 'idle.txt'), 'utf8');
+      await dispatchIdleWork({ ...input({ push, state, team: teamOf(codex), live: live({ 'worker-2': { screen: codexIdle } }) }), home: undefined } as unknown as IdleDispatchInput);
+      expect(calls.map((one) => one.seat)).toEqual(anchored ? ['worker-2'] : []);
+      forgetIdleEpisodes();
+    }
+  });
+
   test('an accepted socket whose recorded address does not stand is no wake either', async () => {
     queue([{ id: 't1', title: 'First' }]);
     const calls: WorkPushRequest[] = [];
