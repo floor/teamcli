@@ -68,6 +68,7 @@ function seatGrants(root: string, start: string): string[] {
   return [
     realpathSync(start),
     join(root, '.agents', 'send-drops', 'acme', 'grok-seat'),
+    join(root, '.agents', 'send-stamped', 'acme', 'grok-seat'),
     join(root, '.agents', 'messages', 'grok-seat'),
     join(root, '.agents', 'seat-state', 'acme', 'grok-seat'),
   ];

@@ -58,7 +58,8 @@ function read() {
     root: dir,
     session: 'acme',
     seat: 'helper',
-    declared: { cli: 'claude-code', launch: 'claude' },
+    // The team file opts the seat in: the socket is an opt-in it declares (`inbound: accept`).
+    declared: { cli: 'claude-code', launch: 'claude', inbound: 'accept' },
     state: { cli: 'claude-code', watcher: 'hook' },
     home,
   });

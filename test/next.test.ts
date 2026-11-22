@@ -128,7 +128,10 @@ function ready(text = WITH, tasks: string | null = '- id: m1\n  title: the task 
  *  registry record naming an address. `live` writes the socket at that address; without it the
  *  record names a socket that is gone. */
 function launchingSocket(text: string, live: boolean): string {
-  ready(text, '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n- id: plain\n  title: the ordinary title\n');
+  // The socket is an opt-in the team file declares: the worker opts in with `inbound: accept`
+  // unless the scene names its own word.
+  const opted = text.includes('    name: worker\n    inbound:') ? text : text.replace('    name: worker\n', '    name: worker\n    inbound: accept\n');
+  ready(opted, '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n- id: plain\n  title: the ordinary title\n');
   const state = join(root, '.agents');
   mkdirSync(join(state, 'hooks', 'acme'), { recursive: true });
   writeFileSync(join(state, 'hooks', 'acme', 'worker.json'), '{"crossSessionInbound":"accept"}\n');

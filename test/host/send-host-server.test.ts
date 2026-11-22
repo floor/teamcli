@@ -3,13 +3,13 @@
 // §2.2). A line runs locally only when it was never submitted or the host answered `fallback`
 // from a state where it can never run; everything else after submission is ambiguous. Every
 // assertion counts the dispatcher's runs, so "never ran" is an effect, not a message.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tryHost } from '../../src/host/client.ts';
 import type { PeerReader } from '../../src/host/peer.ts';
-import { buildStampOf, startSendHost, type SendHost } from '../../src/host/server.ts';
+import { buildStampOf, RECYCLE_RSS_BYTES, startSendHost, type SendHost } from '../../src/host/server.ts';
 import type { Io } from '../../src/io.ts';
 
 let base: string;
@@ -70,7 +70,15 @@ function line(argv: string[], over: Partial<{ cwd: string; env: Record<string, s
   });
 }
 
+// The host recycles itself once its process passes RECYCLE_RSS_BYTES, and here its process is
+// the test runner's: a run of a few hundred files in one process grows past that bound, and the
+// host then stops after its first line and removes its socket. The scenes measure the host's
+// answers, not the runner's memory, so the process reads as well under the bound.
+let memory: ReturnType<typeof spyOn> | null = null;
+const realMemoryUsage = process.memoryUsage.bind(process);
+
 beforeEach(() => {
+  memory = spyOn(process, 'memoryUsage').mockImplementation((() => ({ ...realMemoryUsage(), rss: Math.floor(RECYCLE_RSS_BYTES / 4) })) as typeof process.memoryUsage);
   base = realpathSync(mkdtempSync(join(tmpdir(), 'send-host-')));
   cliEntry = join(base, 'cli.js');
   writeFileSync(cliEntry, '// a build\n');
@@ -80,6 +88,8 @@ beforeEach(() => {
 afterEach(async () => {
   await host?.close('test end');
   host = null;
+  memory?.mockRestore();
+  memory = null;
   rmSync(base, { recursive: true, force: true });
 });
 

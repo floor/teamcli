@@ -514,6 +514,9 @@ function makeHarness(
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
+    // The fake panes' pids name no process of this scene: the machine's own table may hold a
+    // real one at that pid (low pids are system processes on Linux), so no birth reads here.
+    processStartOf: () => null,
     createWorkspace() {
       did.created += 1;
       if (opts.createFails) return null;
@@ -2682,7 +2685,9 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   // `team up` can adopt in place, so the check names neither: the repair is `team up`, whose own
   // plan writes the restored launch identity before its address pass reads the pane.
   test('check names team up for a replaced process it can prove restored, and never a restart', async () => {
-    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
+    // The team file opts the worker in to the socket (`inbound: accept`): the launch's own accept
+    // authorizes nothing alone.
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true, yaml: TEAM_YAML.replace('    name: worker\n', '    name: worker\n    inbound: accept\n') });
     // The registry record a plain-name send resolves: the check reads the seat's agent record
     // through it, and the restart's own binding reads the same one.
     upsertTeam(fixture.home, teamIdOf(fixture.root), {
@@ -2697,8 +2702,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const sockets = join(fixture.base, 'sockets');
     mkdirSync(sockets, { recursive: true });
     writeFileSync(join(sockets, '201.sock'), '');
-    // The launch's generated settings declare accept, backdated so the socket stands newer; the
-    // team file names no word of its own, and a generated declaration admits the socket alone.
+    // The launch's generated settings declare accept, backdated so the socket stands newer, and the
+    // team file's own word opts the seat in.
     const settings = cliHookSettingsPath(fixture.dir, 'acme', 'worker');
     if (settings === null) throw new Error('the fixture declares no settings path for worker');
     mkdirSync(dirname(settings), { recursive: true });

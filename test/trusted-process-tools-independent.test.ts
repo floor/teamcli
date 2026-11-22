@@ -395,7 +395,9 @@ describe('the readers behind the seam', () => {
     });
   });
 
-  test('the lsof readers answer the trusted tool and fail closed without one', () => {
+  // The working-folder readers ask lsof only where there is no /proc: on Linux they read
+  // /proc/<pid>/cwd and never start a tool, so this scene has nothing to prove there.
+  test.skipIf(process.platform === 'linux')('the lsof readers answer the trusted tool and fail closed without one (not Linux: there the readers take /proc, never lsof)', () => {
     mountedAttack('lsof-readers', ({ shimRuns }) => {
       const single = trustedTool('lsof-single', 'lsof', "printf 'p4242\\nn/fixture/working-folder\\n'");
       const many = trustedTool('lsof-many', 'lsof', "printf 'p4242\\nfcwd\\nn/fixture/folder-a\\np4243\\nfcwd\\nn/fixture/folder-b\\n'");

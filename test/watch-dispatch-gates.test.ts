@@ -48,6 +48,7 @@ seats:
     launch: claude
   - role: worker
     name: worker-1
+    inbound: accept
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
@@ -95,7 +96,8 @@ function seedState(): SessionState {
 }
 
 /** The launch record a push seat leaves: generated settings that accept cross-session frames and
- *  the registry address a send dials. A dispatch reads a seat with neither as pull-on-turn. */
+ *  the registry address a send dials. A dispatch reads a seat with neither as pull-on-turn. The
+ *  team file's own `inbound: accept` (worker-1 above) opts the seat in to the socket. */
 function launchedPushSeat(seat: string): void {
   const settings = cliHookSettingsPath(join(root, '.agents'), 'crew', seat);
   if (settings === null) throw new Error(`${seat}: no settings path for the fixture`);
