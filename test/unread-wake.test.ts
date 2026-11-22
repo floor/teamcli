@@ -788,9 +788,10 @@ describe("the watch's typed wake retry", () => {
     return { made, team: teamOf(typedTeamText(made.root, lobbyDir(made.home), cli, extra)) };
   }
 
-  function ledgerOf(dropDir: string, id: string): { id: string; tries: number; typed: boolean; next_at: string } | null {
+  // The ledger keeps the failed wake's own reason beside the count, so a later reader can say why.
+  function ledgerOf(dropDir: string, id: string): { id: string; tries: number; typed: boolean; next_at: string; reason?: string } | null {
     if (!existsSync(wakeTryPath(dropDir, id))) return null;
-    return JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { id: string; tries: number; typed: boolean; next_at: string };
+    return JSON.parse(readFileSync(wakeTryPath(dropDir, id), 'utf8')) as { id: string; tries: number; typed: boolean; next_at: string; reason?: string };
   }
 
   test('a typed attempt that fails gives its reservation back, and the ledger waits out the backoff', async () => {
@@ -811,7 +812,7 @@ describe("the watch's typed wake retry", () => {
     expect(calls[0]?.session).toBe('acme');
     expect(calls[0]?.line).toContain('team drops --read');
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: true, next_at: '2026-10-17T04:00:05.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: true, next_at: '2026-10-17T04:00:05.000Z', reason: TYPED_FAILED.reason });
 
     // Inside the wait the pass does not reach the seam at all.
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 4_000) }), { unreadAfter: N });
@@ -821,7 +822,7 @@ describe("the watch's typed wake retry", () => {
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 5_000) }), { unreadAfter: N });
     expect(calls).toHaveLength(2);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 2, typed: true, next_at: '2026-10-17T04:00:15.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 2, typed: true, next_at: '2026-10-17T04:00:15.000Z', reason: TYPED_FAILED.reason });
   });
 
   test('a pass with no seam bound attempts nothing and spends nothing', async () => {
@@ -937,7 +938,7 @@ describe("the watch's typed wake retry", () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, [], { sources, live }), { unreadAfter: N });
     expect(calls).toHaveLength(1);
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: false, next_at: '2026-10-17T04:00:05.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 1, typed: false, next_at: '2026-10-17T04:00:05.000Z', reason: TYPED_REFUSED.reason });
 
     // Twice the window: the report reads the ledger and says the pass never got a line in.
     reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 10 * MIN) }), { unreadAfter: N });
@@ -994,7 +995,7 @@ describe("the watch's typed wake retry", () => {
     }
     expect(calls).toHaveLength(3);
     // The third failure spends the fast bound: the next attempt is a slow one, five minutes on.
-    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 3, typed: true, next_at: '2026-10-17T04:05:15.000Z' });
+    expect(ledgerOf(dropDir, UNREAD_A)).toEqual({ id: UNREAD_A, tries: 3, typed: true, next_at: '2026-10-17T04:05:15.000Z', reason: TYPED_FAILED.reason });
 
     // The fast bound is reached: the fourth pass never asks the seam for the stuck message. The
     // newer one is past its window by then, and the same line wakes it.
