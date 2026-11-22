@@ -123,9 +123,13 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 import { codexThreadFreeFor, shippedCodexThreadWait } from '../launch/codex-thread-release.ts';
+import { writeSelfRestartRequest } from '../launch/self-restart.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
+       team restart <own-seat> --self
+
+--self is the seat's restart of itself, run from its own recorded pane: it queues the restart and returns at once, and the daemon restarts the seat with its recorded conversation once its turn has ended and its input line is empty. It takes no other option.
 
 A <seat> written as <seat>@<team> names another team's seat by its registry id, project or session: only that team's owner or leads, or the entity's main orchestrator, may restart it that way, and it takes no --file, --session or --client.
 
@@ -302,7 +306,11 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json', 'resolve-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json', 'resolve-launch', 'self']);
+  const self = args.flags.has('self');
+  if (self && args.error === undefined && (Object.keys(args.values).length > 0 || args.flags.size > 1 || (args.rest[0] ?? '').includes('@'))) {
+    return usage(out, json, '--self takes no other option: run `team restart <own-seat> --self` from the seat\'s own pane');
+  }
   const resumeProblem = args.error === undefined && args.values.resume !== undefined
     ? args.values.resume.trim() === ''
       ? '--resume requires a session id'
@@ -484,6 +492,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ? { ...judgeCallerOf(io, fixedSession === 'default' ? undefined : fixedSession), session: fixedSession }
     : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
+  if (self) return queueSelfRestart(out, json, { home, dir, team, name, session, caller, shown, now: sources.now() });
   // The who-may-run-it verdict and the entity's main orchestrator are read before dev mode:
   // an address is admitted on proof alone, ahead of any dev-mode read, log or fold, so a refused
   // address leaves nothing in the target team's log. The entity's main orchestrator stands as,
@@ -2681,10 +2690,55 @@ function selfRefused(out: Io, json: boolean, callerName: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.self',
     message: `the ${callerName} cannot restart its own recorded pane; another \`leads\` seat (or the owner) restarts it`,
-    repair: null,
+    repair: `team restart ${callerName} --self`,
   });
   // exit: restart.self
   return 1;
+}
+
+/**
+ * `team restart <own-seat> --self`: the seat's restart of itself. A restart run here would close
+ * the pane running it, so this records one signed request (`../launch/self-restart.ts`) and
+ * returns; the daemon runs the ordinary restart with the seat's recorded conversation once the
+ * seat is idle at an empty prompt. Only the seat itself, proven on its recorded pane in this
+ * session, queues it: no seat queues another's, and this is no new reach for a lead.
+ */
+function queueSelfRestart(out: Io, json: boolean, input: {
+  home: string; dir: string; team: TeamFile; name: string; session: string; caller: Caller; shown: Caller; now: Date;
+}): number {
+  const { name, session, caller } = input;
+  const own = caller.kind === 'seat' && callerVerdict(caller, name, standingOf(input.dir, session, caller)).kind === 'ok';
+  if (!own) {
+    refuse(out, json, 'restart', {
+      id: 'restart.self-caller',
+      message: `--self restarts only the seat this call runs as, from its own recorded pane; this call is ${plainLine(describeCaller(input.shown))}, not ${plainLine(name)}`,
+      repair: null,
+    });
+    // exit: restart.self-caller
+    return 1;
+  }
+  const declared = input.team.seats.find((seat) => seat.name === name);
+  if (declared === undefined) return unknownRefused(out, json, name);
+  const held = readState(input.dir).sessions[session]?.seats[name];
+  if (declared.human === true || held?.pane === undefined || held.launched === undefined || !held.agent_session) {
+    refuse(out, json, 'restart', {
+      id: 'restart.self-unrecorded',
+      message: declared.human === true
+        ? `${name} is a human's pane: nothing is typed into it or launched over it`
+        : `${name} records no launch and conversation on its pane, so there is nothing to resume; the owner or a \`leads\` seat restarts it`,
+      repair: null,
+    });
+    // exit: restart.self-unrecorded
+    return 1;
+  }
+  writeSelfRestartRequest({
+    home: input.home, dir: input.dir, session, seat: name, conversation: held.agent_session,
+    pane: held.pane, launched: held.launched, now: input.now,
+  });
+  logLine(input.dir, 'restart', describeCaller(caller), `self-restart queued for ${name} with its conversation ${held.agent_session}`, input.now);
+  out.stdout(`${name}: restart queued; the daemon relaunches it with its conversation ${held.agent_session} once its turn ends and its input line is empty\n`);
+  // exit: restart.self-queued
+  return 0;
 }
 
 function temporaryRefused(out: Io, json: boolean, name: string, like: string): number {

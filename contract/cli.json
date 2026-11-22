@@ -7336,6 +7336,12 @@
         },
         {
           "hidden": false,
+          "name": "--self",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -7358,14 +7364,20 @@
       "positionals": [
         {
           "name": "seat",
-          "optional": false,
+          "optional": true,
+          "repeatable": false
+        },
+        {
+          "name": "own-seat",
+          "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
         "team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]",
-        "team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]"
+        "team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]",
+        "team restart <own-seat> --self"
       ],
       "who": {
         "gate": "owner-or-leads",

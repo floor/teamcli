@@ -12,6 +12,7 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { selfRestartPath } from '../src/launch/self-restart.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
@@ -1320,6 +1321,49 @@ describe('team restart <seat>', () => {
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(1);
+  });
+
+  test('--self from the seat\'s own pane queues the restart, returns at once, and signs the request', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+      } as never;
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+
+    const code = await runRestart(['worker', '--self'], io, sources);
+    expect(code).toBe(0);
+    expect(io.out).toBe('worker: restart queued; the daemon relaunches it with its conversation conv-worker once its turn ends and its input line is empty\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    const request = JSON.parse(readFileSync(selfRestartPath(fixture.dir, 'acme', 'worker'), 'utf8'));
+    expect(request).toMatchObject({ format: 1, seat: 'worker', session: 'acme', conversation: 'conv-worker', pane: 'pane-worker', launched: JSON.stringify({ shell: 701, cli: [801] }) });
+    expect(request.signature).toMatch(/^[0-9a-f]+$/);
+  });
+
+  test('--self for another seat\'s pane is refused: no seat queues another\'s restart', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.worker = { stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker' } as never;
+    });
+    const { sources } = makeHarness(fixture);
+    // The lead names the worker; the worker stands on another pane than its record.
+    for (const caller of [
+      { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' },
+      { kind: 'seat', name: 'worker', pane: 'pane-other', session: 'acme' },
+    ] as Caller[]) {
+      const io = testIo(fixture.root, caller);
+      expect(await runRestart(['worker', '--self'], io, sources)).toBe(1);
+      expect(io.err).toContain('--self restarts only the seat this call runs as, from its own recorded pane');
+    }
+    expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
+    const json = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+    expect(await runRestart(['worker', '--self', '--resume', 'conv-worker'], json, sources)).toBe(2);
+    expect(json.err).toContain('--self takes no other option');
   });
 
   test('refuses self-restart from a seat caller', async () => {

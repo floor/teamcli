@@ -19,6 +19,7 @@ import { acquireRunLock } from './run-lock.ts';
 import { restoreLifecycleProblem } from './restore-lifecycle.ts';
 import { channelRepairLine, restoreLeadChannels, type RestoreChannelDeps } from './restore-channel.ts';
 import { relaunchRestoredSeats, type RestoreRelaunchDeps } from './restore-relaunch.ts';
+import { runSelfRestarts } from './self-restart.ts';
 import { realSources as restartRealSources, runRestart } from '../commands/restart.ts';
 import { channelUnproven } from '../queue/resend.ts';
 import { pendingProbe, placeChannelProbe } from '../queue/channel-probe.ts';
@@ -49,6 +50,8 @@ export type RestoreSweepResult =
   | { kind: 'refused'; exit: number; detail?: string; retry?: 'load' }
   /** The sweep ran. `failed` is `runUp`'s exit: nonzero when the run refused a seat. */
   | { kind: 'ran'; summary: RestoreSweepSummary; failed: boolean; retry?: 'load'; detail?: string };
+/** What a self-restart pass (`runSelfRestartsForRoute`) did, one line each; never a restore. */
+export type SelfRestartPassResult = { kind: 'self-restart'; lines: string[] };
 
 export type RestoreSweepInput = {
   home: string;
@@ -243,6 +246,26 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
   if (pass.lines.length > 0) ran.summary.line = `${ran.summary.line}; ${pass.lines.join('; ')}`;
   if (pass.pending !== null && ran.retry === undefined) return { ...ran, retry: 'load', detail: `restore relaunch pending: ${pass.pending}` };
   return ran;
+}
+
+/**
+ * The daemon's pass over one hosted route's queued self-restarts (`./self-restart.ts`), run in a
+ * restore child: the team is read the way the restore sweep reads it, and each request runs the
+ * ordinary restart as the daemon.
+ */
+export async function runSelfRestartsForRoute(input: { home: string; root: string; teamFile?: string }): Promise<string[]> {
+  const sources: UpSources = { ...realSources, home: input.home };
+  const loaded = input.teamFile === undefined
+    ? readTeamConfig(input.root, { home: input.home })
+    : readTeamConfig(input.root, { file: input.teamFile, home: input.home });
+  if (!loaded.ok) return [];
+  const { team } = loaded;
+  const launchFile = launchTeamFile(loaded);
+  return runSelfRestarts({
+    home: input.home, root: loaded.root, dir: dirname(loaded.path), team, sources, caller: OWNER,
+    deps: realRelaunchDeps(input.home, loaded.root, team.session, team.orchestrator),
+    ...(launchFile === undefined ? {} : { launchFile }),
+  });
 }
 
 /** The relaunch's real world: the restart command, the channel proof, the probe and the lead

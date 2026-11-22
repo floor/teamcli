@@ -15,12 +15,14 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RestoreSweepResult } from '../../launch/restore-sweep.ts';
+import type { RestoreSweepResult, SelfRestartPassResult } from '../../launch/restore-sweep.ts';
+
+type ChildResult = RestoreSweepResult | SelfRestartPassResult;
 import { discardRestoreInherit, restoreDoorText, writeRestoreDoor } from './token.ts';
 import { hostedCommit } from '../../host/request-scope.ts';
 
 /** The result kinds a child may report. A line naming anything else is not a result. */
-const RESULT_KINDS = new Set(['no-recorded-session', 'lock-held', 'not-running', 'unreadable', 'refused', 'ran']);
+const RESULT_KINDS = new Set(['no-recorded-session', 'lock-held', 'not-running', 'unreadable', 'refused', 'ran', 'self-restart']);
 
 /** The most one stdout or stderr frame may hold before it is dropped as unreadable. */
 const FRAME_LIMIT = 64 * 1024;
@@ -47,6 +49,8 @@ export type SpawnRestoreInput = {
   teamFile?: string;
   /** The session the daemon hosts the route under; the pass refuses another. */
   session?: string;
+  /** `self-restart`: the child runs the route's queued self-restarts instead of the restore pass. */
+  pass?: 'self-restart';
   /** The daemon's closing signal: the pass is ended between seat steps and reported as ended. */
   signal?: AbortSignal;
   /** The program entry the child runs. The default is the child entry beside this module; a test
@@ -69,7 +73,7 @@ function reasonOf(error: unknown): string {
 }
 
 /** One protocol line as a settlement, or null when the line is not the protocol. */
-function reportOf(line: string): { ok: true; result: RestoreSweepResult } | { ok: false; reason: string } | null {
+function reportOf(line: string): { ok: true; result: ChildResult } | { ok: false; reason: string } | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -87,7 +91,7 @@ function reportOf(line: string): { ok: true; result: RestoreSweepResult } | { ok
   const result = report.result;
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   if (typeof (result as { kind?: unknown }).kind !== 'string' || !RESULT_KINDS.has((result as { kind: string }).kind)) return null;
-  return { ok: true, result: result as RestoreSweepResult };
+  return { ok: true, result: result as ChildResult };
 }
 
 /**
@@ -98,7 +102,20 @@ function reportOf(line: string): { ok: true; result: RestoreSweepResult } | { ok
  * daemon does not understand. The caller logs that message against the route; no fact about the
  * team is invented for a pass that did not report.
  */
-export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<RestoreSweepResult> {
+export async function runRestoreSweepInChild(input: Omit<SpawnRestoreInput, 'pass'>): Promise<RestoreSweepResult> {
+  const result = await runChild(input);
+  if (result.kind === 'self-restart') throw new Error('the restore child reported a self-restart pass for a restore');
+  return result;
+}
+
+/** Runs one route's queued self-restarts in a restore child; the lines it said. */
+export async function runSelfRestartsInChild(input: Omit<SpawnRestoreInput, 'pass' | 'session'>): Promise<string[]> {
+  const result = await runChild({ ...input, pass: 'self-restart' });
+  if (result.kind !== 'self-restart') throw new Error('the restore child reported a restore for a self-restart pass');
+  return result.lines;
+}
+
+async function runChild(input: SpawnRestoreInput): Promise<ChildResult> {
   // The closing signal is read through a closure: it may fire at any point the loop turns, and
   // the check after the listener is registered must see the abort a closure-free comparison
   // would have narrowed away.
@@ -115,6 +132,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
       root: input.root,
       ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
       ...(input.session === undefined ? {} : { session: input.session }),
+      ...(input.pass === undefined ? {} : { pass: input.pass }),
       daemonPid: process.pid,
     });
   } catch (error) {
@@ -140,9 +158,9 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
   let stdoutBuffer = '';
   let stderrBuffer = '';
   let grace: ReturnType<typeof setTimeout> | null = null;
-  let resolveResult!: (value: RestoreSweepResult) => void;
+  let resolveResult!: (value: ChildResult) => void;
   let rejectResult!: (reason: Error) => void;
-  const done = new Promise<RestoreSweepResult>((resolve, reject) => {
+  const done = new Promise<ChildResult>((resolve, reject) => {
     resolveResult = resolve;
     rejectResult = reject;
   });
@@ -191,7 +209,7 @@ export async function runRestoreSweepInChild(input: SpawnRestoreInput): Promise<
     grace.unref();
   };
 
-  const settleResult = (result: RestoreSweepResult): void => {
+  const settleResult = (result: ChildResult): void => {
     if (settled) return;
     settled = true;
     clearTimeout(deadline);

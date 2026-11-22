@@ -61,6 +61,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 
     team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
+    team restart <own-seat> --self
 
 ## Flags
 
@@ -76,6 +77,7 @@ and `--abandon` replaces what is in that pane only under the same name.
 | `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
 | `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | — | one `team.restart` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
+| `--self` | — | the seat's restart of itself, from its own recorded pane: queued for the daemon, see [A seat's restart of itself](#a-seats-restart-of-itself); takes no other option |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## A client's restart
@@ -88,6 +90,42 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 `client-restart-authorized: …`. A refusal is `restart.client-refused` (exit 1). Every other refusal of a restart
 (a seat that is not declared, signed off, working, a human's pane) stands.
 
+## A seat's restart of itself
+
+A restart run from inside a seat's own pane would close the process running it, so a seat never
+restarts its own recorded pane directly (`restart.self`). Instead it queues the restart:
+
+    team restart <own-seat> --self
+
+The call returns at once with one line:
+
+    <seat>: restart queued; the daemon relaunches it with its conversation <conversation> once its turn ends and its input line is empty
+
+It records one request under the team's state folder (`self-restart/<session>/<seat>.json`),
+signed with the machine's message key, naming the seat, its session, its pane, its current launch
+and the conversation its record holds. A second `--self` replaces the first. Only the seat itself
+queues it: the caller must be placed on that seat's recorded pane in that session, the same proof
+every seat caller gives. Any other caller is refused (`restart.self-caller`), so `--self` opens no
+way for one seat to restart another; restarting another seat keeps the rules below. A seat whose
+record holds no launch or conversation, or a human's pane, is refused (`restart.self-unrecorded`).
+This holds for every seat, the entity's main orchestrator included.
+
+The daemon reads the queued requests on its heartbeat and runs each one in a short-lived child
+process, so its own heartbeat never waits on the run. A request is run only when:
+
+- its signature verifies and the seat's record still names the request's pane, launch and
+  conversation; a request for an earlier launch is dropped unrun;
+- the load guard lets a launch through; otherwise it waits for a later beat;
+- the terminal host reports the seat idle or done and its screen reads an empty prompt: no turn
+  running, no unsent text, no dialog. This is read again right before the restart; a seat that is
+  working or holds unsent text waits for a later beat.
+
+The run is the ordinary `team restart <seat> --resume <conversation>` in the request's session, as
+the daemon, with every check above in force. It is tried once: a request is taken before the run,
+and a run that fails is said to the team's lead with its last line. A request that has waited 30
+minutes without the seat coming idle is given up and said to the lead the same way; the seat
+queues it again with `--self`. The daemon log says what each pass did.
+
 ## Who may run it
 
 | Caller | May |
@@ -96,6 +134,7 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | a run with no terminal | nothing: ``team restart: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | restart another declared seat; never its own recorded pane, never `--abandon` on the orchestrator's seat, and never `--abandon` on a `working` seat |
 | the entity's main orchestrator: the lead seat of the team whose project is the entity itself | restart any declared seat of the entity's teams, as that team's own lead does — the proof is its head team's record, live file and recorded pane, never its seat name; it still never restarts a seat on the pane this call stands on |
+| any seat, the entity's main orchestrator included, on its own recorded pane | queue its own restart with `--self`, and nothing else |
 
 A caller placed in its own team reads a bare `<seat>` in that team, whatever folder it runs from: the main
 orchestrator running `team restart orchestrator` from another team's folder names its own seat and is refused
@@ -142,6 +181,7 @@ conversation another writer recorded — or cleared — first is never replaced.
 holds more than one, or does not answer proves nothing: the records are left as they were, the
 closing line says `pull-only`, and the log names what the read proved instead
 (`<seat>: no thread was bound from its Codex endpoint (<reason>)`).
+| `--self` queued the seat's restart | `<seat>: restart queued; …` | 0 |
 | `--dry-run` succeeded | the stop line and the launch plan | 0 |
 | the run was refused, or the seat was left behind | `team restart: <reason>` | 1 |
 | the invocation or the team file can't be read | `team restart: <problem>` and the usage | 2 |
