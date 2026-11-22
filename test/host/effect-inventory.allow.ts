@@ -29,7 +29,7 @@ export const READS: Record<string, string> = {
   'src/commands/answer.ts#version node:child_process.execFileSync': 'a version query',
   'src/commands/doctor.ts#readCommand node:child_process.spawnSync': 'doctor reads a command output',
   'src/commands/git.ts#currentBranch node:child_process.spawn': 'git branch read',
-  'src/commands/mcp.ts#probeSocket node:net.connect': 'socket liveness probe',
+  'src/commands/mcp.ts#probeSocket Bun.connect': 'socket liveness probe',
   'src/commands/mcp.ts#certExpiry node:tls.connect': 'reads a server certificate expiry; sends no request',
   'src/commands/status.ts#branch node:child_process.execFileSync': 'git branch read',
   'src/daemon/health.ts#requestHealth Bun.connect': 'daemon health read',

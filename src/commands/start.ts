@@ -6,7 +6,7 @@
 // with no preset step recorded, is refused. The registry is noted only on the pass that
 // wrote the file. A later run resumes at the first step that is not done. It does not
 // call `team config` and it does not grant a sender.
-import { connect } from 'node:net';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -170,18 +170,16 @@ function presetText(name: string, clis: readonly [string, string]): string {
 function notifyDaemon(home: string, root: string): void {
   const socketPath = daemonSocketPath(home);
   if (!existsSync(socketPath)) return;
-  hostedCommit('node:net.connect');
-  const socket = connect({ path: socketPath });
+  hostedCommit('Bun.connect');
+  const Bun = socketRuntime();
+  const { conn: socket, options, refused } = dialing(socketPath, {
+    open: (conn) => conn.end(`${JSON.stringify({ v: 2, id: 'root.added', op: 'root.added', scope: { root } })}\n`),
+    close: () => clearTimeout(timer),
+  });
   socket.unref();
   const timer = setTimeout(() => socket.destroy(), 200);
   timer.unref();
-  socket.once('connect', () => {
-    socket.end(`${JSON.stringify({ v: 2, id: 'root.added', op: 'root.added', scope: { root } })}\n`);
-  });
-  socket.once('error', () => {
-    clearTimeout(timer);
-    socket.destroy();
-  });
+  Bun.connect(options).catch(refused);
 }
 
 function signedIn(cli: string): boolean {
