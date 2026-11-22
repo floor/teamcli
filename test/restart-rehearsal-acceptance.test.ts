@@ -104,7 +104,9 @@ beforeEach(() => {
   home = join(base, 'home');
   dir = join(root, '.agents');
   teamFile = join(dir, 'team.yaml');
-  mkdirSync(dir, { recursive: true });
+  // The project folder carries a channel pair, which the product refuses in a group- or
+  // world-writable folder; the mode is stated so a umask of 002 (common on Linux) does not decide it.
+  mkdirSync(dir, { recursive: true, mode: 0o755 });
   mkdirSync(home, { recursive: true, mode: 0o700 });
   execFileSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(teamFile, teamText(root));
