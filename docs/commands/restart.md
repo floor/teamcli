@@ -141,7 +141,8 @@ is said to the lead and dropped.
 
 A self-restart resumes the seat's conversation or does not run. `--self` refuses with
 `restart.continuity` and queues nothing when the seat's launch line cannot carry the
-conversation. A seat on a launcher gets the conversation on its resolved line. Before the stop,
+conversation. A seat on a launcher never runs its `launch:` text, so that text is not judged at
+queue time; the seat gets the conversation on its resolved line instead. Before the stop,
 the run checks that the final line, after launcher resolution, resumes exactly the requested
 conversation. If it does not, the run ends `restart.continuity` and nothing is stopped. When the
 CLI itself then refuses the resume, no fresh conversation is started: the run ends

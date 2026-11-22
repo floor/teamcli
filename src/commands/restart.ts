@@ -2802,9 +2802,11 @@ function queueSelfRestart(out: Io, json: boolean, input: {
     return 1;
   }
   // A self-restart resumes or does not run: a line that cannot carry the conversation is refused
-  // now, and the daemon's run checks the final resolved line again before the stop.
-  const carried = resumeCarry(declared.cli, declared.launch, held.agent_session);
-  if (carried.kind === 'refuse') {
+  // now. A seat on a launcher never runs its `launch:` text (the launcher's resolved line is the
+  // one it runs, and the plan carries the conversation onto it), so that text is not judged
+  // here; the daemon's run checks the final resolved line before the stop for every seat.
+  const carried = declared.launcher !== undefined ? null : resumeCarry(declared.cli, declared.launch, held.agent_session);
+  if (carried !== null && carried.kind === 'refuse') {
     refuse(out, json, 'restart', {
       id: 'restart.continuity',
       message: `${name}: its launch line cannot resume its conversation ${held.agent_session} (${carried.why}); a self-restart never starts a fresh one, so nothing was queued`,

@@ -1359,6 +1359,16 @@ describe('team restart <seat>', () => {
     expect(await runRestart(['worker', '--self'], io, sources)).toBe(1);
     expect(io.err).toContain('a self-restart never starts a fresh one, so nothing was queued');
     expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
+    // On a launcher the `launch:` text is never run, so the same legacy line queues fine.
+    const onLauncher = makeFixture(yaml.replace('--session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n', '--session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n    launcher: claude-code\n    cwd: .\n'));
+    updateState(onLauncher.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+      } as never;
+    });
+    const launcherIo = testIo(onLauncher.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+    expect(await runRestart(['worker', '--self'], launcherIo, makeHarness(onLauncher).sources), launcherIo.err).toBe(0);
+    expect(existsSync(selfRestartPath(onLauncher.dir, 'acme', 'worker'))).toBe(true);
   });
 
   test('--self for another seat\'s pane is refused: no seat queues another\'s restart', async () => {

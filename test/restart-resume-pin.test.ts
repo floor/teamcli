@@ -523,6 +523,19 @@ describe('team restart for a self-restart request', () => {
     expect(harness.ran[0]?.command).toContain('--resume sess-latest');
   });
 
+  test('a launcher seat whose unused launch: text sets a fixed --session-id still resumes', async () => {
+    const { fixture, harness } = scene((root) => YAML(root).replace(`  - ${root}\n`, `  - ${root}\n  - ${join(root, '..', 'work')}\n`).replace(
+      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
+      `    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5 --session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n    launcher: claude-code\n    cwd: ../work\n`,
+    ));
+    mkdirSync(join(fixture.root, '..', 'work'), { recursive: true });
+    const io = testIo(fixture.root, owner);
+    expect(await runRestart(['worker', '--resume', 'sess-latest'], io, harness.sources, { selfRequest: request }), io.err).toBe(0);
+    expect(harness.ran).toHaveLength(1);
+    expect(harness.ran[0]?.command).toContain('--resume sess-latest');
+    expect(harness.ran[0]?.command).not.toContain('0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b');
+  });
+
   test('a running turn, a failed stopping mark, or an unread screen at the last read defers it; nothing is stopped', async () => {
     const working = scene();
     working.harness.sources.screen = () => ({ kind: 'working' });
