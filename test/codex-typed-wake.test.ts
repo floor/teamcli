@@ -311,15 +311,16 @@ describe('team send: the Codex typed wake', () => {
     const io = owner(made.root);
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
     expect(withoutSendId(io.out)).toBe('team acme, session "acme"\nnative: delivered (typed wake)\n');
-    // One wake, one Enter, and the wake is the readable body itself: the sender header, then the
-    // message, drawn across the composer's rows; a short body needs no drops pointer.
-    expect(pane.typed).toEqual([
-      'owner · 2026-10-05 04:00Z · admitted: owner\n\nfrom the owner — admitted by: the owner\n\nhello',
-    ]);
-    expect(pane.enters).toBe(1);
     const drops = join(made.dir, 'send-drops', 'acme', 'native');
     const records = readdirSync(drops).filter((name) => !name.includes('.'));
     expect(records).toHaveLength(1);
+    // One wake, one Enter, and the wake is the readable body itself: the sender header, then the
+    // message, drawn across the composer's rows; a short body needs no drops pointer. A typed wake
+    // keeps the record's whole id on the body's last row, for `team reply` and `team ack`.
+    expect(pane.typed).toEqual([
+      `the owner · 2026-10-05 04:00Z · admitted: owner\n\nhello ↩ team reply ${records[0] as string}`,
+    ]);
+    expect(pane.enters).toBe(1);
     expect(recordBody(join(drops, records[0] as string))).toBe(filed('hello'));
     const history = readHistory('acme', made.root, host.home);
     expect(history.ok).toBe(true);

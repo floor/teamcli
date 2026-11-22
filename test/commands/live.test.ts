@@ -6328,12 +6328,17 @@ describe('team down, live', () => {
     expect(existsSync(lockFile())).toBe(false);
   });
 
-  test('a session that is not running takes no lock while another run holds one', async () => {
+  // An idle run still records the stop intent, and it does so under the session's run lock so it
+  // cannot interleave with a boot start (the lock across observation, proof and spawn). A lock a
+  // live run holds therefore refuses the idle run: it records nothing and leaves the lock as it was.
+  test('a session that is not running is refused, records nothing and keeps the lock, while another run holds it', async () => {
     const run = harness({ kind: 'idle' });
     hold(`${process.pid} 0a1b2c3d\n`);
     const io = testIo(root, { kind: 'owner' });
-    expect(await runDown(FILE, io, run.sourcesOf({ sessionRunning: () => false }))).toBe(0);
-    expect(io.out).toBe('session acme-web is not running: nothing to stop\n');
+    expect(await runDown(FILE, io, run.sourcesOf({ sessionRunning: () => false }))).toBe(1);
+    expect(io.out).toBe('');
+    expect(io.err).toContain(`another session-mutating run is holding session acme-web (pid ${String(process.pid)}`);
+    expect(run.stopped).toEqual([]);
     expect(readFileSync(lockFile(), 'utf8')).toBe(`${process.pid} 0a1b2c3d\n`);
   });
 

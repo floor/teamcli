@@ -101,8 +101,12 @@ test('a hint that becomes a typed draft between the two reads is not typed into'
 });
 
 test('other CLI profiles do not treat the declared grey as an empty box', () => {
+  // Muse's declared hint grey. Grok and Antigravity declare measured greys of their own (their
+  // empty-box hints, 2026-11-17); none of them declares Muse's.
+  const museGrey = screenData('muse')?.composer.placeholderFg ?? [];
+  expect(museGrey.length).toBeGreaterThan(0);
   for (const cli of OTHERS) {
-    expect(screenData(cli)?.composer.placeholderFg).toBeUndefined();
+    for (const grey of museGrey) expect(screenData(cli)?.composer.placeholderFg ?? []).not.toContain(grey);
     expect(readScreen(cli, HINT).kind).not.toBe('idle');
   }
   expect(readScreen('codex', CODEX_IDLE).kind).toBe('idle');
