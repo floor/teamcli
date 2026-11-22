@@ -6,7 +6,7 @@
 // own no-home rule seen through the handler: a caller that names no home proves no address, and
 // the conservative reading stands.
 import { afterAll, afterEach, expect, mock, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import * as realOs from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -53,6 +53,10 @@ afterEach(() => {
 function socketWorld(): { address: string } {
   const fixture = world(null, [{ name: 'plain', role: 'implementer' }]);
   made = fixture;
+  // The seat opts in to the socket in its team file (`inbound: accept`): the launch's own accept
+  // authorizes nothing alone.
+  const teamFile = join(fixture.dir, 'team.yaml');
+  writeFileSync(teamFile, readFileSync(teamFile, 'utf8').replace('    name: plain\n', '    name: plain\n    inbound: accept\n'));
   // The machine's home, the way config loading resolves it — `homedir()`, mocked above.
   fakeHome = fixture.home;
   const settings = cliHookSettingsPath(fixture.dir, 'acme', 'plain');

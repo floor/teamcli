@@ -225,7 +225,7 @@ describe('a seat read from its records', () => {
   test('an accepted cross-session socket with a recorded, standing address makes the seat push without any channel', () => {
     const { home } = socketSeat();
     const read_ = read({
-      declared: { cli: 'claude-code', launch: 'claude' },
+      declared: { cli: 'claude-code', launch: 'claude', inbound: 'accept' },
       state: { cli: 'claude-code', watcher: 'hook' },
       home,
     });
@@ -274,7 +274,7 @@ describe('a seat read from its records', () => {
     // the address choice a send makes dials it, so the class counts it.
     const pid = 812345;
     const { home } = socketSeat('helper', { pid });
-    const declared = { cli: 'claude-code', launch: 'claude' } as const;
+    const declared = { cli: 'claude-code', launch: 'claude', inbound: 'accept' } as const;
     const state = { cli: 'claude-code', watcher: 'hook' } as const;
     const inHand = { declared, state, home, sockets: [dir] };
     const owned = read({ ...inHand, processes: { shell: pid + 1, foreground: [pid] } });
@@ -349,14 +349,14 @@ describe('a seat read from its records', () => {
     // from the processes alone, so the class must count it: dispatch and daemon next skip only
     // what no route can wake.
     const pid = 812346;
-    const declared = { cli: 'claude-code', launch: 'claude' } as const;
+    const declared = { cli: 'claude-code', launch: 'claude', inbound: 'accept' } as const;
     const state = { cli: 'claude-code', watcher: 'hook' } as const;
     const processes = { shell: pid + 1, foreground: [pid] };
     mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
     writeFileSync(join(dir, 'hooks', 'acme', 'helper.json'), '{"crossSessionInbound":"accept"}\n');
     writeFileSync(join(dir, `${String(pid)}.sock`), '');
-    // No registry home at all: the launch's declaration is the only word, and the pane carries
-    // the socket the walk would dial.
+    // No registry home at all: the team file opts the seat in, the launch's declaration accepts,
+    // and the pane carries the socket the walk would dial.
     const noRecord = read({ declared, state, processes, sockets: [dir] });
     expect(noRecord.evidence.socket).toBe(true);
     expect(noRecord.class).toBe('push');
@@ -391,7 +391,7 @@ describe('a seat read from its records', () => {
     const declaration = declaredInboundOf({ dir, root: dir, session: 'acme', seat: 'helper', launch: 'claude' });
     recordHeldSocket(heldSocketPath(dir, 'acme', 'helper'), declaration, new Date());
     const held = read({
-      declared: { cli: 'claude-code', launch: 'claude' },
+      declared: { cli: 'claude-code', launch: 'claude', inbound: 'accept' },
       state: { cli: 'claude-code', watcher: 'hook' },
       home,
     });
@@ -409,7 +409,7 @@ describe('a seat read from its records', () => {
     const fresh = new Date(rewrote.getTime() + 1000);
     utimesSync(socket, fresh, fresh);
     const confirmed = read({
-      declared: { cli: 'claude-code', launch: 'claude' },
+      declared: { cli: 'claude-code', launch: 'claude', inbound: 'accept' },
       state: { cli: 'claude-code', watcher: 'hook' },
       home,
     });
