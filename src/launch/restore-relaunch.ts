@@ -138,8 +138,9 @@ export async function relaunchRestoredSeats(input: {
     }
     // A pane whose live process is not the recorded launch (a resume the restart rebind could not
     // prove) runs no launch line either: its record says so, as the re-tie would have, so the
-    // send walk, the reach check and this relaunch take it the same way.
-    if (held.channel_launch !== false && carriesChannel(seat)
+    // send walk, the reach check and this relaunch take it the same way. This describes the live
+    // process, whatever a later relaunch would carry, so it does not wait on relaunch eligibility.
+    if (held.channel_launch !== false
       && seatProcessVerdict(held.launched, sources.launch?.processInfo?.(session, held.pane) ?? null) === 'replaced') {
       updateState(dir, (state) => {
         const one = state.sessions[session]?.seats[seat.name];
