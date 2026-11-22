@@ -4,7 +4,8 @@
 // beside the facts a reader needs to see why: whether the seat's runtime endpoint is recorded
 // and whether a conversation is bound to it, whether a live inbox listener stands in its drop
 // folder, and how old its oldest unread drop is. `team send` refuses to spend a wake and a
-// dispatch pass on a seat whose class is `pull-on-turn` or `none`; a table that shows the class
+// dispatch pass on a seat whose class is `pull-on-turn` or `none` (a `typed-wake` seat is woken
+// by its profile's guarded typed wake); a table that shows the class
 // lets the owner see that before the message sits unread.
 //
 // It lives under src/status rather than in either command because `status.ts` imports `seats.ts`
@@ -17,7 +18,7 @@ import { seatMailDirIn } from '../queue/mail-tree.ts';
 
 /** What one row says about reaching its seat while it is idle. */
 export type SeatWake = {
-  /** The class a send measures: `push`, `between-turns`, `pull-on-turn` or `none`. */
+  /** The class a send measures: `push`, `between-turns`, `typed-wake`, `pull-on-turn` or `none`. */
   class: DeliveryClass;
   /** Whether a message can reach the seat while it sits idle (`wakeableWhileIdle`). */
   wakeable: boolean;

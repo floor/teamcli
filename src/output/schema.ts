@@ -315,7 +315,7 @@ const SEAT_WAKE_SCHEMA: JsonSchema = {
   additionalProperties: false,
   required: ['class', 'wakeable', 'conversation', 'endpoint', 'listener', 'unread', 'oldest_unread_seconds'],
   properties: {
-    class: { type: 'string', enum: ['push', 'between-turns', 'pull-on-turn', 'none'] },
+    class: { type: 'string', enum: ['push', 'between-turns', 'typed-wake', 'pull-on-turn', 'none'] },
     wakeable: { type: 'boolean' },
     conversation: { type: 'boolean' },
     endpoint: { type: 'boolean' },

@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { runSend } from '../src/commands/send.ts';
+import { runSend, sendDirect } from '../src/commands/send.ts';
 import { SUBMIT_ENTER } from '../src/herdr.ts';
 import { boxHoldsText } from '../src/launch/deliver.ts';
 import { listUnread } from '../src/mcp/inbox.ts';
@@ -218,6 +218,31 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     cleanups.push(made.cleanup);
     return made;
   }
+
+  test('the idle dispatch\'s direct-only send wakes an idle cursor seat with its typed wake', async () => {
+    const made = cursorWorld();
+    // The box draws the typed wake's rows: the header row, then the body under it.
+    const drawn = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => text.split('\n').map((row, at) => (at === 0 ? `  → ${row}` : `    ${row}`)).join('\n'));
+    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '')));
+    const host = fake(made, { agents: () => [{ name: 'cursor', pane: 'pane-cursor', cli: 'cursor-agent' }], typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result).toMatchObject({ route: 'typed', outcome: 'delivered' });
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(1);
+  });
+
+  test('a direct-only send whose recheck refuses types nothing into a cursor seat', async () => {
+    const made = cursorWorld();
+    const pane = wakeFake(() => IDLE_TASK);
+    const host = fake(made, { agents: () => [{ name: 'cursor', pane: 'pane-cursor', cli: 'cursor-agent' }], typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, {
+      seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task',
+      guard: () => ({ ok: false, why: 'the watch was replaced' }),
+    });
+    expect(run.result).toMatchObject({ route: 'typed', outcome: 'refused' });
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
 
   test('an unrecognised screen is never typed into, and the lead hears it once per episode with no screen content', async () => {
     const made = cursorWorld();

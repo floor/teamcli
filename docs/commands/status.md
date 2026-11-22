@@ -276,7 +276,9 @@ agent record a send would resolve are read from disk. `--json` rows carry no suc
 the plain table's alone.
 
 Every row ends with the WAKE cell, the delivery class a send measures — `push`, `between-turns`,
-`pull-on-turn` or `none` — marked with `!` when the seat cannot be woken while it is idle. The
+`typed-wake`, `pull-on-turn` or `none` — marked with `!` when the seat cannot be woken while it is
+idle. `typed-wake` is a seat no event adapter reaches whose profile declares a typed wake: a send
+or the idle dispatch types one trigger line into its empty composer, never over a draft. The
 facts that explain the class follow in parentheses: `endpoint, no bound conversation` when a
 managed endpoint is recorded and no conversation is bound to it, `inbox` when a live listener
 stands in the seat's drop folder, and `unread <age>` for the oldest unread drop. `team send`

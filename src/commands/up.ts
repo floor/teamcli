@@ -4096,6 +4096,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
           channel: read.evidence.channel,
           socket: false,
           endpoint: op.codexEndpoint !== undefined,
+          ...(read.evidence.typedWake ? { typedWake: true } : {}),
         }),
       };
     }
