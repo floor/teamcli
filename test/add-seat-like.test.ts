@@ -13,7 +13,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approvalOf } from '../src/approve/approval.ts';
+import { approvalOf, recordNamedSeatDigestsOf } from '../src/approve/approval.ts';
 import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { runAdd, USAGE, type AddSources } from '../src/commands/add.ts';
@@ -24,7 +24,7 @@ import { copySeat, seatIsStopped, takeOut } from '../src/file/lines.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { readState } from '../src/state.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, gitEnv, testIo, recordRenames } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T06:10:00Z');
@@ -663,5 +663,82 @@ describe('team add --request validates the whole add before recording a request 
     expect(requestFiles().filter((name) => name.endsWith('.json'))).toHaveLength(1);
     expect(readFileSync(teamPath(), 'utf8')).toBe(before);
     expect(made.creates).toEqual([]);
+  });
+});
+
+describe('a seat of an entity team is named at its add', () => {
+  /** The team as an entity's: the owner's entities file declares it, with the scene's names words. */
+  function asEntityTeam(names: string, extra = ''): void {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(home, '.config', 'team', 'entities.yaml'), `acme:\n  roots:\n    - ${home}\n${names}`);
+    approve(teamText().replace('project: acme\n', 'project: acme\nentity: acme\n').replace('  - ~/.config/team/lobby\n', '  - ~/.config/team/lobbies/acme\n') + extra);
+  }
+
+  test('the copy takes the first free pool name, written as nickname and label, and launches under it', async () => {
+    asEntityTeam('  names:\n    pool: [skip, Ada, Zed]\n');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['apprentice', '--like', 'builder'], io, sources(made)), io.out + io.err).toBe(0);
+    // `skip` is another seat's nickname in this team, so the list's next name is taken.
+    expect(io.err).toContain('team add: apprentice is named Ada\n');
+    const text = readFileSync(teamPath(), 'utf8');
+    expect(text).toContain('    name: apprentice\n    label: "Ada · implementer"\n');
+    expect(text).toContain('    nickname: Ada\n');
+    expect(made.creates).toEqual(['Ada · implementer']);
+  });
+
+  test('a name handed to an approved seat keeps the approval bound to it, so a delegate may still copy it', async () => {
+    asEntityTeam('  names:\n    pool: [Ada, Zed]\n', DELEGATES);
+    const named = testIo(project, owner);
+    expect(await runAdd(['spare'], named, sources(world())), named.out + named.err).toBe(0);
+    expect(named.err).toContain('team add: spare is named Ada\n');
+    // The approval followed the name: the delegated copy of the approved source is admitted.
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'spare'], io, sources(made, { delegateGate: () => passed })), io.out + io.err).toBe(0);
+    expect(made.creates).toEqual(['apprentice']);
+  });
+
+  test('the amendment applies only to the approval it was based on: a newer one is left as it is', () => {
+    asEntityTeam('  names:\n    pool: [Ada, Zed]\n');
+    const standing = approvalStanding(project, home);
+    const loaded = loadTeamFile(project, { home });
+    if (!loaded.ok || standing.kind !== 'verified') throw new Error('no approval');
+    const named = loadTeamFile(project, { home });
+    if (!named.ok) throw new Error('no team');
+    const after = { ...named.team, seats: named.team.seats.map((seat) => seat.name === 'spare' ? { ...seat, nickname: 'Ada', label: 'Ada · implementer' } : seat) };
+    // The owner approves again between the naming run's read and its amendment.
+    approve(readFileSync(teamPath(), 'utf8'));
+    const newer = recordBytes();
+    expect(recordNamedSeatDigestsOf(standing, loaded.team, after, project, ['spare'], home)).toEqual([]);
+    expect(recordBytes()).toBe(newer);
+    // Based on the approval in force, the same amendment applies.
+    const current = approvalStanding(project, home);
+    expect(recordNamedSeatDigestsOf(current, loaded.team, after, project, ['spare'], home)).toEqual(['spare']);
+  });
+
+  test('a seat edited beside its name stays drift: the approval does not follow it', async () => {
+    asEntityTeam('  names:\n    pool: [Ada, Zed]\n', DELEGATES);
+    // The live file gives spare a word the approval does not hold.
+    writeFileSync(teamPath(), readFileSync(teamPath(), 'utf8').replace(
+      '    name: spare\n    label: spare\n',
+      '    name: spare\n    label: spare\n    desktop_control: false\n',
+    ));
+    const named = testIo(project, owner);
+    expect(await runAdd(['spare'], named, sources(world())), named.out + named.err).toBe(0);
+    expect(named.err).toContain('team add: spare is named Ada\n');
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'spare'], io, sources(world(), { delegateGate: () => passed }))).toBe(1);
+    expect(io.err).toBe(DELEGATE_REFUSAL);
+  });
+
+  test('names.auto: off hands out no name, and a seat that has one keeps it', async () => {
+    asEntityTeam('  names:\n    auto: off\n');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['apprentice', '--like', 'builder'], io, sources(made)), io.out + io.err).toBe(0);
+    expect(io.err).not.toContain('is named');
+    expect(readFileSync(teamPath(), 'utf8')).not.toContain('nickname: Ada');
+    expect(made.creates).toEqual(['apprentice']);
   });
 });

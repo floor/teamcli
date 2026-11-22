@@ -68,6 +68,11 @@ A hold on the team ([team hold](hold.md)) is the last `note` line before the sum
 it. It is a note: the summary's counts do not move, and no exit changes. A hold past its `until`
 reads as none, so a lapsed one is not printed.
 
+A seat with no name, in a team whose entity writes `names.auto: off`, is a `note`: `seat "<seat>" has
+no name, and names.auto is off: team names fill names it, or team config set seats.<seat>.nickname
+<name>`. With `names.auto` on (the default) there is no note: the seat is named at its next launch
+or by [`team names fill`](names.md). Like a hold, it moves no count and changes no exit.
+
 A general grant whose op list is the wildcard (`*`) reaches every op, including ops that shipped
 after the grant was signed. When such a grant reaches ops that first shipped after its signing,
 doctor prints one `note` finding per grant, naming the ops it now reaches and the day it was

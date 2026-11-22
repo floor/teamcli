@@ -619,6 +619,71 @@ and a record that writes none keeps every approval it had. The name is shown in 
 `team status --all` (the `NICKNAME` column, and the `nickname` field of their JSON) and in
 `team send --list`.
 
+### Names handed out
+
+Every seat of an entity's team has a name: a seat whose record writes no `nickname`, and whose
+label is not of the form `<Name> · <role>`, is handed one. A label with no middle dot
+(`Gemini tester`) is a description, not a name. Three words in the entity's entry
+of the owner's `entities.yaml` decide how, each set with
+[`team config set <entity>.names.<key>`](commands/config.md):
+
+```yaml
+acme:
+  names:
+    unique: entity     # how far apart nicknames stay: entity (default), project, team or off
+    auto: on           # on (default): a seat with no name is named at team add and team up
+    pool: greek-myth   # where names come from: a built-in pool, or a list
+    # pool: [Ada, Grace, Linus]
+```
+
+- `auto: on` (the default) names a seat at its [`team add`](commands/add.md) (and
+  `team seat add`), and at [`team up`](commands/up.md) every unnamed seat of the team gets a
+  name, whether or not this run starts it (a stopped or already running seat too; with
+  `team up <seat...>`, every unnamed seat it names), before anything launches. `off` hands out none at a launch; [`team doctor`](commands/doctor.md) then notes each
+  seat with no name, and [`team names fill`](commands/names.md) still names them when asked.
+- `pool` is `greek-myth` (the built-in pool, about 150 short names of heroes, seers, nymphs, muses,
+  titans and gods; the default) or a YAML list of names, read in its written order. Each name takes
+  the nickname's characters; `lead` and `daemon` are never handed out.
+- The name is the first in the pool, in order, that no seat of the team carries (as a name, a
+  nickname or a label's persona). A name another registered team already carries is passed over
+  while the pool has another; past that, `unique` is the rule, as for a name set by hand. The
+  seats are named in file order, so the same registry always hands out the same names.
+- The name is written as a manual one is — `nickname: <Name>` and `label: "<Name> · <role>"`,
+  keeping the part after a written label's middle dot, or a label with no dot whole
+  (`Gemini tester` becomes `<Name> · Gemini tester`) — through the same validated writer, and
+  checked against `unique` like any new nickname. A seat that has a nickname, or a label
+  `<Name> · <role>` whose name part is not its own seat name, is never renamed. A `human` seat and a counted entry are not named. The lead is named
+  like any seat: "never lead" is the word `lead`, which no nickname takes.
+- `nickname` and `label` are part of the seat's approval digest. A handed-out name moves the
+  approval with it only when the seat's stanza is otherwise exactly what was approved (a `stopped`
+  mark an add clears aside): the seat's digest is re-recorded, so a delegated `team add` of that
+  seat, or a copy from it, still matches. A seat edited beside its name stays drift, as any edit
+  does. The amendment re-reads the approval under the approval's own lock — keyed by the checkout root,
+  as the generation is — and applies only if
+  it is still the one the run judged (the same generation); an approval the owner changed or
+  revoked meanwhile is left as it is, and the name reads there as drift. A nickname set by hand
+  with `team config set` still needs a new approval.
+- The pick and the write are one transaction under the registry's teams lock, the lock every
+  naming write (including `team config`'s) takes: two runs in two checkouts cannot both take one
+  name. The name is published in that same transaction: a team the registry already holds shows
+  it through its record, and a first run, which registers its row only later, through a claim in
+  `~/.config/team/name-claims.json` that every pick reads. A name any copy of a registered team shows —
+  its stored registry record, its team file (only where the file is the team's active source; a
+  registry-backed team's leftover file from its import holds nothing) or its roster — is held, so a copy that lags never
+  frees a name another copy carries. A claim counts until one of those copies shows that name for
+  that seat, and for a day at most; a claim whose team is archived, or whose seat no copy declares
+  any more, is released. Every naming lock retires the claims no longer in force from the file. An add whose name was
+  taken while it checked is refused (`add.name-taken`), and the next add picks the next free name.
+  A `team config` write whose record changed after it was read — an edit left open while a name
+  was handed out, say — is refused (`config.changed`) and writes nothing; an editor's draft is
+  kept, and the refusal names where.
+- A pool word that names no built-in pool — `constructor` included — hands out nothing and says
+  so; it never stops a launch.
+- A run that cannot hand out a name says why on stderr and goes on: a launch never waits for a
+  name. A delegated add, a client or restore run, `team up --retie` and a run aimed with
+  `--file` write no record, so they name nobody.
+- A team that names no entity has no entry to read, so no launch names its seats.
+
 A name's trailing digits are its number, read as a number rather than as text: `builder-9` sorts
 before `builder-10` and `builder-100`, and the next free one is the next integer. Two seats of one
 role whose names carry one number at different widths — `builder-1` and `builder-01` — are one seat

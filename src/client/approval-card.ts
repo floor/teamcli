@@ -151,7 +151,7 @@ export function ownerActionChange(action: string, words: readonly string[] | und
 
 /** The last key of an entity path, as a short form names it: `root`, `names.unique`, `rules`. */
 function keyOfPath(path: string): string {
-  if (path.endsWith('.names.unique')) return 'names.unique';
+  for (const key of ['names.unique', 'names.auto', 'names.pool']) if (path.endsWith(`.${key}`)) return key;
   const last = path.split('.').pop() ?? '';
   return /^[a-z][a-z.]{0,31}$/.test(last) ? last : 'the key';
 }
@@ -326,7 +326,7 @@ function whatOf(action: string, words: readonly string[] | undefined): string {
   }
   if (action === 'team-entity-config') {
     const path = words?.[1] ?? '';
-    const key = path.endsWith('.names.unique') ? 'names'
+    const key = /\.names\.(unique|auto|pool)$/.test(path) ? 'names'
       : path.endsWith('.worktrees') ? 'worktrees'
         : path.endsWith('.root') ? 'root'
           : path.endsWith('.reminders') ? 'reminders'

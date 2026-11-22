@@ -53,11 +53,15 @@ team runs.
 | the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
 | a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
 
-## The entity's and project's records: names.unique, reminders, rules, and root
+## The entity's and project's records: names, reminders, rules, and root
 
     team config get <entity>.names.unique [--json]
     team config set <entity>.names.unique <word>
     team config set <entity>.names.unique <word> --general <grant.json> --key <client.key> [--json]
+    team config get <entity>.names.auto [--json]
+    team config set <entity>.names.auto on|off
+    team config get <entity>.names.pool [--json]
+    team config set <entity>.names.pool <pool>|<yaml list>
     team config get <entity>.reminders [--json]
     team config set <entity>.reminders <yaml list>
     team config set <entity>.reminders <yaml list> --general <grant.json> --key <client.key> [--json]
@@ -73,7 +77,7 @@ team runs.
     team config set <entity>.worktrees <folder> [--dry-run] [--json]
     team config unset <entity>.worktrees [--dry-run] [--json]
 
-A path whose last segment is `names.unique` or `reminders` names one key of an entity's own
+A path whose last segment is `names.unique`, `names.auto`, `names.pool` or `reminders` names one key of an entity's own
 entry, not the team's record. Both live with the rest of the entry in the owner's entities file
 (`~/.config/team/entities.yaml`), and the form reads no team, so it runs outside a checkout and
 the entity name may itself carry dots (the last segment is the key). Likewise, `<entity>.rules`
@@ -105,6 +109,13 @@ refusals and the same door as `<entity>.root`, and `unset` puts it back to `<roo
 `<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
 every team of the entity), `project` (within one project), `team` (within one team) or `off`.
 [`team init`](init.md) and the nicknames `team config set` places on a seat's label read it.
+
+`<entity>.names.auto` (`on`, the default, or `off`) says whether a seat with no nickname is handed
+one at `team add` and `team up`, and `<entity>.names.pool` where it comes from: `greek-myth` (the
+built-in pool, the default) or a one-line YAML list of names, read in order — `[Ada, Grace]`. A
+pool word that names no built-in pool, a list item a nickname cannot be, or an auto word other than
+`on` and `off` is refused, and nothing is written. Neither has an unset: set the default instead.
+See [Names handed out](../team-file.md#names-handed-out) and [`team names fill`](names.md).
 
 `<entity>.reminders` is the list [`team daemon`](daemon.md) fires: one YAML list of reminders,
 each a `name`, at least one `at` time and the seats it addresses `to`, with an optional `zone`,

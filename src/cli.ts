@@ -83,6 +83,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   projects: () => import('./commands/projects.ts'),
   policy: () => import('./commands/policy.ts'),
   rename: () => import('./commands/rename.ts'),
+  names: () => import('./commands/names.ts'),
   config: () => import('./commands/config.ts'),
   settings: () => import('./commands/settings.ts'),
   swap: () => import('./commands/swap.ts'),

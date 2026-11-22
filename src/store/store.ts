@@ -8,6 +8,7 @@ import { canonicalRecord, teamRecordOf } from '../file/canonical-record.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { withLock } from '../state.ts';
 import { parseYaml } from '../yaml.ts';
 import { bumpGeneration, generationPath, generationPresence, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
@@ -612,6 +613,40 @@ export function writeApproval(
   seats: readonly LedgerEntry[],
   home: string = homedir(),
   now: Date = new Date(),
+): number {
+  return withApprovalLock(record.approval.root, home, () => writeApprovalLocked(store, record, seats, home, now));
+}
+
+/** The approval locks this process holds, by lock folder: a signer inside a locked amendment
+ *  takes it again without waiting on itself. */
+const approvalLocksHeld = new Set<string>();
+
+/**
+ * The approval's own lock, keyed as the generation is — by the checkout root
+ * (src/store/keys.ts:generationPath), not by the project-named store — so every signing that
+ * advances one root's generation is one at a time, whichever store it writes: `writeApproval`
+ * and an amendment that reads the record it amends. One lock folder per root under
+ * `~/.config/team/approval-locks/`. Re-entrant inside one synchronous call.
+ */
+export function withApprovalLock<T>(root: string, home: string, work: () => T): T {
+  const folder = join(home, '.config', 'team', 'approval-locks', basename(generationPath(root, home), '.json'));
+  if (approvalLocksHeld.has(folder)) return work();
+  return withLock(folder, () => {
+    approvalLocksHeld.add(folder);
+    try {
+      return work();
+    } finally {
+      approvalLocksHeld.delete(folder);
+    }
+  });
+}
+
+function writeApprovalLocked(
+  store: string,
+  record: ApprovalRecord,
+  seats: readonly LedgerEntry[],
+  home: string,
+  now: Date,
 ): number {
   const key = keyOf(home);
   // Signed over the canonical team record, never the text: a file whose keys are reordered

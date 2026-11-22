@@ -870,10 +870,26 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     expect({ temps: readdirSync(scene.dropDir).filter((name) => name.endsWith('.new')), detail })
       .toEqual({ temps: [], detail });
 
+    // A manual reader that lost can also meet the winner's read claim while the receipt is being
+    // published: it then shows the message as not shown, with `run team messages again in a
+    // moment`, and exits 1 — the product's own answer for that window, not a second body. Which
+    // window a loser lands in is the scheduler's choice, so the scene takes the product's own
+    // repair: that refusal and nothing else, then the run again, which must settle to the
+    // receipt, show no body, and exit 0. Every other outcome still fails below.
+    let manualSettled = manualResult;
+    if (manualResult.code === 1 && !manualResult.out.includes(BODY)) {
+      expect({ handing: manualResult.out.includes(`${ID} was not shown: another reader is handing it over`), stderr: manualResult.err, detail })
+        .toEqual({ handing: true, stderr: '', detail });
+      const again = await runInBackground(messagesChild(base), [scene.found, home, barrier]);
+      manualSettled = JSON.parse(again.out) as typeof manualResult;
+      expect({ again: manualSettled.out.includes(BODY), handing: manualSettled.out.includes('another reader is handing it over'), detail })
+        .toEqual({ again: false, handing: false, detail });
+    }
+
     // Every exit is last, so a refusal reaches the gate checks above before it fails a run.
     expect({
-      manualProduct: manualResult.code,
-      manualStderr: manualResult.err,
+      manualProduct: manualSettled.code,
+      manualStderr: manualSettled.err,
       manualProcess: manualRun.code,
       automaticProcess: automaticRun.code,
       detail,

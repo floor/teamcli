@@ -155,10 +155,17 @@ source's last field, takes the source's fields and the title `<name>`, drops its
 `count:` (a counted source is split first), and leaves the source's comments and blank lines where
 they are. The name must be one the file does not declare, and the source one it does. A copy the
 file's own validation refuses — one that repeats the source's `leads`, `assistant` or nickname —
-stops before anything is written or launched. An add never sets a new nickname for the entity's
-`names.unique` word to hold: a plain `team add` writes `label: <name>`, the seat's own name, and a
-copy repeats the source's `nickname:` line, which that same file check refuses as a duplicate. The
-record keeps its own bytes.
+stops before anything is written or launched. A plain `team add` writes `label: <name>`, the seat's
+own name, and a copy repeats the source's `nickname:` line, which that same file check refuses as a
+duplicate. The record keeps its own bytes.
+
+A seat of an entity's team that has no name is handed one in the same write while the entity's
+`names.auto` is on (the default): the first free name of its `names.pool`, written as
+`nickname: <Name>` and `label: "<Name> · <role>"`, held to the `names.unique` word as a name set by
+hand is, and said as `team add: <seat> is named <Name>` once the record carries it. The seat
+launches under that title. A seat that has a nickname keeps it, a delegated add names nobody, and a
+name that cannot be handed out is said and never stops the add. See
+[Names handed out](../team-file.md#names-handed-out).
 
 `--until` accepts one of two ends, and nothing else.
 

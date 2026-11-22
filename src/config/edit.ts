@@ -34,7 +34,7 @@ import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.t
 import { validateTeamFile } from '../file/validate.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { nicknameChangeGate } from '../registry/names.ts';
+import { claimNames, nicknameChangeGate, withNamingLock } from '../registry/names.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { refreshRoster } from '../registry/sync.ts';
@@ -364,10 +364,48 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     return 0; // exit: config.planned
   }
   const now = sources.now;
-  const wrote = writeTeamText(file, next, {
-    home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}),
-    audit: { caller: callerOf(rawIo), rule: auditRule, ...(auditClient === undefined ? {} : { client: auditClient }) },
+  // A nickname this write brings is checked again and written in one transaction under the
+  // naming lock (src/registry/names.ts:withNamingLock): a name another checkout took between the
+  // check above and this write is refused, never published twice.
+  const locked = withNamingLock(home, () => {
+    // The record as it stands now, against the text this edit started from: a write that landed
+    // meanwhile — a handed-out name, another edit — is never overwritten by a stale draft.
+    let disk: string | null = null;
+    try {
+      disk = readTeamText(file, { home, env });
+    } catch {}
+    if (disk !== text) return { conflict: true as const };
+    if (namesAfter.ok) {
+      const again = validateTeamFile(text, { home, root });
+      const names = nicknameChangeGate({ home, teamId: teamIdOf(root), root, before: again.ok ? again.team : null, after: namesAfter.team });
+      if (!names.ok) return { taken: names.message };
+    }
+    const wrote = writeTeamText(file, next, {
+      home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}),
+      audit: { caller: callerOf(rawIo), rule: auditRule, ...(auditClient === undefined ? {} : { client: auditClient }) },
+    });
+    // A nickname this write brings is claimed before the lock is released (claimNames).
+    if (wrote.ok && namesAfter.ok) {
+      const was = validateTeamFile(text, { home, root });
+      claimNames({ home, root, before: was.ok ? was.team : null, after: namesAfter.team, ...(now !== undefined ? { now: now() } : {}) });
+    }
+    return wrote;
   });
+  if ('conflict' in locked) {
+    refuse(io, json, 'config', {
+      id: 'config.changed',
+      message: `${where} changed while this ${verb === 'edit' ? 'edit was open' : 'change was checked'}, and nothing was written${kept !== null ? `; your edit is kept at ${kept}` : ': run it again on the record as it is now'}`,
+      repair: null,
+    });
+    // exit: config.changed
+    return 1;
+  }
+  if ('taken' in locked) {
+    refuse(io, json, 'config', { id: 'config.name-taken', message: locked.taken, repair: null });
+    // exit: config.name-taken
+    return 1;
+  }
+  const wrote = locked;
   if (!wrote.ok) {
     const said = wrote.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
     refuse(io, json, 'config', {

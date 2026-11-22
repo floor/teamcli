@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approvalOf } from '../src/approve/approval.ts';
+import { approvalDifferencesOf, approvalOf } from '../src/approve/approval.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
@@ -22,7 +22,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { parseModelRule } from '../src/policy/model-rule.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, testIo, recordRenames } from './helpers.ts';
 
@@ -301,6 +301,59 @@ describe('up and add under the entity model rule', () => {
     expect(live.labels).toEqual(['lead', 'worker']);
   });
 
+  test('up names a seat with no name before it launches it, and a run aimed at a file names none', async () => {
+    setRule(home, ALLOWED);
+    const aimed = await up([], world());
+    expect(aimed.code).toBe(0);
+    expect(aimed.labels).toEqual(['lead', 'worker']);
+    const made = world();
+    const io = testIo(root, OWNER);
+    const code = await runUp([], io, {
+      sessionRunning: () => made.session === 'running',
+      sessionState: () => made.session,
+      agents: () => [],
+      home,
+      now: () => NOW,
+      launch: made.launch,
+    });
+    expect(code, io.out + io.err).toBe(0);
+    // The lead is the team's lead, and "never lead" is the word, not the seat: it is named too.
+    expect(io.err).toContain('team up: lead is named Perseus\nteam up: worker is named Jason\n');
+    expect(made.labels).toEqual(['Perseus · coordinator', 'Jason · implementer']);
+    const text = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
+    expect(text).toContain('    nickname: Jason\n');
+    expect(text).toContain('    label: "Jason · implementer"\n');
+    // The approval followed the names and nothing else: the named file still matches it.
+    const standing = approvalStanding(root, home);
+    expect(standing.kind).toBe('verified');
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok || standing.kind !== 'verified') throw new Error('the named file does not load');
+    expect(approvalDifferencesOf(standing, loaded.team, home)).toEqual([]);
+  });
+
+  test('up names every unnamed seat of the team, also a stopped seat this run does not start', async () => {
+    setRule(home, ALLOWED);
+    // The worker is stopped: this up starts the lead alone.
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('    name: worker\n', '    name: worker\n    stopped: true\n'));
+    const made = world();
+    const io = testIo(root, OWNER);
+    const code = await runUp([], io, {
+      sessionRunning: () => made.session === 'running',
+      sessionState: () => made.session,
+      agents: () => [],
+      home,
+      now: () => NOW,
+      launch: made.launch,
+    });
+    expect(code, io.out + io.err).toBe(0);
+    expect(made.labels).toEqual(['Perseus · coordinator']);
+    expect(io.err).toContain('team up: worker is named Jason\n');
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('    nickname: Jason\n');
+    expect(text).toContain('    label: "Jason · implementer"\n');
+  });
+
   test('up judges the line a restored seat will run, not the file\'s own', async () => {
     // The file's worker names an allowed lab; the registry's recorded launch — the line a fresh
     // launch of this restored seat runs — names a refused one. The rule's word follows the line.
@@ -406,7 +459,8 @@ describe('up and add under the entity model rule', () => {
     const added = await add(['worker'], world());
     expect(added.code).toBe(0);
     expect(added.err).not.toContain('model rule');
-    expect(added.labels).toEqual(['worker']);
+    // The seat had no name: its entity handed it the pool's first, and it launched under it.
+    expect(added.labels).toEqual(['Perseus · implementer']);
   });
 });
 

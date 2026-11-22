@@ -276,6 +276,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it prints one value of the team\'s record and changes nothing, as reading the team file did',
     },
+    names: {
+      kind: 'any-caller',
+      why: 'with no subcommand it only prints its usage; fill carries its own gate',
+    },
+    'names:fill': {
+      kind: 'owner-only',
+      why: 'filling names writes the team\'s record through `team config edit`, which is the owner\'s (a charter or dev mode admits it as it admits that edit); a dry run reads and changes nothing',
+    },
     'development-mode': {
       kind: 'any-caller',
       why: 'it reads the machine development mode and, with `--show` or `--dry-run`, prints the owner-authorization fingerprint for the switch; it changes nothing and asks for no team file, seat or terminal',

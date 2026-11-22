@@ -3,7 +3,7 @@ import { claudeTokenSeats } from '../settings/claude-auth-policy.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce, recordNamedSeatDigestsOf, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
 import { admitGeneral } from '../client/general-grant.ts';
@@ -21,6 +21,9 @@ import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { validateTeamFile } from '../file/validate.ts';
+import { autoNamedText, claimNames, namesAutoOf, unnamedSeat, withNamingLock } from '../registry/names.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -4258,6 +4261,69 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
     });
     // exit: up.run-lock
     return 1;
+  }
+  // At team up, every unnamed seat of the team gets a name, whether or not this run starts it —
+  // a stopped or already running seat too (with `<seat...>`, every unnamed seat the run names):
+  // the first free name of its entity's pool, written as a manual name is
+  // (src/registry/names.ts:autoNamedText), and this run's labels and session names read it. Only
+  // the team's own record, on an admitted run past every refusal: a delegated, client, retie or
+  // restore run, or one aimed at another file, writes no record, and a name that cannot be handed
+  // out never stops the launch. No lock, read or registry re-read at all unless the entity hands
+  // out names and a seat in scope has none: an ordinary up pays nothing for the step.
+  if (delegated === null && clientUp === null && !retie && internal?.restore !== true && args.values.file === undefined
+    && namesAutoOf(sources.home, team.entity).auto
+    && team.seats.some((seat) => unnamedSeat(seat) && (!scoped || scopedSeats.has(seat.name)))) {
+    const file = join(root, TEAM_FILE);
+    // The pick and the write are one transaction under the registry's teams lock, which every
+    // naming write takes: no other checkout can take the same name between the two.
+    const { named, wrote } = withNamingLock(sources.home, () => {
+      let current: string | null = null;
+      try {
+        current = readTeamText(file, { home: sources.home });
+      } catch {}
+      const planned = current === null ? null : autoNamedText({ home: sources.home, root, text: current, ...(scoped ? { only: [...scopedSeats] } : {}) });
+      if (planned === null || planned.assignments.length === 0) return { named: planned, wrote: null };
+      const wrote = writeTeamText(file, planned.text, {
+        home: sources.home, command: 'up', ...(sources.now !== undefined ? { now: sources.now } : {}),
+        audit: { caller, rule: ownerToken || ownerSeat ? 'owner-seat' : 'owner-or-leads' },
+      });
+      // The names are claimed before the lock is released (src/registry/names.ts:claimNames).
+      const was = validateTeamFile(current as string, { home: sources.home, root });
+      const now = validateTeamFile(planned.text, { home: sources.home, root });
+      if (wrote.ok && now.ok) claimNames({ home: sources.home, root, before: was.ok ? was.team : null, after: now.team, ...(sources.now !== undefined ? { now: sources.now() } : {}) });
+      return { named: planned, wrote };
+    });
+    if (named !== null && wrote !== null) {
+      if (wrote.ok) {
+        const before = team;
+        const byName = new Map(named.assignments.map((assignment) => [assignment.seat, assignment]));
+        team = {
+          ...team,
+          seats: team.seats.map((seat) => {
+            const assignment = byName.get(seat.name);
+            return assignment === undefined ? seat : { ...seat, nickname: assignment.nickname, label: assignment.label, labelWritten: true as const };
+          }),
+        };
+        for (const planned of seats) {
+          const seat = team.seats.find((one) => one.name === planned.name);
+          if (seat === undefined || !byName.has(seat.name)) continue;
+          planned.label = workspaceLabel(seat);
+          planned.sessionName = seatSessionName(seat, {
+            team: teamIdOf(root),
+            teamName: team.project,
+            mode: senderNameModeFor({ home: sources.home, root, seat: seat.name, file: team }),
+            seats: team.seats,
+          });
+        }
+        // The approval follows the name and nothing else (src/approve/approval.ts).
+        recordNamedSeatDigestsOf(standing, before, team, root, named.assignments.map((assignment) => assignment.seat), sources.home);
+        for (const assignment of named.assignments) stderrLine(`team up: ${plainText(assignment.seat)} is named ${plainText(assignment.nickname)}\n`);
+      } else {
+        stderrLine(`team up: no name handed out: ${plainText(wrote.errors.map((problem) => problem.message).join('; '))}\n`);
+      }
+    } else if (named?.problem) {
+      stderrLine(`team up: no name handed out: ${plainText(named.problem)}\n`);
+    }
   }
   const refreshAddresses = (): void => {
     // Refresh existing live seats before the launch pass. A reboot can leave a null or old

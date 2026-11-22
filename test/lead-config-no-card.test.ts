@@ -435,10 +435,11 @@ describe('team add under the same lift', () => {
     const io = testIo(at.root, LEAD);
     io.env = {};
     expect(await runAdd(['apprentice', '--like', 'builder'], io, addSources(at, made)), io.out + io.err).toBe(0);
-    // f02bd84b3: a placed own-team lead is admitted with no dev-lift warning.
-    expect(io.err).toBe('');
+    // f02bd84b3: a placed own-team lead is admitted with no dev-lift warning; the one line is the
+    // name the new seat was handed (its entity hands out names).
+    expect(io.err).toBe('team add: apprentice is named Perseus\n');
     expect(readFileSync(at.file, 'utf8')).toContain('    name: apprentice\n');
-    expect(made.creates).toEqual(['apprentice']);
+    expect(made.creates).toEqual(['Perseus · implementer']);
     expect(logOf(at)).not.toContain('dev mode continues');
     expect(cards(at.home)).toEqual([]);
   });

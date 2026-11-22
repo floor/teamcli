@@ -51,12 +51,14 @@ reach makes the command rewrite the record whole, which does not keep its commen
 command says so on stderr (comments_kept: false in --json). edit keeps the comments it
 leaves.
 
-A path whose last segment is names.unique, reminders, root or worktrees names one key of an
-entity's own record in the owner's entities file (<entity>.names.unique, <entity>.reminders,
-<entity>.root, <entity>.worktrees). root is the folder the entity's projects sit directly under on
+A path whose last segment is names.unique, names.auto, names.pool, reminders, root or worktrees
+names one key of an entity's own record in the owner's entities file (<entity>.names.unique,
+<entity>.names.auto, <entity>.names.pool, <entity>.reminders, <entity>.root, <entity>.worktrees). root is the folder the entity's projects sit directly under on
 this machine, an absolute path or ~/…; worktrees is the folder its worktrees sit in, <root>/worktrees
 unless set. A team record names them as {root} and {worktrees}, and unset removes either. names.unique is how far
-apart seat nicknames stay — entity, project, team or off. reminders is the list the reminder
+apart seat nicknames stay — entity, project, team or off. names.auto (on or off, on by default) is
+whether a seat with no nickname takes one at team add and team up, and names.pool is where it is
+drawn from: a built-in pool (greek-myth, the default) or a YAML list of names, in order. reminders is the list the reminder
 chore fires: each item is {name, at, zone, catchUp, text, to}, the same shape the daemon reads.
 A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
 only, so one that lists entities is refused until 0.5.11, and the grant's operations must admit
@@ -71,7 +73,7 @@ parser would read it; an empty list ([]) clears the entity's reminders, and ther
 
 Exits 0 when the registry or a value is printed or a change is written (or there was
 nothing to change), 1 when the path holds nothing, the caller is not the owner, the
-names.unique word is not one of the four, the reminders value is not a YAML list or is one the
+names.unique, names.auto or names.pool value is not one it takes, the reminders value is not a YAML list or is one the
 daemon would refuse, the entities file declares no such entity, or the change does not validate,
 2 when the invocation is invalid, no team is found, the entities file cannot be read, or the
 editor fails.
@@ -129,6 +131,8 @@ export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSource
     if (
       verb !== 'edit' &&
       (entityPath.endsWith('.names.unique') ||
+        entityPath.endsWith('.names.auto') ||
+        entityPath.endsWith('.names.pool') ||
         entityPath.endsWith('.reminders') ||
         (entityPath.endsWith('.rules') && entityPath.includes('.')) ||
         (await isEntityRootPath(entityPath)))
