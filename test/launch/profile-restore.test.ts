@@ -135,7 +135,7 @@ async function nameJules(scene: JulesScene) {
   const steps: Step[] = [{
     kind: 'wait',
     text: `name ${SEAT}`,
-    do: { do: 'rename', seat: SEAT, label: 'Lynceus · tester 1', cli: 'jules', seconds: 10, rules: 'option', pane: PANE },
+    do: { do: 'rename', seat: SEAT, label: 'Tester · tester 1', cli: 'jules', seconds: 10, rules: 'option', pane: PANE },
   }];
   const report = await executePlan(steps, 'teamcli', host);
   return { reports, renames, records, report };

@@ -171,7 +171,7 @@ with mail waiting, before the lead is told the seat is stuck; the tempo never sc
 The `unread_after` figure is the section's: the unread window in
 force for a seat is the file's word when it moved the section, else the seat's delivery-class
 default — 30 s for a seat a message can wake while it is idle, 60 s for a typed or pull-only
-seat (ADR `zeus-message-path`, D2). The machine's
+seat (ADR `architect-message-path`, D2). The machine's
 readings, checks 11 to 14, are logged every ten minutes: `READINGS_EVERY` is 600 s
 (`src/commands/watch.ts`).
 
@@ -265,7 +265,7 @@ held-send retry and the unread wake.
 - **The unread wake**: a message still without a signed receipt after the seat's unread window
   — the file's `watch.unread_after` when it moved the section, else the class default, 30 s for
   a seat a message can wake while it is idle and 60 s for a typed or pull-only seat (ADR
-  `zeus-message-path`, D2) — gets the next leg down the cascade below the one the send's first
+  `architect-message-path`, D2) — gets the next leg down the cascade below the one the send's first
   history line names. A seat that declares a webhook adapter is posted the signed record before
   any pane is looked for; a post the adapter took writes the message's second history line,
   `via: webhook` with `delivered`, and the pass types nothing. Only a definite failure before
@@ -282,7 +282,7 @@ held-send retry and the unread wake.
   `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. A socket
   delivery's re-wake is the ruling's exception: it fires once, and the line it types names the
   message its frame carried — `ack <id> or reply` — because `team reply <id>` answers and marks
-  it read and `team ack <id>` marks it read with no answer (ADR `zeus-message-path`, D3). An
+  it read and `team ack <id>` marks it read with no answer (ADR `architect-message-path`, D3). An
   attempt that does not land keeps its reservation spent rather than giving it back: no later
   pass types the line again and no retry ledger is written for it, so the report at twice the
   window is the only voice left. A pass that could not attempt the wake at all — no seam bound —

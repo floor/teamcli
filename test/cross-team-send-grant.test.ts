@@ -626,7 +626,7 @@ describe('the general door', () => {
 });
 
 describe('held-send notices respect the original sender admission', () => {
-  // SKIPPED 2026-11-12 (Atlas): this scene makes its hold with model drift, and since 3b8ec1a2f
+  // SKIPPED 2026-11-12 (orchestrator): this scene makes its hold with model drift, and since 3b8ec1a2f
   // ("deliver permitted recipient model drift with warnings", docs/commands/send.md) drift alone
   // no longer holds a send: it is delivered or kept with a drift notice to the lead, and only a
   // model the entity rule disallows is refused (plainly, not held). The held-notice machinery is

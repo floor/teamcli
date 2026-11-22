@@ -336,6 +336,30 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'the help text reads no team file and asks for no caller',
     },
+    queues: {
+      kind: 'owner-only',
+      why: 'every verb but status changes what every seat of the root does: the owner, or the owner\'s dev-mode admission for a placed lead, as the daemon\'s rows; status states its own row',
+    },
+    'queues:status': {
+      kind: 'any-caller',
+      why: 'the report reads the root\'s floor state, the reader switch and each seat queue\'s check; it drains, signs and moves nothing and asks for no caller',
+    },
+    'queues:activate': {
+      kind: 'owner-only',
+      why: 'turning on at-least-once delivery changes every seat of the root: the owner, or the owner\'s dev-mode admission for a placed lead',
+    },
+    'queues:prove': {
+      kind: 'owner-only',
+      why: 'a channel proof probe is placed in another seat\'s delivery: the owner, or the owner\'s dev-mode admission for a placed lead, as activate',
+    },
+    'queues:deactivate': {
+      kind: 'owner-only',
+      why: 'the rollback to dark changes every seat of the root: the owner, or the owner\'s dev-mode admission for a placed lead, as activate',
+    },
+    'queues:reader': {
+      kind: 'owner-only',
+      why: 'the reader switch moves every seat\'s reader at once: the owner, or the owner\'s dev-mode admission for a placed lead, as activate',
+    },
     hold: {
       kind: 'team-change',
       why: 'a hold is the team\'s: the owner, the orchestrator\'s seat or the operator\'s seat, on its recorded pane, places and releases it',

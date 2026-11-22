@@ -161,7 +161,7 @@ describe('a reply is a record on the thread it answers', () => {
     sentTo('owner', SENT, { from: 'worker' });
     expect((await run([SENT, 'the answer'], { kind: 'owner' }, { newId: () => REPLY })).code).toBe(0);
 
-    // ADR `zeus-message-path`, D3: the seat's answer is the read. The `read` receipt and the
+    // ADR `architect-message-path`, D3: the seat's answer is the read. The `read` receipt and the
     // `replied` receipt hold their own names, and both verify.
     const read = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.read.json`), 'utf8')));
     if (read === null) throw new Error('no read receipt was written');

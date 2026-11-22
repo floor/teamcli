@@ -14,3 +14,19 @@ The rows, top to bottom:
 The frame and status rows have the widths a live pane draws, with the border one column wider than
 the status row. The status and workspace rows were taken from the live panes, read-only through
 herdr. The transcript rows above the box are placeholders.
+
+## Constructed
+
+- `idle-task-edited.txt`: transcribed from the live idle tail above, read `idle`.
+
+## Not produced
+
+This folder pins the idle tail with a task row only; the other screens stay measured in the earlier version folders.
+
+- `trust`: not produced in this folder, which pins the frames listed above only.
+- `idle`: not produced as a raw `idle.txt` capture, the idle tail is transcribed in `idle-task-edited.txt`.
+- `unsent`: not produced in this folder, no draft was typed.
+- `working`: not produced in this folder, only the idle tail was read.
+- `question`: not produced in this folder, only the idle tail was read.
+- `permission`: not produced in this folder, only the idle tail was read.
+- `unknown` (exit): not produced in this folder, which pins the frames listed above only.

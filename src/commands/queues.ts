@@ -27,7 +27,7 @@ export const USAGE = `Usage: team queues status
        team queues activate
        team queues prove [<seat>]
        team queues deactivate
-       team queues reader on|off
+       team queues reader <on|off>
 
 The per-seat delivery queues of this checkout (rfc-event-comms, steps E6-E7).
 status      the root's floor state, the reader switch, and each seat queue's check.
@@ -75,7 +75,9 @@ export async function runQueues(argv: string[], io: Io, sources: QueuesSources):
   const out = cleanedIo(io);
   const args = readArgs(argv, [], []);
   if (args.error) return invocation(out, args.error);
-  const [verb, value, extra] = args.rest;
+  const verb = args.rest[0];
+  const value = args.rest[1];
+  const extra = args.rest[2];
   if (verb === undefined || extra !== undefined) return invocation(out, verb === undefined ? 'a verb is required' : `unexpected "${extra}"`);
   if (verb !== 'status' && verb !== 'activate' && verb !== 'deactivate' && verb !== 'reader' && verb !== 'prove') return invocation(out, `unknown verb "${verb}"`);
   if (verb === 'reader' && value !== 'on' && value !== 'off') return invocation(out, 'reader takes on or off');

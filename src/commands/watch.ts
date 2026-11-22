@@ -1107,7 +1107,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   // A sandboxed seat's send waits in its outbox for this watch (src/send/confined-outbox.ts). The
   // relay runs on its own tick, every `RELAY_EVERY_MS`, one batch at a time: a pass paced to
   // minutes under load must not make a seat's send wait that long (2026-11-15: the floor pass ran
-  // every 240 s and Iris's send outlived her command's 45 s wait). Until a pass has read the team,
+  // every 240 s and a liaison seat's send outlived its command's 45 s wait). Until a pass has read the team,
   // the relay reads the team file the watch started with and no live panes.
   let relayContext: { team: TeamFile; agents: { name: string | null; pane: string }[] | null } | null = first.team.session === session
     ? { team: first.team, agents: null }

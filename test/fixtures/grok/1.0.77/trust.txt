@@ -2,7 +2,7 @@
 
                                      Do you trust the contents of this directory?
 
-                                   /work/seats/reviewer-grok-build
+                                   /work/seats/reviewer-test-seat1
 
                                Grok Build may run or modify contents in this directory,
                                                 posing security risks.

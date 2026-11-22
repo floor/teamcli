@@ -583,7 +583,7 @@ test('a restore never exits the pane its own command runs in', async () => {
   record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
   const made = sources();
   const io = testIo(root, { kind: 'owner' });
-  io.env = { HERDR_PANE_ID: PANE, HERDR_SOCKET_PATH: `/Users/x/.config/herdr/sessions/${SESSION}/herdr.sock` };
+  io.env = { HERDR_PANE_ID: PANE, HERDR_SOCKET_PATH: `/home/x/.config/herdr/sessions/${SESSION}/herdr.sock` };
   await runUp([], io, made.sources);
   expect(made.trace.typed).toEqual([]);
   expect(seatRuns(made.trace)).toEqual([]);
@@ -597,7 +597,7 @@ test('the same pane id in another session is not the caller\'s pane: the repair 
   record(WRAPPER, { ...RECORD, agent_session: SESSION_ID });
   const made = sources();
   const io = testIo(root, { kind: 'owner' });
-  io.env = { HERDR_PANE_ID: PANE, HERDR_SOCKET_PATH: '/Users/x/.config/herdr/sessions/elsewhere/herdr.sock' };
+  io.env = { HERDR_PANE_ID: PANE, HERDR_SOCKET_PATH: '/home/x/.config/herdr/sessions/elsewhere/herdr.sock' };
   expect(await runUp([], io, made.sources)).toBe(0);
   expect(made.trace.typed).toEqual(['/exit']);
   expect(seatRuns(made.trace)[0]?.pane).toBe(PANE);

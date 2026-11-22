@@ -168,7 +168,7 @@ describe('labelled leftovers after a restart', () => {
 
 describe('a seat that stays is repainted from its pane', () => {
   const fable = {
-    name: 'orchestrator', role: 'orchestrator', label: 'Agamemnon', cli: 'claude-code',
+    name: 'orchestrator', role: 'orchestrator', label: 'Orchestrator', cli: 'claude-code',
     model: 'Claude Fable', version: '5.2', display: 'Claude Fable 5.2',
   } as unknown as Seat;
 
@@ -186,7 +186,7 @@ describe('a seat that stays is repainted from its pane', () => {
 
   test("the plan's repaint paints the live line on the recorded pane and notes why", () => {
     const kept: UpSeat = {
-      name: 'orchestrator', cli: 'claude-code', launch: 'claude', cwd: '.', label: 'Agamemnon · orchestrator',
+      name: 'orchestrator', cli: 'claude-code', launch: 'claude', cwd: '.', label: 'Orchestrator · orchestrator',
       displayAgent: 'Claude Fable 5.2 default', liveDisplayAgent: 'Claude Opus 5.5 default',
       liveDisplayNote: 'its pane shows Claude Opus 5.5 default; the file declares Claude Fable 5.2 default',
       model: 'Claude Fable', version: '5.2', repairLine: 'team up', stage: 'ready', pane: 'w47:p1', workspace: 'w47',

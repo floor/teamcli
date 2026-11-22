@@ -1,4 +1,4 @@
-// The send path's cost is its own, not the tree's (send gate, ADR `zeus-message-path`, D3).
+// The send path's cost is its own, not the tree's (send gate, ADR `architect-message-path`, D3).
 //
 // A seat's `team send` settles the newest message its recipient delivered to it. Finding that
 // message by reading every record in the session's tree made every send wait tens of seconds on a

@@ -23,7 +23,6 @@
 // its seat, and the peek is logged with the reader, the seat and the ids. Any other caller is
 // refused before a record is read, so nothing is receipted for it.
 import { relayIfConfined } from '../send/confined-outbox.ts';
-import { DROPS_FLAG_OPTIONS, DROPS_VALUED_OPTIONS } from '../send/command-grammar.ts';
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
@@ -708,7 +707,7 @@ function listUnreadArchive(io: Io, json: boolean, root: string, session: string,
 }
 
 export async function runDrops(argv: string[], io: Io, sources: DropsSources = realSources): Promise<number> {
-  const args = readArgs(argv, [...DROPS_VALUED_OPTIONS], [...DROPS_FLAG_OPTIONS]);
+  const args = readArgs(argv, ['seat', 'session', 'epoch', 'id'], ['follow', 'json', 'read', 'dry-run', 'unread', 'due']);
   // `--read` writes the read receipts beside the records: a seat its sandbox confines hands it to
   // its watch, which reads for it as that seat (rfc-event-comms E5, src/send/confined-outbox.ts).
   if (args.flags.has('read') && args.error === undefined) {

@@ -1088,8 +1088,8 @@ Hidden: no
 Usage:
 
     team daemon status [--json]
-    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--no-presence] [--no-watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon restart [--dry-run] [--json]
     team daemon uninstall [--home <folder>] [--request] [--reason <text>] [--approval <request-id>] [--json]
     team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
@@ -1170,7 +1170,7 @@ Hidden: no
 
 Usage:
 
-    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--no-presence] [--no-watch] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
+    team daemon install [--home <folder>] [--root <folder>] [--presence] [--watch] [--send-server] [--no-presence] [--no-watch] [--no-send-server] [--dry-run] [--request] [--reason <text>] [--approval <request-id>] [--json]
 
 #### Who may run it
 
@@ -1187,10 +1187,14 @@ Usage:
 | `--home` | yes | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--no-presence` | no | no | no |
+| `--no-send-server` | no | no | no |
+| `--no-watch` | no | no | no |
 | `--presence` | no | no | no |
 | `--reason` | yes | no | no |
 | `--request` | no | no | no |
 | `--root` | yes | no | no |
+| `--send-server` | no | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1231,7 +1235,7 @@ Hidden: no
 
 Usage:
 
-    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
+    team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch] [--send-server]
 
 #### Who may run it
 
@@ -1246,6 +1250,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
+| `--send-server` | no | no | no |
 | `--started-by` | yes | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
@@ -1480,7 +1485,7 @@ Hidden: no
 Usage:
 
     team drops [--follow] [--json]
-    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>]
+    team drops --read --seat <seat> [--session <session>] [--epoch <run_id>] [--id <id>] [--due]
     team drops archive [--dry-run] [--json]
     team drops archive --unread [--seat <seat>] [--json]
 
@@ -1492,6 +1497,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--due` | no | no | no |
 | `--epoch` | yes | no | no |
 | `--follow` | no | no | no |
 | `--general` | yes | no | no |
@@ -3179,6 +3185,164 @@ Usage:
 | --- | --- | --- |
 | `task` | no | no |
 
+## `queues`
+
+Hidden: no
+
+Usage:
+
+    team queues status
+    team queues activate
+    team queues prove [<seat>]
+    team queues deactivate
+    team queues reader <on|off>
+
+### Who may run it
+
+`owner-only` — every verb but status changes what every seat of the root does: the owner, or the owner's dev-mode admission for a placed lead, as the daemon's rows; status states its own row
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `activate`
+
+Hidden: no
+
+Usage:
+
+    team queues activate
+
+#### Who may run it
+
+`owner-only` — turning on at-least-once delivery changes every seat of the root: the owner, or the owner's dev-mode admission for a placed lead
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `deactivate`
+
+Hidden: no
+
+Usage:
+
+    team queues deactivate
+
+#### Who may run it
+
+`owner-only` — the rollback to dark changes every seat of the root: the owner, or the owner's dev-mode admission for a placed lead, as activate
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `prove`
+
+Hidden: no
+
+Usage:
+
+    team queues prove [<seat>]
+
+#### Who may run it
+
+`owner-only` — a channel proof probe is placed in another seat's delivery: the owner, or the owner's dev-mode admission for a placed lead, as activate
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | yes | no |
+
+### `reader`
+
+Hidden: no
+
+Usage:
+
+    team queues reader <on|off>
+
+#### Who may run it
+
+`owner-only` — the reader switch moves every seat's reader at once: the owner, or the owner's dev-mode admission for a placed lead, as activate
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `on\|off` | no | no |
+
+### `status`
+
+Hidden: no
+
+Usage:
+
+    team queues status
+
+#### Who may run it
+
+`any-caller` — the report reads the root's floor state, the reader switch and each seat queue's check; it drains, signs and moves nothing and asks for no caller
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `raise`
 
 Hidden: no
@@ -4347,6 +4511,7 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--session <name>] [--file <path>] [--json]
+    team up <seat...> [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
     team up --rebind <seat> [--dry-run] [--session <name>] [--file <path>] [--json]
     team up --retie [--dry-run] [--session <name>] [--file <path>] [--json]
     team up --all [--dry-run] [--serial] [--no-launch] [--resolve-launch] [--json]
@@ -4385,7 +4550,9 @@ Usage:
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat...` | yes | no |
 
 ## `usage`
 

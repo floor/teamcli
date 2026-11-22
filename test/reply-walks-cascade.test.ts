@@ -113,7 +113,7 @@ test('a reply still marks the record read when a wake leg takes it', async () =>
   const result = await run(made, { agents: () => [{ name: 'helper', pane: 'pane-helper' }] });
   expect(result.code).toBe(0);
 
-  // ADR `zeus-message-path`, D3: answering is a read, whatever leg carried the answer.
+  // ADR `architect-message-path`, D3: answering is a read, whatever leg carried the answer.
   const read = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(made.root, 'acme', 'owner'), `${SENT}.read.json`), 'utf8')));
   if (read === null) throw new Error('no read receipt was written');
   expect(read.payload.read_by).toBe('reply');

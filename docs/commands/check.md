@@ -106,7 +106,7 @@ and no `--rollout`, and the only act it names is the seat's own read or a delive
 Unread work is named on the same pass. Each seat's drop folder is read the way the watch's
 unread wake reads it: a message with no signed read receipt past the seat's unread window —
 `watch.unread_after` when the file moved the section, else 30 s for a seat a message can wake
-while it is idle and 60 s for a typed or pull-only seat (ADR `zeus-message-path`, D2) — is one
+while it is idle and 60 s for a typed or pull-only seat (ADR `architect-message-path`, D2) — is one
 difference for the seat,
 `<seat>: a message from <from> has been unread for <n> min (id <id>)`, with
 `; <m> more unread` when other messages are due and the oldest named. The sender is the verified
