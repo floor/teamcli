@@ -222,6 +222,9 @@ const result = withChannelCommit(dir, id, () => {
   return 'held';
 }, {
   skipFlock: true,
+  // The external hold is a fresh interpreter; on a loaded runner it took past the two-second
+  // production bound to start, and the holder then read busy. The scene measures the lock.
+  helperWaitMs: 20_000,
   beforeLockRename() {
     writeFileSync(paused, '1');
     waitFor(go);
