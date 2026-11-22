@@ -22,7 +22,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamText, writeTeamText } from '../file/team-text.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { autoNamedText, claimNames, withNamingLock } from '../registry/names.ts';
+import { autoNamedText, claimNames, namesAutoOf, unnamedSeat, withNamingLock } from '../registry/names.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -4263,7 +4263,11 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // labels and session names read it. Only the team's own record, on an admitted run past every
   // refusal: a delegated, client, retie or restore run, or one aimed at another file, writes no
   // record, and a name that cannot be handed out never stops the launch.
-  if (delegated === null && clientUp === null && !retie && internal?.restore !== true && args.values.file === undefined) {
+  // No lock, read or registry re-read at all unless the entity hands out names and a seat this
+  // run starts has none: an ordinary up pays nothing for the step.
+  if (delegated === null && clientUp === null && !retie && internal?.restore !== true && args.values.file === undefined
+    && namesAutoOf(sources.home, team.entity).auto
+    && team.seats.some((seat) => unnamedSeat(seat) && (!scoped || scopedSeats.has(seat.name)))) {
     const file = join(root, TEAM_FILE);
     // The pick and the write are one transaction under the registry's teams lock, which every
     // naming write takes: no other checkout can take the same name between the two.
