@@ -106,7 +106,19 @@ function declareSeat(seat: string, policy: string | null = 'accept'): string {
   return path;
 }
 
+/** The seat opts in to the socket in its team file: since 2026-11-17 the socket is an opt-in the
+ *  team file declares (`inbound: accept`), and a launch's own accept authorizes nothing alone. */
+function optInSocket(seat: string): void {
+  const text = readFileSync(file, 'utf8').replace(`    name: ${seat}\n`, `    name: ${seat}\n    inbound: accept\n`);
+  writeFileSync(file, text);
+  const checked = validateTeamFile(text);
+  if (!checked.ok) throw new Error('the opted-in fixture does not validate');
+  team = checked.team;
+  standing = verifiedOf(checked.team, text, dir, NOW);
+}
+
 test('a claude-code seat whose launch admits a socket, and whose pane carries one, reads socket', () => {
+  optInSocket('claude-coordinator-acme');
   declareSeat('claude-coordinator-acme');
   writeFileSync(join(socks, `${String(SESSION_PID)}.sock`), '');
   const found = rows(live({ 'w1:p1': processes(SESSION_PID) })).find((row) => row.name === 'claude-coordinator-acme');
@@ -116,6 +128,7 @@ test('a claude-code seat whose launch admits a socket, and whose pane carries on
 // The two folders discovery walks: the temp folder's own and `/tmp/cc-socks`, where this Mac's
 // sessions were seen to write while `tmpdir()` answered the per-user folder.
 test('a socket that sits only in the fallback folder also reads socket', () => {
+  optInSocket('claude-coordinator-acme');
   declareSeat('claude-coordinator-acme');
   writeFileSync(join(altSocks, `${String(SESSION_PID)}.sock`), '');
   const found = rows(live({ 'w1:p1': processes(SESSION_PID) }), [socks, altSocks]).find((row) => row.name === 'claude-coordinator-acme');

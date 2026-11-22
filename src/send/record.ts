@@ -167,6 +167,15 @@ export function stampedPayload(payload: RecordPayload, home: string): RecordPayl
   return { ...payload, lvl: DELIVERY_LEVEL };
 }
 
+/**
+ * The payload stamped at the delivery level because its era is already decided by its origin: a
+ * handoff taken from the stamped tree keeps its stamp (E7b revision 3), and a channel probe is
+ * always a stamped record. The stamp is still set here, in the one module that signs.
+ */
+export function withDeliveryStamp(payload: RecordPayload): RecordPayload {
+  return { ...payload, lvl: DELIVERY_LEVEL };
+}
+
 /** Whether a payload is under the at-least-once contract. */
 export function isStampedPayload(payload: { lvl?: unknown }): boolean {
   return payload.lvl === DELIVERY_LEVEL;

@@ -21,7 +21,7 @@ import { offeringListeners } from '../comms/offer.ts';
 import { appendDeliverySync } from './append.ts';
 import { queueLog } from './log.ts';
 import { seatDropDir, stampedListing } from './mail-tree.ts';
-import { DELIVERY_LEVEL, isRecordSidecarName, readRecord, recordNameOk, signRecord, stampedSettled, verifyRecord, writeRecord, type RecordPayload } from '../send/record.ts';
+import { isRecordSidecarName, readRecord, recordNameOk, signRecord, stampedSettled, verifyRecord, withDeliveryStamp, writeRecord, type RecordPayload } from '../send/record.ts';
 
 /** The principal a probe is signed as: the runtime, never a seat or the owner. */
 export const CHANNEL_PROBE_FROM = 'runtime';
@@ -97,11 +97,11 @@ export function placeChannelProbe(input: { home: string; root: string; session: 
     return { ok: false, reason: 'the checkout cannot be resolved' };
   }
   const id = randomUUID();
-  const payload: RecordPayload = {
+  const payload: RecordPayload = withDeliveryStamp({
     kind: 'message', id, to: input.seat, to_id: null, root, session: input.session, at: input.now.toISOString(),
     body: CHANNEL_PROBE_BODY, from: CHANNEL_PROBE_FROM, from_id: null, rule: CHANNEL_PROBE_RULE, thread: id,
-    subject: probeSubject(input.listenerKey), lvl: DELIVERY_LEVEL,
-  };
+    subject: probeSubject(input.listenerKey),
+  });
   let signed;
   try {
     signed = signRecord(payload, input.home);
