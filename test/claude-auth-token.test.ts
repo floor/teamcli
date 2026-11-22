@@ -16,7 +16,7 @@ import { formatPlan, upPlan, type UpSeat } from '../src/launch/plan.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { systemSecretStore, type SecretStore } from '../src/secrets/store.ts';
-import { claudeAuthInForce, claudeTokenLine, claudeTokenSeats, routedSettingsFile, withClaudeToken } from '../src/settings/claude-auth-policy.ts';
+import { claudeAuthInForce, claudeTokenLine, claudeTokenSeats, managedClaudeSettings, managedClaudeSettingsPaths, routedSettingsFile, withClaudeToken } from '../src/settings/claude-auth-policy.ts';
 import { installCliHooks, refreshCliHooks } from '../src/launch/cli-hook.ts';
 import { CLAUDE_TOKEN_ENTRY, claudeRouteEnv, claudeRouteWords, parseClaudeAuth } from '../src/settings/claude-auth.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
@@ -124,7 +124,7 @@ function plan(w: ReturnType<typeof world>, store: SecretStore, routed = true) {
     seat('worker', 'codex', 'codex -m gpt-6.1-sol'),
   ];
   const steps = upPlan({
-    root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
+    root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
     cliHooks: Object.fromEntries(['lead', 'provider', 'wrapped', 'scripted'].map((name) => [name, settingsFile(join(w.root, `${name}.json`), routed)])), seats, secretStore: store,
   });
   const launches = new Map<string, { command: string; recordLine: string | undefined }>();
@@ -194,7 +194,7 @@ describe('the launch plan', () => {
     // The direct route is enforced on the line: the endpoint named, every switch and other
     // credential emptied, in front of the whole line.
     expect(launches.get('lead')?.command.startsWith(`${ROUTE} `)).toBe(true);
-    expect(ROUTE).toContain('ANTHROPIC_BASE_URL=https://api.anthropic.com ANTHROPIC_AUTH_TOKEN= ANTHROPIC_API_KEY= CLAUDE_CODE_USE_BEDROCK= CLAUDE_CODE_USE_VERTEX=');
+    expect(ROUTE).toContain('ANTHROPIC_BASE_URL=https://api.anthropic.com ANTHROPIC_AUTH_TOKEN= ANTHROPIC_API_KEY= CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST= CLAUDE_CODE_USE_BEDROCK= CLAUDE_CODE_USE_VERTEX=');
     // The seat's record keeps the file's recipe: neither the word, the lookup nor the route is in it.
     expect(launches.get('lead')?.recordLine).toBe('claude --model claude-opus-5-5');
     expect(launches.get('provider')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
@@ -217,13 +217,18 @@ describe('the launch plan', () => {
   test('a seat on the shipped claude-code launcher, on Anthropic, takes it on its resolved line', () => {
     const w = world();
     const steps = upPlan({
-      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
+      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
       cliHooks: { lead: settingsFile(join(w.root, 'lead.json')) }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]),
       seats: [{ ...seat('lead', 'claude-code', 'claude'), launcher: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5' }],
     });
     const op = steps.map((step) => step.do).find((one) => one?.do === 'launch');
     const command = op?.do === 'launch' ? op.command : '';
     expect(command.startsWith(`${ROUTE} `)).toBe(true);
+    // The resolved launch's record is reusable (a repair, a restore): it keeps no lookup, no token
+    // word and no route, so a reuse goes through the planner again.
+    const record = op?.do === 'launch' ? op.recordLine ?? '' : '';
+    expect(record).toContain(' claude --model claude-opus-5-5');
+    for (const word of [CLAUDE_TOKEN_ENTRY, 'fake-store-lookup', '{secret:', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_']) expect(record).not.toContain(word);
     expect(command).toContain(`${WORD} GH_TOKEN=`);
     expect(command).toContain(' claude --model claude-opus-5-5');
   });
@@ -232,11 +237,35 @@ describe('the launch plan', () => {
     const w = world();
     expect(plan(w, fakeStore([CLAUDE_TOKEN_ENTRY, 'DEEPSEEK_API_KEY']), false).launches.get('lead')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
     const steps = upPlan({
-      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
+      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
       cliHooks: { lead: join(w.root, 'absent.json') }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]),
       seats: [seat('lead', 'claude-code', 'claude --model claude-opus-5-5')],
     });
     expect(JSON.stringify(steps)).not.toContain(CLAUDE_TOKEN_ENTRY);
+  });
+
+  test('managed Claude settings on the machine withhold the token from every seat', () => {
+    const w = world();
+    const steps = upPlan({
+      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
+      managedClaudeSettings: '/etc/claude-code/managed-settings.json',
+      cliHooks: { lead: settingsFile(join(w.root, 'lead.json')) }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]),
+      seats: [seat('lead', 'claude-code', 'claude --model claude-opus-5-5')],
+    });
+    expect(JSON.stringify(steps)).not.toContain(CLAUDE_TOKEN_ENTRY);
+    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([CLAUDE_TOKEN_ENTRY]), managed: '/etc/claude-code/managed-settings.json' })).toEqual(new Set());
+  });
+
+  test('the managed settings places are the documented ones, looked for by existence only; an unknown platform fails closed', () => {
+    const seen: string[] = [];
+    expect(managedClaudeSettings('linux', (path) => { seen.push(path); return false; }, 'owner')).toBeNull();
+    expect(seen).toEqual(['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d']);
+    expect(managedClaudeSettings('linux', (path) => path.endsWith('.d'), 'owner')).toBe('/etc/claude-code/managed-settings.d');
+    expect(managedClaudeSettingsPaths('darwin', 'owner')).toEqual([
+      '/Library/Application Support/ClaudeCode/managed-settings.json', '/Library/Application Support/ClaudeCode/managed-settings.d',
+      '/Library/Managed Preferences/com.anthropic.claudecode.plist', '/Library/Managed Preferences/owner/com.anthropic.claudecode.plist',
+    ]);
+    expect(managedClaudeSettings('win32', () => false, 'owner')).not.toBeNull();
   });
 
   test('a store that holds no entry launches the seat as before', () => {
@@ -265,9 +294,9 @@ describe('the seat\'s own settings file holds the route', () => {
   test('the install writes the direct route only for a seat handed the token, and a refresh keeps it', () => {
     const w = world();
     const dir = join(w.root, '.agents');
-    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([CLAUDE_TOKEN_ENTRY]) })).toEqual(new Set(['lead']));
-    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([]) })).toEqual(new Set());
-    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: null })).toEqual(new Set());
+    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([CLAUDE_TOKEN_ENTRY]), managed: null })).toEqual(new Set(['lead']));
+    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([]), managed: null })).toEqual(new Set());
+    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: null, managed: null })).toEqual(new Set());
     const landed = installCliHooks(dir, 'morning', [
       { name: 'lead', cli: 'claude-code', launch: 'claude', claudeRoute: true },
       { name: 'provider', cli: 'claude-code', launch: 'claude' },
@@ -350,6 +379,15 @@ describe('team doctor', () => {
   test('a team whose Claude seats would take no token gets no ok from the store: the plain login line stands', () => {
     const w = world();
     expect(claudeNoLoginFindings(w.team, w.root, only(w, ['wrapped', 'scripted', 'provider']), sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)).toBeNull();
+  });
+
+  test('managed Claude settings on the machine: a miss that names the managed file as the reason', () => {
+    const w = world();
+    const managed = '/Library/Application Support/ClaudeCode/managed-settings.json';
+    const findings = claudeNoLoginFindings(w.team, w.root, w.team.seats, { ...sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), managedClaudeSettings: () => managed }, HINT);
+    expect(findings?.map((one) => one.level)).toEqual(['miss']);
+    expect(findings?.[0]?.text).toContain(`managed Claude settings (${managed})`);
+    expect(findings?.[0]?.text).toContain('withheld');
   });
 
   test('claude-auth login keeps the plain login line', () => {

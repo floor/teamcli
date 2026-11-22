@@ -26,7 +26,7 @@ import { accountKeyCommand, shippedEnv, shippedLauncher } from '../launchers/shi
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { fillSecretWords, hasSecretWord } from './secret-words.ts';
-import { anthropicClaudeSeat, claudeAuthInForce, routedSettingsFile, withClaudeToken } from '../settings/claude-auth-policy.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, managedClaudeSettings, routedSettingsFile, withClaudeToken, withoutClaudeToken } from '../settings/claude-auth-policy.ts';
 import { CLAUDE_TOKEN_ENTRY, claudeRouteWords } from '../settings/claude-auth.ts';
 import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
@@ -844,6 +844,10 @@ export interface UpInput {
   /** The secret store a provider seat's key word is looked up in. Injected by a test that must
    *  not read the machine; absent, the system's own store (null: this platform has none). */
   secretStore?: SecretStore | null;
+  /** The managed Claude settings that stand above a seat's own settings file, injected by a test;
+   *  absent, this machine's are looked for (`managedClaudeSettings`). Present, no seat gets the
+   *  store's subscription token. */
+  managedClaudeSettings?: string | null;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -1790,7 +1794,8 @@ export function upPlan(input: UpInput): Step[] {
     const vendor = seat.vendor ?? input.team?.seats.find((one) => one.name === seat.name)?.vendor;
     let claudeToken = false;
     if (wouldLaunch && input.home !== undefined && input.team !== undefined && anthropicClaudeSeat({ cli: profile.cli, vendor })
-      && routedSettingsFile(input.cliHooks?.[seat.name])) {
+      && routedSettingsFile(input.cliHooks?.[seat.name])
+      && (input.managedClaudeSettings !== undefined ? input.managedClaudeSettings : managedClaudeSettings()) === null) {
       const auth = claudeAuthInForce({ home: input.home, root: input.root, team: input.team });
       const held = auth === 'store' ? seatStore()?.holds?.(CLAUDE_TOKEN_ENTRY) ?? null : null;
       const withToken = withClaudeToken(baseLine, { cli: profile.cli, vendor, auth, held });
@@ -1970,7 +1975,10 @@ export function upPlan(input: UpInput): Step[] {
     const pinned = denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, pins.features, pins.config);
     const addedResume = namedResumeTarget(profile.cli, command) !== null
       && namedResumeTarget(profile.cli, seat.launch) === null;
-    const recordLine = addedResume ? pinned : (fromResolver ? command : pinned);
+    // A resolved launch records the command it built, without the token's lookup: a record is
+    // reusable (a repair, a restore), and a reuse must go through this planner again, which
+    // decides the token afresh.
+    const recordLine = addedResume ? pinned : (fromResolver ? (claudeToken ? withoutClaudeToken(command) ?? pinned : command) : pinned);
     // A seat handed the token starts on Anthropic's own endpoint with no other provider switch or
     // Anthropic credential its pane's shell exported: those words stand in front of the whole
     // line, after the record is taken, so the record keeps the recipe it always kept.

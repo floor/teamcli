@@ -53,7 +53,7 @@ import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, otherMatchingStores, otherStoreNote, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
-import { anthropicClaudeSeat, claudeAuthInForce, claudeTokenSeat, claudeTokenSeats } from '../settings/claude-auth-policy.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, claudeTokenSeat, claudeTokenSeats, managedClaudeSettings } from '../settings/claude-auth-policy.ts';
 import { CLAUDE_TOKEN_ENTRY } from '../settings/claude-auth.ts';
 import { lobbyPath as derivedLobby } from '../worktree/place.ts';
 
@@ -102,6 +102,9 @@ export type DoctorSources = {
   /** The entity's secret store, asked only whether it holds an entry by name (never for a value).
    *  Absent: not asked, as a store that holds nothing. */
   secretStore?(entity: string | null): SecretStore | null;
+  /** The managed Claude settings found on this machine (`managedClaudeSettings`), or null. Absent:
+   *  not looked for, as a machine with none. */
+  managedClaudeSettings?(): string | null;
 };
 
 /** The running daemon's recorded temp folder, read from its state record. */
@@ -209,6 +212,7 @@ export const realSources: DoctorSources = {
   },
   daemonHealth,
   daemonTempDir: readDaemonTempDir,
+  managedClaudeSettings: () => managedClaudeSettings(),
   secretStore: (entity) => systemSecretStore({ home: homedir(), ...(entity === null || entity === '' ? {} : { entity }) }),
 };
 
@@ -369,8 +373,17 @@ export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, 
   const eligible = seats.filter((seat) => claudeTokenSeat(seat));
   if (eligible.length === 0) return null;
   if (claudeAuthInForce({ home: sources.home, root, team }) !== 'store') return null;
+  // Managed settings stand above a seat's own file and may route it anywhere: the launch withholds
+  // the token on such a machine, and this line says why.
+  const managed = sources.managedClaudeSettings?.() ?? null;
+  if (managed !== null) {
+    return [{
+      level: 'miss',
+      text: `log in to claude-code: \`${hint}\`; the secret store's ${CLAUDE_TOKEN_ENTRY} is withheld on this machine, because its managed Claude settings (${managed}) stand above a seat's own and may route it to another endpoint`,
+    }];
+  }
   // The launch's own determination: the same seats, the same setting, the same store asked by name.
-  const given = claudeTokenSeats({ home: sources.home, root, team, store: sources.secretStore?.(team.entity) ?? null });
+  const given = claudeTokenSeats({ home: sources.home, root, team, store: sources.secretStore?.(team.entity) ?? null, managed });
   if (!eligible.some((seat) => given.has(seat.name))) {
     return [{
       level: 'miss',
@@ -379,7 +392,7 @@ export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, 
   }
   const findings: Finding[] = [{
     level: 'ok',
-    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}, held to Anthropic's endpoint by their own settings (only the machine's managed Claude settings stand above them)`,
+    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}, held to Anthropic's endpoint by their own settings (no managed Claude settings on this machine)`,
   }];
   const others = seats.filter((seat) => !eligible.includes(seat) && anthropicClaudeSeat(seat));
   if (others.length > 0) {

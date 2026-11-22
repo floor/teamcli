@@ -172,8 +172,8 @@ login line reads the machine's secret store for the entry `CLAUDE_CODE_OAUTH_TOK
 held, it is `ok  claude-code: no session login; <seats> sign in with the secret store's
 CLAUDE_CODE_OAUTH_TOKEN`, naming only the seats the launch would hand the token (a `MISS` for the
 login follows for any other Claude seat on Anthropic); not held, the `MISS` names `claude auth login` and, for a
-machine with no browser, `claude setup-token` with the token kept under that entry. The policy
-`claude-auth login` keeps the plain login line. See
+machine with no browser, `claude setup-token` with the token kept under that entry. On a machine with managed Claude settings, the `MISS` names that file as the reason the token is
+withheld. The policy `claude-auth login` keeps the plain login line. See
 [Headless Claude sign-in](../team-file.md#headless-claude-sign-in).
 
 `--jules` reads the Jules CLI's own three questions the same way — installed, logged in with GitHub

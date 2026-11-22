@@ -1179,8 +1179,17 @@ The route to Anthropic is enforced, not assumed. A seat that takes the token:
 - starts with the same endpoint and switches, and `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`
   emptied, in front of its line.
 
-Only the machine's managed Claude settings stand above the seat's file. If they route Claude Code
-to an endpoint, nothing TeamCLI writes overrides them, so don't keep the token on such a machine.
+Only the machine's managed Claude settings stand above the seat's file, and nothing a seat writes
+overrides them. So on a machine that has any, the token is withheld from every seat: the managed
+settings file or its `managed-settings.d` folder (`/Library/Application Support/ClaudeCode/` on
+macOS, `/etc/claude-code/` on Linux), or on macOS the `com.anthropic.claudecode` managed
+preferences a configuration profile installs. Only their existence is checked. On another
+platform the token is always withheld. Settings an organization delivers from the claude.ai
+console leave no file to check, so keep the token only on a machine whose account receives none.
+
+A seat's record, which a repair or a restore may launch again, keeps its recipe without the
+token's lookup and without the route: every launch passes through the planner, which decides
+the token afresh.
 
 Which seats take it:
 

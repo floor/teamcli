@@ -7,8 +7,10 @@ import type { TeamFile } from '../file/types.ts';
 import { secretWord } from '../launch/secret-words.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { shellWords } from '../launch/shell-words.ts';
-import { assignmentWordName } from '../profiles/profile.ts';
-import { readFileSync } from 'node:fs';
+import { assignmentWordName, leadingAssignments } from '../profiles/profile.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import { userInfo } from 'node:os';
+import { join } from 'node:path';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { CLAUDE_AUTH_DEFAULT, CLAUDE_TOKEN_ENTRY, parseClaudeAuth, routedSettingsText, type ClaudeAuth } from './claude-auth.ts';
 
@@ -45,7 +47,7 @@ export function anthropicClaudeSeat(seat: { cli: string; vendor: string | undefi
 
 /** Variables that point Claude Code at a credential, an endpoint or another provider of its own
  *  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, …). */
-const ROUTING = /ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_TOKEN/;
+const ROUTING = /ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/;
 
 /** What a shell reads as more than one plain command: a separator, a pipe, a redirection, a
  *  backtick or a line break. */
@@ -103,9 +105,10 @@ export function withClaudeToken(line: string, seat: { cli: string; vendor: strin
  * route (src/launch/cli-hook.ts), and the plan checks the file before it hands the token. `store`
  * is the caller's injected store; absent, the system's own for the team's entity.
  */
-export function claudeTokenSeats(context: ClaudeAuthContext & { store?: SecretStore | null }): Set<string> {
+export function claudeTokenSeats(context: ClaudeAuthContext & { store?: SecretStore | null; managed?: string | null }): Set<string> {
   const seats = context.team.seats.filter((seat) => claudeTokenSeat(seat));
   if (seats.length === 0 || claudeAuthInForce(context) !== 'store') return new Set();
+  if ((context.managed !== undefined ? context.managed : managedClaudeSettings()) !== null) return new Set();
   const entity = context.team.entity;
   const store = context.store !== undefined
     ? context.store
@@ -123,4 +126,54 @@ export function routedSettingsFile(path: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/** The places Claude Code reads its managed settings from on this machine, per its managed-settings
+ *  documentation: the system file and its drop-in folder, and on macOS the managed preferences
+ *  domain a configuration profile installs (machine-wide and per user). */
+export function managedClaudeSettingsPaths(platform: NodeJS.Platform, user: string): string[] | null {
+  if (platform === 'darwin') {
+    const system = '/Library/Application Support/ClaudeCode';
+    return [
+      join(system, 'managed-settings.json'), join(system, 'managed-settings.d'),
+      '/Library/Managed Preferences/com.anthropic.claudecode.plist',
+      ...(user === '' ? [] : [join('/Library/Managed Preferences', user, 'com.anthropic.claudecode.plist')]),
+    ];
+  }
+  if (platform === 'linux') return ['/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d'];
+  return null;
+}
+
+/**
+ * The managed Claude settings that stand above a seat's own settings file on this machine, or null
+ * when none is there. Managed settings can route Claude Code to any endpoint and nothing a seat's
+ * file says overrides them, so where one exists the token is withheld from every seat (fail
+ * closed); a platform whose places this version does not know answers as one that has them. Only
+ * whether a place exists is read, never its content.
+ */
+export function managedClaudeSettings(
+  platform: NodeJS.Platform = process.platform,
+  present: (path: string) => boolean = existsSync,
+  user: string = currentUser(),
+): string | null {
+  const paths = managedClaudeSettingsPaths(platform, user);
+  if (paths === null) return 'this platform\'s managed Claude settings, which this version cannot check';
+  return paths.find((path) => present(path)) ?? null;
+}
+
+function currentUser(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return '';
+  }
+}
+
+/** The line without the token's leading assignment (and the space after it): what a record keeps.
+ *  Null when the line's words cannot be read or set no such assignment, so a caller records the
+ *  plain recipe instead, never a line that may still hold the lookup. */
+export function withoutClaudeToken(line: string): string | null {
+  const word = leadingAssignments(line)?.find((one) => one.name === CLAUDE_TOKEN_ENTRY);
+  if (word === undefined) return null;
+  return `${line.slice(0, word.start)}${line.slice(word.end).replace(/^\s+/, '')}`;
 }

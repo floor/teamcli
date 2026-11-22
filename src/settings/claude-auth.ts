@@ -43,7 +43,12 @@ export function claudeRouteEnv(): Record<string, string> {
  *  provider switches and any other Anthropic credential the pane's shell exported emptied, so the
  *  seat's process starts on Anthropic with the token alone even before its settings are read. */
 export function claudeRouteWords(): string[] {
-  return [`ANTHROPIC_BASE_URL=${ANTHROPIC_ENDPOINT}`, 'ANTHROPIC_AUTH_TOKEN=', 'ANTHROPIC_API_KEY=', ...PROVIDER_SWITCHES.map((name) => `${name}=`)];
+  return [
+    `ANTHROPIC_BASE_URL=${ANTHROPIC_ENDPOINT}`, 'ANTHROPIC_AUTH_TOKEN=', 'ANTHROPIC_API_KEY=',
+    // The host-managed provider mode an embedding app sets, which ignores a settings file's route.
+    'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=',
+    ...PROVIDER_SWITCHES.map((name) => `${name}=`),
+  ];
 }
 
 /** Whether a generated settings file's text holds the direct route (`claudeRouteEnv`). */
