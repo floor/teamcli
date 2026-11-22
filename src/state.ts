@@ -733,8 +733,15 @@ export function resetReadStateCallCount(): void {
   readStateCalls = 0;
 }
 
-/** The last state each file held, by the file's identity: see `readStateShared`. */
-const sharedStates = new Map<string, { key: string; state: Readonly<State> }>();
+/** The last state each file held, by the file's identity: see `readStateShared`. `text` is the
+ *  file as it was read for `state`, or null when the file moved during that read. */
+const sharedStates = new Map<string, { key: string; racy: boolean; text: string | null; state: Readonly<State> }>();
+
+/** How close to its last change a file is still "racy": its times may not move on the next write.
+ *  Linux stamps a file with the kernel's coarse clock (one tick, up to 10 ms), so two same-size
+ *  writes inside one tick, the second into a freed inode the rename reuses, keep one key. The
+ *  margin, ten ticks, follows git's racy-clean rule: such a file is compared by its text. */
+const RACY_NS = 100_000_000n;
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -744,25 +751,45 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+function textOf(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /** The state for a caller that only reads it, such as the presence pass polling every seat: one
- *  frozen object, read again only when the file's inode, size or times move. Every writer replaces
- *  the file by rename (`writeAtomic`), so each write is a new inode. A caller that edits the state
- *  uses `readState` or `updateState`. */
+ *  frozen object, parsed again only when the file changes. The file's inode, size and times are
+ *  the key; a file changed within the racy margin of its read is also compared by its text, so a
+ *  write the times cannot show is still seen. A caller that edits the state uses `readState` or
+ *  `updateState`. */
 export function readStateShared(dir: string): Readonly<State> {
   const path = join(dir, STATE_FILE);
   let key = 'absent';
+  let changedNs: bigint | null = null;
   try {
     const stat = statSync(path, { bigint: true });
     key = `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    changedNs = stat.mtimeNs > stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
+  const racy = changedNs !== null && BigInt(Date.now()) * 1_000_000n - changedNs < RACY_NS;
   const hit = sharedStates.get(path);
-  if (hit?.key === key) return hit.state;
+  if (hit?.key === key && !hit.racy) return hit.state;
   // Stat before read: the text read is at least as new as the key, so a change after the stat
   // only costs one more read on the next call.
+  const text = changedNs === null ? null : textOf(path);
+  if (hit?.key === key && text !== null && hit.text === text) {
+    sharedStates.set(path, { key, racy, text, state: hit.state });
+    return hit.state;
+  }
   const state = deepFreeze(readState(dir));
-  sharedStates.set(path, { key, state });
+  // The text is kept only when the file still holds it after the parse: a write in between
+  // leaves nothing to compare, and the next call parses again.
+  const kept = text !== null && textOf(path) === text ? text : null;
+  sharedStates.set(path, { key, racy, text: kept, state });
   return state;
 }
 
