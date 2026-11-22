@@ -52,7 +52,7 @@ The first release since 0.3.5, and the first on npm since it. The full list is i
 
 ```sh
 npm install -g team
-team --version # 0.5.22
+team --version # 0.5.23
 ```
 
 The launcher `@teamcli/cli` installs the same tool:
