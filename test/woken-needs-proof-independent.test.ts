@@ -81,7 +81,7 @@ type FixtureWorld = {
 };
 
 function createWorld(extraYaml = ''): FixtureWorld {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'woken-proof-ind-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-wpi-')));
   tempRoots.push(base);
   const root = join(base, 'acme');
   const dir = join(root, '.agents');

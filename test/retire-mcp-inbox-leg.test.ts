@@ -114,7 +114,7 @@ function makeSandbox(teamYaml: string = BASE_TEAM_YAML): {
   agentId: string;
   team: TeamFile;
 } {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-retire-mcp-inbox-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-rmi-')));
   dirs.push(base);
   const home = join(base, 'home');
   const root = join(base, 'repo');

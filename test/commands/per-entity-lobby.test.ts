@@ -21,7 +21,7 @@ let home: string;
 let root: string;
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'per-entity-lobby-')));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-pel-')));
   home = join(base, 'home');
   root = join(base, 'acme');
   mkdirSync(home, { recursive: true });

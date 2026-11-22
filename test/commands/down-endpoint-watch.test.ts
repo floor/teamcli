@@ -81,7 +81,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function layout(): Place {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-down-endpoint-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-down-ep-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });

@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 function place(text: string): { root: string; home: string } {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-dialogs-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-chk-dlg-')));
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');

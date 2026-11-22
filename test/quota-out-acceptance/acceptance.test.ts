@@ -320,7 +320,7 @@ function linesAbout(out: string, name: string): string[] {
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 't2-quota-acceptance-'));
+  dir = mkdtempSync(join(tmpdir(), 't2-qo-acc-'));
   home = join(dir, 'home');
   mkdirSync(join(dir, '.agents'));
   mkdirSync(home);

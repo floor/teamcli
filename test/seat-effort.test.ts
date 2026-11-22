@@ -85,7 +85,7 @@ describe('a seat\'s effort', () => {
   test('outside its lab\'s vocabulary is a warning naming the lab\'s words, and check, approve and up still succeed', async () => {
     const bogus = 'definitely-not-an-effort-word';
     expect(words).not.toContain(bogus);
-    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-seat-effort-')));
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-seat-e9-')));
     const root = join(base, 'acme');
     const home = join(base, 'home');
     mkdirSync(join(root, '.agents'), { recursive: true });

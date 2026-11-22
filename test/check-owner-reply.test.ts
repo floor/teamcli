@@ -48,7 +48,7 @@ seats:
 }
 
 function place(entity: string | null): { root: string; home: string; text: string } {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-owner-reply-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-oreply-')));
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');

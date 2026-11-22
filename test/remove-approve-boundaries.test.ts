@@ -250,7 +250,7 @@ function removeSources(agents: HerdrAgent[]): RemoveSources {
 }
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-remove-approve-')));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'team-rmab-')));
   root = join(base, 'acme');
   dir = join(root, '.agents');
   home = join(base, 'home');

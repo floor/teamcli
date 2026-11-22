@@ -69,7 +69,7 @@ afterEach(() => {
 type Place = { home: string; root: string };
 /** A registry-backed team whose stored approval may name an earlier record than the live one. */
 function placeApproved(approved: string, current: string): Place {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-approval-stale-report-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-asr-')));
   made.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');
@@ -87,7 +87,7 @@ function place(text: string): Place {
 }
 /** A team file on disk and no registry record yet: `team migrate` writes the registry itself. */
 function migratePlace(approved: string, current: string = approved): Place {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-approval-stale-report-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-asr-')));
   made.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');
