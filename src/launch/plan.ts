@@ -161,6 +161,9 @@ export type Op =
       workspace?: string;
       /** The agent session kept beside those pids. */
       agentSession?: string;
+      /** A restored Claude seat: the host resumed it without its launch line, so the record says
+       *  its process carries no channel flag (`channel_launch: false`) until the next launch. */
+      channelDropped?: true;
       /** This record is a refusal: the run exits 1 even when the stored stage stays ready. */
       held?: boolean;
     }
@@ -1271,6 +1274,7 @@ export function upPlan(input: UpInput): Step[] {
           ...(seat.restored.pane === undefined ? {} : { pane: seat.restored.pane }),
           ...(seat.restored.workspace === undefined ? {} : { workspace: seat.restored.workspace }),
           agentSession: seat.restored.session,
+          ...(seat.cli === 'claude-code' ? { channelDropped: true as const } : {}),
         },
       });
       continue;

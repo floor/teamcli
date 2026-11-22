@@ -390,6 +390,8 @@ describe('team up, a restored session: boundaries', () => {
       workspace: 'new-pane',
       launched: { shell: 700, cli: [701] },
       agent_session: 'kept',
+      // The host resumed the conversation, not the launch line: no channel flag on the process.
+      channel_launch: false,
     });
   });
 
@@ -499,6 +501,7 @@ describe('team up, a restored session: boundaries', () => {
       pane: 'worker-pane',
       launched: { shell: 900, cli: [901] },
       agent_session: 'kept',
+      channel_launch: false,
     });
   });
 

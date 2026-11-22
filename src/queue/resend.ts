@@ -21,6 +21,7 @@
 import type { KeyObject } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
+import { readStateShared } from '../state.ts';
 import { join } from 'node:path';
 import { stampedListing } from './mail-tree.ts';
 import { ACTOR_LEVEL } from './floor.ts';
@@ -58,11 +59,25 @@ export type ResendSeat = {
 export const CHANNEL_OVERDUE_MS = 90_000;
 
 /** Why a claude-code seat's channel is not proven, or null when it is (the doctor's words). */
-export type ChannelUnproven = 'no listener' | 'unproven since launch' | 'overdue offer';
+export type ChannelUnproven = 'no listener' | 'not started from its launch line' | 'unproven since launch' | 'overdue offer';
+
+/** Whether the seat's record says the process in its pane carries no development-channel flag
+ *  (`channel_launch: false`): a launch that fell back without it, or a pane the terminal host
+ *  resumed after a restart and team re-tied (the restart rebind and the restore adoption write
+ *  it), since such a resume runs the CLI without the launch line's flags. Its listener may still
+ *  declare the channel, yet nothing it pushes reaches the conversation. Unreadable: false. */
+export function channelFlagDropped(root: string, session: string, seat: string): boolean {
+  try {
+    return readStateShared(join(root, '.agents')).sessions[session]?.seats[seat]?.channel_launch === false;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The Claude adapter's one fact, read live at each decision (§2.1): a live inbox listener of this
- * level for the seat declares the channel, that listener's token-ack log holds at least one ack
+ * level for the seat declares the channel, the seat's record does not say its process runs without
+ * the channel flag (`channelFlagDropped`), that listener's token-ack log holds at least one ack
  * that carried a valid offer (src/comms/offer.ts), and no channel offer of this seat is overdue —
  * a record still unsettled 90 s after its newest offer started (the attempt's reservation, or the
  * record's arrival for the send's own first offer) with no proving ack from this listener for a
@@ -71,6 +86,7 @@ export type ChannelUnproven = 'no listener' | 'unproven since launch' | 'overdue
 export function channelUnproven(input: { dropDir: string; root: string; session: string; seat: string; context: StatusContext; key: KeyObject; nowMs: number }): ChannelUnproven | null {
   const live = inboxLive(input.dropDir, input.root, input.session, input.seat);
   if (!live.live || live.listener.channel !== true || (live.listener.level ?? 0) < ACTOR_LEVEL) return 'no listener';
+  if (channelFlagDropped(input.root, input.session, input.seat)) return 'not started from its launch line';
   const listenerKey = listenerKeyOf(live.listener);
   const acks = offerAcks(input.dropDir, listenerKey, { root: input.root, session: input.session, seat: input.seat, key: input.key });
   if (acks.length === 0) return 'unproven since launch';

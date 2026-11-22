@@ -166,6 +166,19 @@ describe('the restart rebind writes every CLI the proof covers', () => {
     });
   }
 
+  test('a rebound Claude seat is recorded without its channel flag; another CLI keeps its record', () => {
+    // The terminal host resumed the conversation, not the launch line: the development-channel
+    // flag is not on the process, so its listener's pushes reach nothing until a relaunch.
+    const claude = standing('claude-code', 'seat-claude');
+    updateState(dir, (file) => { file.sessions[SESSION]!.seats['seat-claude']!.channel_launch = true; });
+    const live = { launched: { shell: 700, cli: [800] }, paneShell: 700, paneShellStart: 5, address: null };
+    expect(recordRebootRebind(home, claude.agent, dir, readState(dir).sessions[SESSION]!.seats['seat-claude']!, live)).toBe(true);
+    expect(readState(dir).sessions[SESSION]!.seats['seat-claude']!.channel_launch).toBe(false);
+    const codex = standing('codex', 'seat-codex');
+    expect(recordRebootRebind(home, codex.agent, dir, codex.held, live)).toBe(true);
+    expect(readState(dir).sessions[SESSION]!.seats['seat-codex']!.channel_launch).toBeUndefined();
+  });
+
   test('the proved CLI start times ride into the state with the pids (E7b: the typed wake\'s full proof)', () => {
     const { agent, held } = standing('codex', 'seat-codex');
     const live = { launched: { shell: 700, cli: [800], cli_start: [9_000] }, paneShell: 700, paneShellStart: 5, address: null };

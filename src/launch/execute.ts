@@ -1378,6 +1378,7 @@ export async function executePlan(
             ...(op.workspace ? { workspace: op.workspace } : {}),
             launched: op.launched,
             ...(op.agentSession ? { agent_session: op.agentSession } : {}),
+            ...(op.channelDropped === true ? { channel_launch: false } : {}),
           });
         }
         final(op.seat, op.record, op.detail ?? '');
@@ -2449,6 +2450,10 @@ export async function executePlan(
         // pane read at its idle prompt now, with herdr not reporting a turn, makes it ready and
         // clears the wait; a dialog, a running turn, unsent text or an unreadable screen keeps
         // both, and the seat is said as left out with its identity re-tied.
+        // A pane the host restored runs a process no launch line started: a Claude seat's channel
+        // flag is not on it, so its record says so (`channel_launch: false`) until the next launch.
+        // A seat whose own launched process still runs keeps the record it has.
+        const restoredChannel = op.sameProcess !== true && op.cli === 'claude-code' ? { channel_launch: false } : {};
         if (op.unready !== undefined) {
           const screenNow = host.paneText?.(session, op.pane) ?? null;
           const statusNow = agentsNow?.find((agent) => agent.pane === op.pane)?.status;
@@ -2461,6 +2466,7 @@ export async function executePlan(
               workspace: op.workspace,
               launched: launchedIdentity(processNow) ?? op.launched,
               ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
+              ...restoredChannel,
             }, true);
             held = true;
             dropped.add(op.seat);
@@ -2479,6 +2485,7 @@ export async function executePlan(
           // is the fallback for a reading the host could not give twice.
           launched: launchedIdentity(processNow) ?? op.launched,
           ...(proof.kind === 'session' && op.session !== undefined ? { agent_session: op.session } : {}),
+          ...restoredChannel,
           // A record adopted from `launched` or from a wait, read at its idle prompt just now:
           // the dialog the record waited on is not there any more.
           ...(op.unready !== undefined ? { waiting: null } : {}),
@@ -3314,6 +3321,8 @@ export async function executePlan(
                 workspace: op.workspace,
                 launched: identity,
                 agent_session: recordedSession,
+                // The host resumed the conversation without the launch line: no channel flag.
+                ...(op.cli === 'claude-code' ? { channel_launch: false } : {}),
               });
             }
             provedRestored.add(op.seat);

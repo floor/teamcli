@@ -553,6 +553,9 @@ export function recordRebootRebind(
       };
       seat.pane_shell = live.paneShell;
       seat.pane_shell_start = live.paneShellStart;
+      // The terminal host resumed the conversation without the launch line, so the process
+      // carries no channel flag: its pushes reach nothing until a launch through the line.
+      if (expected.cli === 'claude-code') seat.channel_launch = false;
       return true;
     }, { writeWhen: (result) => result });
     if (!written) return false;
