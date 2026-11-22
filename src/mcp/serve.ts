@@ -91,6 +91,7 @@ import { exposeBody, exposurePointer } from '../queue/exposure.ts';
 import { channelAckLine, liveChannelCopy, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { channelLaunchFallback, claudeChannelSeat } from './launch-config.ts';
 import { readClientThreadGrant } from '../client/records.ts';
+import { bundleAckGate, type BundleAckGate } from '../client/bundle-ack.ts';
 import { channelOfferStartedGivenUp, channelOwnsSeat, claudeAdapterRoot, resendCandidates, resendPass } from '../queue/resend.ts';
 import { queuePlaceOf } from '../queue/append.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -1063,18 +1064,23 @@ function ackTool(args: unknown, serving: Serving): unknown {
   }
   // A client's record on a plain grant is acknowledged by the seat it is addressed to (checked
   // above), as any message is: the receipt is that seat's own read and grants the client nothing.
-  // A bundle grant's ack is the command's (`team ack`), under its grant's own checks.
+  // A bundle grant's record is admitted by the gate `team ack` runs, and written under its lock.
+  let bundle: Extract<BundleAckGate, { ok: true }> | null = null;
   if (payload.from_client !== undefined) {
     const origin = readClientThreadGrant(serving.home, payload.from_client.grant_id);
     if (!origin.ok) return toolError(`message ${id}: its client grant does not verify: ${origin.why}`);
-    if (origin.kind !== 'grant') return toolError(`message ${id} was written under a client bundle grant; acknowledge it with team ack ${id}`);
+    if (origin.kind === 'bundle') {
+      const gate = bundleAckGate(serving.home, { grant: origin.grant, signature: origin.signature }, payload, serving.root, serving.session, serving.seat, () => new Date());
+      if (!gate.ok) return toolError(`message ${id}: ${gate.why}`);
+      bundle = gate;
+    }
   }
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
   // The record is verified now; the declaration is looked at again immediately before the receipt
   // is written, so a seat stopped while its record was being read acknowledges nothing.
   const staleNow = serving.alive?.();
   if (staleNow !== undefined && staleNow !== null) return toolError(staleNow);
-  const outcome = publishRecordRead({
+  const publish = () => publishRecordRead({
     dropDir: dropDir,
     id,
     to: serving.seat,
@@ -1087,6 +1093,14 @@ function ackTool(args: unknown, serving: Serving): unknown {
     lead: serving.team.orchestrator,
     ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
   });
+  let outcome: ReturnType<typeof publishRecordRead>;
+  if (bundle === null) {
+    outcome = publish();
+  } else {
+    const settled = bundle.under(publish);
+    if (!settled.ok) return toolError(`${id}: not acknowledged: ${settled.why}`);
+    outcome = settled.value;
+  }
   if (outcome.kind === 'held') {
     return toolError(`${id}: not acknowledged: the ${outcome.status} receipt name is held by a file that does not verify for this message`);
   }

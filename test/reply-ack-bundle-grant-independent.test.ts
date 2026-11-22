@@ -39,6 +39,7 @@ import {
 } from '../src/client/records.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runReply } from '../src/commands/reply.ts';
+import { runMcpServe } from '../src/mcp/serve.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -836,5 +837,56 @@ describe('7. plain client grants: the client inbox is unchanged, the addressee a
     expect(acked.code).toBe(0);
     expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(true);
     expect(listClientInboxFiles(f)).toEqual([]);
+  });
+});
+
+describe('8. the channel ack tool admits a bundle-grant record exactly as team ack does', () => {
+  const FLAG = '--dangerously-load-development-channels server:team-inbox';
+
+  /** The orchestrator seat's launch carries the development channel, so its server serves `ack`. */
+  function withChannel(f: Fixture): void {
+    const path = join(f.root, '.agents', 'team.yaml');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      '    launch: claude --model claude-opus-5-5\n    leads: true',
+      `    launch: claude --model claude-opus-5-5 ${FLAG}\n    leads: true`,
+    ));
+  }
+
+  async function ackOverChannel(f: Fixture, id: string): Promise<Record<string, any>> {
+    const io = testIo(f.root, { kind: 'seat', name: 'orchestrator', pane: 'pane:orchestrator', session: SESSION });
+    const replies: string[] = [];
+    const code = await runMcpServe({ seat: 'orchestrator', session: SESSION }, io, {
+      lines: (async function* () {
+        yield JSON.stringify({ jsonrpc: '2.0', id: 'a', method: 'tools/call', params: { name: 'ack', arguments: { id } } });
+      })(),
+      write: (line) => replies.push(line),
+    }, { home: f.home });
+    expect(code).toBe(0);
+    const answer = replies.map((line) => JSON.parse(line) as Record<string, any>).find((one) => one.id === 'a');
+    expect(answer).toBeDefined();
+    return answer!.result;
+  }
+
+  test('a bundle carrying ack is acknowledged by the tool, writing the read receipt', async () => {
+    const f = makeFixture({ kind: 'bundle', ops: ['send', 'ack'] });
+    const sent = await sendFromClient(f, 'orchestrator', 'ack me over the channel');
+    expect(sent.code).toBe(0);
+    withChannel(f);
+    const result = await ackOverChannel(f, sent.id);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0].text)).toEqual({ acknowledged: sent.id, written: true });
+    const receipt = JSON.parse(readFileSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`), 'utf8'));
+    expect(receipt.payload).toMatchObject({ status: 'read', id: sent.id, to: 'orchestrator', read_by: 'channel' });
+  });
+
+  test('a bundle without ack is refused by the tool with team ack\'s reason, writing no receipt', async () => {
+    const f = makeFixture({ kind: 'bundle', ops: ['send', 'reply'] });
+    const sent = await sendFromClient(f, 'orchestrator', 'no ack op in bundle');
+    expect(sent.code).toBe(0);
+    withChannel(f);
+    const result = await ackOverChannel(f, sent.id);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(`bundle grant ${f.grantId} carries send, reply, not ack`);
+    expect(existsSync(join(seatDropsDir(f, 'orchestrator'), `${sent.id}.read.json`))).toBe(false);
   });
 });
