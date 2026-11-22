@@ -142,6 +142,8 @@ const MUTABLE: Record<string, string> = {
   // E6: the hosted watch's floor-pass throttle (one pass a minute per root, this process only),
   // and the receipt store's fixed set of terminal kinds.
   'src/queue/floor.ts: lastFloorPass': 'process',
+  // The ids this process itself stamped.
+  'src/queue/mail-tree.ts: stampedHere': 'process',
   'src/queue/receipt-store.ts: TERMINAL': 'constant',
   'src/bus/server.ts: SOCKET_PUBLISH_KINDS': 'constant',
   'src/bus/webhook.ts: UNSENT_CODES': 'constant',
@@ -166,6 +168,8 @@ const MUTABLE: Record<string, string> = {
   'src/file/load.ts: gitRootReads': 'process',
   'src/herdr-direct.ts: bound': 'process',
   'src/herdr-direct.ts: nextId': 'process',
+  // The connect probe, bound once for this process.
+  'src/herdr-direct.ts: probing': 'process',
   'src/herdr.ts: customRun': 'test',
   'src/herdr.ts: runGeneration': 'process',
   'src/herdr.ts: activeSnapshot': 'reset',
@@ -209,6 +213,8 @@ const MUTABLE: Record<string, string> = {
   'src/permissions/grants.ts: lockSequence': 'process',
   'src/process-kernel.ts: bound': 'process',
   'src/process-kernel.ts: override': 'test',
+  // The kernel reader of a process's parent, bound once for this process.
+  'src/process-parent-adapter.ts: native': 'process',
   'src/profiles/trust-answer.ts: captures': 'constant',
   'src/registry/agents.ts: parsedAgentFiles': 'content',
   'src/registry/agents.ts: keptScans': 'content',
@@ -225,11 +231,15 @@ const MUTABLE: Record<string, string> = {
   'src/send/legacy-inbox-retention.ts: inProcess': 'process',
   'src/send/pending.ts: FALLBACK_LEGS': 'constant',
   'src/send/record.ts: receiptStampCache': 'content',
+  'src/send/record.ts: stampCache': 'content',
+  'src/send/record.ts: copyCache': 'content',
   'src/send/record.ts: keyPrintMemo': 'content',
   'src/send/record.ts: KNOWN_READER': 'constant',
   'src/send/record.ts: UNNAMED_READER': 'constant',
   'src/session-names.ts: INHERITED_SESSION_NAMES': 'constant',
   'src/state.ts: readStateCalls': 'process',
+  // Keyed by the state file's inode, size and times, and by its text inside the racy margin.
+  'src/state.ts: sharedStates': 'content',
   'src/watch/screen-core.ts: SCREEN_KINDS': 'constant',
 };
 
