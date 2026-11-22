@@ -666,10 +666,11 @@ acme:
   naming write (including `team config`'s) takes: two runs in two checkouts cannot both take one
   name. The name is published in that same transaction: a team the registry already holds shows
   it through its record, and a first run, which registers its row only later, through a claim in
-  `~/.config/team/name-claims.json` that every pick reads. A claim counts until the registry's own
-  view (the team's stored record or roster) shows that name for that seat — so a file-backed team,
-  whose roster is refreshed later, is covered too — and for a day at most; each claiming write
-  prunes the rest. An add whose name was
+  `~/.config/team/name-claims.json` that every pick reads. A name any copy of a registered team shows —
+  its stored registry record, its team file or its roster — is held, so a copy that lags never
+  frees a name another copy carries. A claim counts until one of those copies shows that name for
+  that seat, and for a day at most; a claim whose team is archived, or whose seat no copy declares
+  any more, is released. Every naming lock retires the claims no longer in force from the file. An add whose name was
   taken while it checked is refused (`add.name-taken`), and the next add picks the next free name.
   A `team config` write whose record changed after it was read — an edit left open while a name
   was handed out, say — is refused (`config.changed`) and writes nothing; an editor's draft is

@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { currentRunMemo } from '../run-memo.ts';
 import { writeAtomic } from '../state.ts';
 import { NAME_POOL_DEFAULT, NAME_POOLS } from './name-pools.ts';
-import { readStoredTeamConfig, type StoredTeamConfig } from './team-config-store.ts';
+import { readStoredTeamConfig } from './team-config-store.ts';
 import { readTeams, teamIdOf, TeamsError, withTeamsLock, type TeamRecord } from './teams.ts';
 
 /** The comparison the setting names: case-insensitive, so `Cicero` and `cicero` are one name. */
@@ -83,40 +83,11 @@ function projectOf(
   return { id, name };
 }
 
-/** A team's seats as its stored record text writes them, or null when that text is missing or
- *  does not read — the caller then falls back to the roster. */
-function storedSeats(home: string, id: string): { team: TeamFile; seats: Array<{ seat: string; nickname: string }> } | null {
-  let stored: StoredTeamConfig | null = null;
-  try {
-    stored = readStoredTeamConfig(home, id);
-  } catch {
-    return null;
-  }
-  if (stored === null) return null;
-  const parsed = validateTeamFile(stored.text, { home, root: stored.root });
-  if (!parsed.ok) return null;
-  const seats = parsed.team.seats.flatMap((seat) => {
-    const nickname = heldNickname(parsed.team.seats, seat);
-    return nickname === null ? [] : [{ seat: seat.name, nickname }];
-  });
-  return { team: parsed.team, seats };
-}
-
-/** The roster's own nicknames, for a team whose stored text cannot be read: the name the last
- *  launch marked, taken as the same projection the record derives (src/registry/sync.ts). */
-function rosterSeats(record: TeamRecord): Array<{ seat: string; nickname: string }> {
-  return record.roster.flatMap((line) => {
-    const nickname = line.nickname;
-    if (nickname === undefined || sameNickname(nickname, line.seat)) return [];
-    return [{ seat: line.seat, nickname }];
-  });
-}
-
 /**
  * Every seat carrying a nickname in the registry's teams, `exceptTeamId` left out and archived
- * teams left out: a team no longer running holds no name a new one cannot take. A team's own
- * stored text is read before its roster lines — the record is the team as its commands wrote it,
- * the roster what the last launch marked — and a registry that cannot be read holds nobody.
+ * teams left out: a team no longer running holds no name a new one cannot take. Every copy of a
+ * team counts — its stored record, its team file and its roster (teamView) — so a copy that lags
+ * never hides a name another shows; a registry that cannot be read holds nobody.
  */
 export function nicknameHolders(home: string, exceptTeamId: string): NicknameHolder[] {
   let teams: Record<string, TeamRecord>;
@@ -131,20 +102,61 @@ export function nicknameHolders(home: string, exceptTeamId: string): NicknameHol
   // for that team and seat — a first run before its row, or a row whose stored record or roster
   // has not caught up with the write (claimNames).
   return [
-    ...liveClaims(home, rows).filter((claim) => claim.teamId !== exceptTeamId),
+    ...liveClaims(home, teams, rows).filter((claim) => claim.teamId !== exceptTeamId),
     ...rows.filter((holder) => holder.teamId !== exceptTeamId),
   ];
 }
 
-/** Every seat carrying a nickname in the registry's own view of its teams: a team's stored
- *  record text, else its roster lines; archived teams left out. */
+/** One team as every copy of it shows it: the seats it declares and the nicknames they carry. */
+type TeamView = { team: TeamFile | null; seats: Set<string>; named: Array<{ seat: string; nickname: string }> };
+
+/**
+ * A team as the registry's stored record, the team file at its root and its roster show it — the
+ * union, never one copy preferred over another: a file-backed team's stored copy can lag its team
+ * file and roster, and a name any copy shows is held. A copy that cannot be read adds nothing.
+ */
+function teamView(home: string, id: string, root: string, record: TeamRecord | null): TeamView {
+  const view: TeamView = { team: null, seats: new Set(), named: [] };
+  const seen = new Set<string>();
+  const hold = (seat: string, nickname: string) => {
+    const key = `${seat}\u0000${nickname.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    view.named.push({ seat, nickname });
+  };
+  const add = (text: string, at: string) => {
+    const parsed = validateTeamFile(text, { home, root: at });
+    if (!parsed.ok) return;
+    view.team ??= parsed.team;
+    for (const seat of parsed.team.seats) {
+      view.seats.add(seat.name);
+      const nickname = heldNickname(parsed.team.seats, seat);
+      if (nickname !== null) hold(seat.name, nickname);
+    }
+  };
+  try {
+    const stored = readStoredTeamConfig(home, id);
+    if (stored !== null) add(stored.text, stored.root);
+  } catch {}
+  try {
+    add(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'), root);
+  } catch {}
+  for (const line of record?.roster ?? []) {
+    view.seats.add(line.seat);
+    if (line.nickname !== undefined && !sameNickname(line.nickname, line.seat)) hold(line.seat, line.nickname);
+  }
+  return view;
+}
+
+/** Every seat carrying a nickname in any copy of the registry's teams (teamView); archived teams
+ *  left out. */
 function rowHolders(home: string, teams: Record<string, TeamRecord>): NicknameHolder[] {
   const out: NicknameHolder[] = [];
   for (const [id, record] of Object.entries(teams)) {
     if (record.lifecycle === 'archived') continue;
-    const stored = storedSeats(home, id);
-    const project = projectOf(home, record, stored?.team ?? null, record.root);
-    for (const seat of stored?.seats ?? rosterSeats(record)) {
+    const view = teamView(home, id, record.root, record);
+    const project = projectOf(home, record, view.team, record.root);
+    for (const seat of view.named) {
       out.push({
         nickname: seat.nickname,
         teamId: id,
@@ -311,11 +323,38 @@ function readClaims(home: string): NameClaim[] {
   }
 }
 
-/** The claims still in force: younger than a day, and not yet shown by the registry's own view —
- *  no holder there carries that nickname for that team and seat. */
-function liveClaims(home: string, rows: readonly NicknameHolder[], now: number = Date.now()): NameClaim[] {
-  return readClaims(home).filter((claim) => now - Date.parse(claim.at) < CLAIM_TTL_MS
-    && !rows.some((holder) => holder.teamId === claim.teamId && holder.seat === claim.seat && sameNickname(holder.nickname, claim.nickname)));
+/**
+ * Whether a claim is still in force: younger than a day; not yet shown by the registry's view (no
+ * copy there carries that nickname for that team and seat — the name is held by the row then);
+ * and of a team and seat that still exist: a team the registry archived, or a seat no copy of its
+ * team declares any more, releases the name.
+ */
+function claimInForce(home: string, claim: NameClaim, teams: Record<string, TeamRecord>, rows: readonly NicknameHolder[], now: number): boolean {
+  if (!(now - Date.parse(claim.at) < CLAIM_TTL_MS)) return false;
+  if (rows.some((holder) => holder.teamId === claim.teamId && holder.seat === claim.seat && sameNickname(holder.nickname, claim.nickname))) return false;
+  const record = Object.hasOwn(teams, claim.teamId) ? teams[claim.teamId]! : null;
+  if (record !== null && record.lifecycle === 'archived') return false;
+  return teamView(home, claim.teamId, record?.root ?? claim.root, record).seats.has(claim.seat);
+}
+
+function liveClaims(home: string, teams: Record<string, TeamRecord>, rows: readonly NicknameHolder[], now: number = Date.now()): NameClaim[] {
+  return readClaims(home).filter((claim) => claimInForce(home, claim, teams, rows, now));
+}
+
+/** Retires every claim no longer in force from the ledger itself, not only from one reading of
+ *  it. Run at the naming lock's entry, so every pick under the lock reads a pruned ledger. */
+function pruneClaims(home: string, now: number = Date.now()): NameClaim[] {
+  const all = readClaims(home);
+  if (all.length === 0) return [];
+  let teams: Record<string, TeamRecord> = {};
+  try {
+    teams = readTeams(home);
+  } catch {
+    return all;
+  }
+  const kept = liveClaims(home, teams, rowHolders(home, teams), now);
+  if (kept.length !== all.length) writeAtomic(claimsPath(home), `${JSON.stringify({ format: 1, claims: kept }, null, 2)}\n`);
+  return kept;
 }
 
 /**
@@ -339,12 +378,8 @@ export function claimNames(input: { home: string | undefined; root: string; befo
     if (nickname === null || held.has(`${seat.name}\u0000${nickname.toLowerCase()}`)) return [];
     return [{ nickname, teamId, team: after.project, root: input.root, entity: after.entity, projectId: project.id, seat: seat.name, at }];
   });
-  let teams: Record<string, TeamRecord> = {};
-  try {
-    teams = readTeams(home);
-  } catch {}
-  const kept = liveClaims(home, rowHolders(home, teams)).filter((claim) => !(claim.teamId === teamId && fresh.some((one) => one.seat === claim.seat)));
-  if (fresh.length === 0 && kept.length === readClaims(home).length) return;
+  const kept = pruneClaims(home, (input.now ?? new Date()).getTime()).filter((claim) => !(claim.teamId === teamId && fresh.some((one) => one.seat === claim.seat)));
+  if (fresh.length === 0) return;
   writeAtomic(claimsPath(home), `${JSON.stringify({ format: 1, claims: [...kept, ...fresh] }, null, 2)}\n`);
 }
 
@@ -361,6 +396,8 @@ export function withNamingLock<T>(home: string | undefined, work: () => T): T {
       memo.teamsTolerant.clear();
       memo.teamLoads.clear();
     }
+    // Claims the registry's view now shows, or whose team or seat is gone, leave the ledger.
+    pruneClaims(home);
     return work();
   });
 }

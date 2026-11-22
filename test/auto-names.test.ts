@@ -19,7 +19,7 @@ import { withApprovalLock } from '../src/store/store.ts';
 import { writeTeamText } from '../src/file/team-text.ts';
 import { NAME_POOLS } from '../src/registry/name-pools.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { setTeamLifecycle, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { intoRegistry } from './helpers/registry-team.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 import { fixtureBase, gitEnv, testIo } from './helpers.ts';
@@ -258,6 +258,8 @@ describe('name claims', () => {
     const first = validateTeamFile(teamText('delta', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), NAMED('tester', 'checker', POOL[0]!)]));
     if (!first.ok) throw new Error(JSON.stringify(first.errors));
     const elsewhere = join(world.roots.c!, '..', 'delta');
+    mkdirSync(join(elsewhere, '.agents'), { recursive: true });
+    writeFileSync(join(elsewhere, '.agents', 'team.yaml'), teamText('delta', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), NAMED('tester', 'checker', POOL[0]!)]));
     claimNames({ home: world.home, root: elsewhere, before: null, after: first.team, now: new Date() });
     expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
   });
@@ -270,28 +272,63 @@ describe('name claims', () => {
     expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
   });
 
-  test('a file-backed team with a row: the claim counts until the registry\'s view shows the name, then is pruned', () => {
-    const lead = NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:');
+  test('a file-backed team whose stored copy lags holds its name through its team file, past any claim\'s expiry', () => {
     const world = place({
       a: teamText('alpha', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
-      c: teamText('gamma', 'acme', [lead, SEAT('tester', 'checker')]),
+      c: teamText('gamma', 'acme', [NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
     });
     const root = world.roots.a!;
     const named = withAutoNamesFor(world, 'a');
-    // The file-backed write lands in the team file; the registry's stored record and roster are
-    // refreshed later, outside the naming lock.
+    // The file-backed write, as production makes it: the team file only; the stored registry
+    // copy keeps the old text.
     const wrote = writeTeamText(join(root, '.agents', 'team.yaml'), named.text, { home: world.home, env: { TEAM_CONFIG_SOURCE: 'file' } });
     if (!wrote.ok) throw new Error(JSON.stringify(wrote.errors));
     expect(stored(world, 'a')).not.toContain(`nickname: ${POOL[0]!}`);
-    claimNames({ home: world.home, root, before: named.before, after: named.after, now: new Date() });
-    // The row exists, but its view does not show the name yet: the claim holds it.
+    // A claim long expired: the name is still held, by the team file the union reads.
+    claimNames({ home: world.home, root, before: named.before, after: named.after, now: new Date(Date.now() - 48 * 60 * 60 * 1000) });
     expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
-    // Once the registry's own view carries it, the row holds the name and the claim is pruned.
-    const synced = writeTeamText(join(root, '.agents', 'team.yaml'), named.text, { home: world.home, env: { TEAM_CONFIG_SOURCE: 'registry' } });
-    if (!synced.ok) throw new Error(JSON.stringify(synced.errors));
+  });
+
+  test('the ledger retires a claim once the view shows the name, or its team or seat is gone', () => {
+    const world = place({
+      a: teamText('alpha', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
+    });
+    const ledger = () => readFileSync(join(world.home, '.config', 'team', 'name-claims.json'), 'utf8');
+    const lead = NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:');
+    // A first run elsewhere: no row, its team file declares the seat — the claim is in force.
+    const elsewhere = join(world.roots.a!, '..', 'delta');
+    mkdirSync(join(elsewhere, '.agents'), { recursive: true });
+    const firstText = teamText('delta', 'acme', [lead, NAMED('tester', 'checker', 'Mae')]);
+    writeFileSync(join(elsewhere, '.agents', 'team.yaml'), firstText);
+    const first = validateTeamFile(firstText);
+    if (!first.ok) throw new Error(JSON.stringify(first.errors));
+    claimNames({ home: world.home, root: elsewhere, before: null, after: first.team, now: new Date() });
+    withNamingLock(world.home, () => {});
+    expect(ledger()).toContain('"nickname": "Mae"');
+    // Its seat is dropped from every copy: the next naming lock retires the claim from the file.
+    writeFileSync(join(elsewhere, '.agents', 'team.yaml'), teamText('delta', 'acme', [lead]));
+    withNamingLock(world.home, () => {});
+    expect(ledger()).not.toContain('"nickname": "Mae"');
+    // A claim of a team whose row shows the name is retired as well.
+    const named = withAutoNamesFor(world, 'a');
+    writeTeamText(join(world.roots.a!, '.agents', 'team.yaml'), named.text, { home: world.home, env: { TEAM_CONFIG_SOURCE: 'file' } });
+    claimNames({ home: world.home, root: world.roots.a!, before: named.before, after: named.after, now: new Date() });
+    withNamingLock(world.home, () => {});
+    expect(ledger()).not.toContain(`"nickname": "${POOL[0]!}"`);
+  });
+
+  test('a claim of an archived team no longer counts', () => {
+    const world = place({
+      a: teamText('alpha', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
+      c: teamText('gamma', 'acme', [NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
+    });
+    const a = validateTeamFile(stored(world, 'a'));
+    if (!a.ok) throw new Error(JSON.stringify(a.errors));
+    const after = { ...a.team, seats: a.team.seats.map((seat) => seat.name === 'checker' ? { ...seat, nickname: POOL[0]! } : seat) };
+    claimNames({ home: world.home, root: world.roots.a!, before: a.team, after, now: new Date() });
     expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
-    claimNames({ home: world.home, root: world.roots.c!, before: null, after: named.after, now: new Date() });
-    expect(readFileSync(join(world.home, '.config', 'team', 'name-claims.json'), 'utf8')).not.toContain(`"teamId": "${teamIdOf(root)}"`);
+    setTeamLifecycle(world.home, teamIdOf(world.roots.a!), 'archived');
+    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
   });
 });
 
