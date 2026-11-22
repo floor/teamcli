@@ -216,8 +216,9 @@ describe('the codex launch line round-trips its values through shell quoting and
 
   function pairs(line: string): Map<string, string> {
     const argv = words(line);
-    const at = argv.flatMap((word, index) => (word === '-c' ? [index] : []));
-    // Codex keeps only the two inbox pairs after the obsolete OAuth refresh override was removed.
+    const at = argv.flatMap((word, index) => (word === '-c' && !(argv[index + 1] ?? '').startsWith('features.') ? [index] : []));
+    // Codex keeps only the two inbox pairs after the obsolete OAuth refresh override was removed;
+    // the profile's feature pins are the other `-c` words, and are not the inbox's.
     expect(at).toHaveLength(2);
     const filled = new Map<string, string>();
     for (const index of at) {

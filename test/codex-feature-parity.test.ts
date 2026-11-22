@@ -1,5 +1,6 @@
 // Saved recipe migration retires the fixed false override: proven launch recipes shed it, true stays,
-// and a profile with no required feature pins emits no pin diagnostic.
+// and no diagnostic ever asks for it back. The pins the profile does require (computer and browser
+// use off) are recorded on every launch, and a record without them is named.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +23,9 @@ const SEAT = 'worker';
 const CLI = 'zsh /w/as-floor.sh codex -m gpt-6.1-sol';
 const PIN = 'features.mcp_oauth_refresh_coordination=false';
 const PINNED = `${CLI} -c ${PIN}`;
+/** The profile's current pins as a recorded line carries them. */
+const CURRENT_PINS = '-c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false';
+const CURRENT = `${CLI} ${CURRENT_PINS}`;
 // Neutral fixture ids: the host's pane and workspace shapes are never written into a test.
 const PANE_ONE = 'fixture-pane-one';
 const PANE_TWO = 'fixture-pane-two';
@@ -181,7 +185,7 @@ describe('the plan and the record keep the migrated base recipe', () => {
 
   test('the launch op carries the migrated base line, never the expanded command', () => {
     const { launch } = planned();
-    expect(launch.recordLine).toBe(CLI);
+    expect(launch.recordLine).toBe(CURRENT);
     expect(launch.recordLine).not.toContain('AGENT_UNATTENDED');
     // Recipe normalization strips the false pair from the stored recipe and the expanded command.
     expect(launch.command).not.toContain(PIN);
@@ -196,7 +200,7 @@ describe('the plan and the record keep the migrated base recipe', () => {
     expect(lines.length).toBeGreaterThan(0);
     for (const entry of lines) {
       expect(entry.seat).toBe(SEAT);
-      expect(entry.patch.launch_line).toBe(CLI);
+      expect(entry.patch.launch_line).toBe(CURRENT);
       expect(entry.patch.launch_line).not.toContain('AGENT_UNATTENDED');
     }
   });
@@ -220,7 +224,7 @@ describe('the plan and the record keep the migrated base recipe', () => {
   });
 });
 
-describe('team doctor requires no retired feature pin', () => {
+describe('team doctor requires the current pins, never the retired one', () => {
   function sources(home: string): DoctorSources {
     return {
       version: () => '2.1.288 (Claude Code)',
@@ -233,14 +237,22 @@ describe('team doctor requires no retired feature pin', () => {
     };
   }
 
-  test('a recorded base line with no feature words needs no feature relaunch', async () => {
+  test('a recorded line with the current pins needs no feature relaunch', async () => {
+    const { root, home, dir } = place();
+    seed(dir, { launch_line: CURRENT });
+    const io = testIo(root, { kind: 'owner' });
+    await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
+    expect(io.out).not.toContain(`${SEAT}: its recorded launch line`);
+    expect(io.out).not.toContain(`run \`team restart ${SEAT}\``);
+  });
+
+  test('a recorded base line with no feature words is named for the current pins only', async () => {
     const { root, home, dir } = place();
     seed(dir, { launch_line: CLI });
     const io = testIo(root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
-    // Current recipes have no profile pin requirement, including for an older unpinned recipe.
-    expect(io.out).not.toContain(`${SEAT}: its recorded launch line`);
-    expect(io.out).not.toContain(`run \`team restart ${SEAT}\``);
+    expect(io.out).toContain(`${SEAT}: its recorded launch line does not pin features.computer_use=false`);
+    expect(io.out).not.toContain('mcp_oauth_refresh_coordination');
   });
 
   test('a record with no launch line does not invent a retired feature requirement', async () => {
@@ -248,14 +260,14 @@ describe('team doctor requires no retired feature pin', () => {
     seed(dir, {});
     const io = testIo(root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
-    // With no required pin, an unknown recipe warrants no guessed feature repair.
-    expect(io.out).not.toContain(`${SEAT}: its recorded launch line is unknown`);
-    expect(io.out).not.toContain(`run \`team restart ${SEAT}\``);
+    // An unknown recipe is said as unknown against the current pins, never the retired pair.
+    expect(io.out).toContain(`${SEAT}: its recorded launch line is unknown`);
+    expect(io.out).not.toContain('mcp_oauth_refresh_coordination');
   });
 
-  test('a legacy false record draws no profile pin diagnostic', async () => {
+  test('a legacy false record is never asked for the retired pair', async () => {
     const { root, home, dir } = place();
-    seed(dir, { launch_line: PINNED });
+    seed(dir, { launch_line: `${PINNED} ${CURRENT_PINS}` });
     const io = testIo(root, { kind: 'owner' });
     await runDoctor(['--file', '.agents/team.yaml'], io, sources(home));
     expect(io.out).not.toContain('its recorded launch line');
@@ -271,7 +283,7 @@ describe('team doctor requires no retired feature pin', () => {
   });
 });
 
-describe('team check requires no retired feature pin', () => {
+describe('team check requires the current pins, never the retired one', () => {
   function live(): Live {
     return {
       running: true,
@@ -298,7 +310,7 @@ describe('team check requires no retired feature pin', () => {
 
   test('the missing retired pin creates no feature difference or relaunch advice', () => {
     const { root, home, dir } = place();
-    seed(dir, { launch_line: CLI });
+    seed(dir, { launch_line: CURRENT });
     const { code, out } = check(root, home);
     // Current recipes no longer require the false pair; unrelated differences still determine exit1.
     expect(out).not.toContain(`difference: ${SEAT}: its recorded launch line`);
@@ -306,16 +318,24 @@ describe('team check requires no retired feature pin', () => {
     expect(code).toBe(1);
   });
 
+  test('a record without the current pins is a difference naming them, not the retired pair', () => {
+    const { root, home, dir } = place();
+    seed(dir, { launch_line: CLI });
+    const { out } = check(root, home);
+    expect(out).toContain(`${SEAT}: its recorded launch line does not pin features.computer_use=false`);
+    expect(out).not.toContain('mcp_oauth_refresh_coordination');
+  });
+
   test('an unknown line creates no guessed retired feature difference', () => {
     const { root, home, dir } = place();
     seed(dir, {});
     const { out } = check(root, home);
-    expect(out).not.toContain(`difference: ${SEAT}: its recorded launch line is unknown`);
+    expect(out).not.toContain('mcp_oauth_refresh_coordination');
   });
 
   test('a legacy false record is not a profile pin difference', () => {
     const { root, home, dir } = place();
-    seed(dir, { launch_line: PINNED });
+    seed(dir, { launch_line: `${PINNED} ${CURRENT_PINS}` });
     const { out } = check(root, home);
     expect(out).not.toContain('its recorded launch line');
   });

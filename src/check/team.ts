@@ -26,7 +26,7 @@ import {
   unmanagedEndpointNotes,
 } from '../launch/codex-endpoint.ts';
 import { launchLineProblem, realLaunchPlace, type LaunchPlace } from '../launch/launcher-home.ts';
-import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointConfig, managedCodexLaunch } from '../launch/plan.ts';
+import { codexCommandHasFlag, codexCommandRemoteUrl, codexEndpointStartConfig, managedCodexLaunch } from '../launch/plan.ts';
 import { unfinishedWebhookNotes, webhookDeliveryNotes } from '../bus/webhook-notes.ts';
 import { sandboxUnappliedNotes } from '../launch/grok-sandbox.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
@@ -2150,7 +2150,7 @@ function unmanagedCodexServerDifferences(
       });
       continue;
     }
-    const plannedFlags = codexEndpointConfig(lineText);
+    const plannedFlags = codexEndpointStartConfig(lineText);
     if (!endpointContainsConfig(record.config, plannedFlags)) {
       out.push({
         what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint config lacks the seat's start flags)`,

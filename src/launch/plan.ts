@@ -31,6 +31,7 @@ import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
 import { launchedCliBinary } from './line.ts';
+import { featureToggle, withPinnedFeatures } from './features.ts';
 import { channelRestoreStep } from './reboot.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -932,7 +933,8 @@ export function codexCommandRemoteUrl(command: string): string | null {
  * pair of the line, and its `-a`/`-s` overrides as their config keys — however the line spells
  * them (spaced, `=`-joined, or attached short) — go to the endpoint. A bare `--` ends option
  * parsing as it does for the CLI: every word after the first one is positional (a prompt), so a
- * prompt word shaped like an option never becomes an endpoint permission.
+ * prompt word shaped like an option never becomes an endpoint permission. A line's own
+ * `--enable`/`--disable <FEATURE>` goes as the `-c features.<name>=…` pair it stands for.
  */
 export function codexEndpointConfig(command: string): string[] {
   const unwrapped = unwrapCodexCommand(command);
@@ -976,9 +978,26 @@ export function codexEndpointConfig(command: string): string[] {
       config.push('-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"');
     } else if (word === '--full-auto') {
       config.push('-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"');
+    } else {
+      const toggle = featureToggle(word, next);
+      if (toggle !== null) {
+        config.push('-c', `features.${toggle.name}=${String(toggle.value)}`);
+        if (toggle.took) i++;
+      }
     }
   }
   return config;
+}
+
+/**
+ * The words a seat's managed Codex app-server starts with, and the ones its reuse and `team
+ * check` compare a live server against: the line's own (`codexEndpointConfig`), closed by the
+ * profile's pinned feature set (`withPinnedFeatures`). The server's feature set is then the
+ * team's even for a line whose pins a wrapper script adds where no reader can see them, and an
+ * attached TUI — which runs its turns under the server's configuration — gets that set too.
+ */
+export function codexEndpointStartConfig(command: string): string[] {
+  return withPinnedFeatures(codexEndpointConfig(command), profileFor('codex')?.features ?? []);
 }
 
 /**

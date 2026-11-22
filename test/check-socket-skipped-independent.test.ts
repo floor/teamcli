@@ -122,14 +122,14 @@ function settle(made: World, names: readonly string[]): void {
   updateState(made.dir, (state) => {
     const one = (state.sessions.acme ??= emptySession());
     one.watch = { pid: 1, heartbeat: NOW.toISOString() };
-    // The record a current launch writes: a Codex seat's line carries its profile's pinned feature.
+    // The record a current launch writes: a Codex seat's line carries its profile's pinned features.
     for (const name of names) one.seats[name] = {
       stage: 'ready',
       pane: paneOf(name),
       workspace: 'fixture-ws',
       watcher: 'hook',
       launch_line: name === 'native'
-        ? 'codex -m test -c features.mcp_oauth_refresh_coordination=false'
+        ? 'codex -m test -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false'
         : 'claude',
     };
   });

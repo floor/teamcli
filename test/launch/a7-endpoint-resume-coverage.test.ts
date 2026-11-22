@@ -115,6 +115,9 @@ describe('the launch seam starts the endpoint from the resumed command', () => {
       '-c', 'approval_policy="never"',
       '-c', 'sandbox_mode="danger-full-access"',
       '-c', 'model_reasoning_effort=high',
+      // The profile's computer- and browser-use pins close the endpoint's config.
+      '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
+      '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
     ]);
     // And the line the pane runs selects that same thread with the permission flags shed.
     expect(calls).toEqual([
