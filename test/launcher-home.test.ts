@@ -21,7 +21,7 @@ import {
 import { CHANNEL_FLAG } from '../src/mcp/channel.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding } from '../src/store/store.ts';
-import { testIo } from './helpers.ts';
+import { fixtureBase, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-11-08T10:00:00Z');
 const SESSION = 'ses_0123456789ab';
@@ -33,6 +33,15 @@ afterEach(() => {
 
 function scratch(prefix: string): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  made.push(dir);
+  return dir;
+}
+
+/** A scratch folder outside every temp root. On Linux the OS temp folder is `/tmp`, which is
+ *  always a temp root, so a repository built there is a temp folder first; a fixture that
+ *  proves the repository check needs a base outside it. */
+function outsideTemp(prefix: string): string {
+  const dir = fixtureBase(prefix);
   made.push(dir);
   return dir;
 }
@@ -64,6 +73,9 @@ function withTemp<T>(dir: string | undefined, fn: () => T): T {
 
 function writeDecl(dir: string, name: string, body: string, mode?: number): void {
   mkdirSync(dir, { recursive: true });
+  // The home's own mode is the fixture's, not the umask's: a umask of 002 would leave it
+  // group-writable, which the reader refuses.
+  chmodSync(dir, 0o700);
   const path = join(dir, `${name}.yaml`);
   writeFileSync(path, body);
   if (mode !== undefined) chmodSync(path, mode);
@@ -194,7 +206,7 @@ test('compileLauncher names no script, and claude-code gains the seat model, res
 });
 
 test('a script in a repository, a docs repository, or a temp folder is a problem, and an ordinary program is not', () => {
-  const base = scratch('launcher-lines-');
+  const base = outsideTemp('launcher-lines-');
   const repo = join(base, 'repo');
   const docs = join(base, 'docs');
   const home = join(base, 'home');
@@ -243,7 +255,7 @@ test('a script under the realpath of a symlinked temp root is a temp folder', ()
 });
 
 test('team check reports a repository launch line and the migrate repair', () => {
-  const base = scratch('launcher-check-');
+  const base = outsideTemp('launcher-check-');
   const root = join(base, 'repo');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
