@@ -221,6 +221,8 @@ const MUTABLE: Record<string, string> = {
   'src/registry/binding.ts: parsedTeamFiles': 'content',
   'src/registry/teams.ts: parsedTeamsFiles': 'content',
   'src/registry/locks.ts: held': 'process',
+  // The approval stores whose lock this process holds, for the re-entrant signer inside an amendment.
+  'src/store/store.ts: approvalLocksHeld': 'process',
   'src/run-memo.ts: activeMemo': 'reset',
   'src/run-memo.ts: activeDepth': 'reset',
   'src/secrets/store-linux.ts: PAY_PER_USE': 'constant',
