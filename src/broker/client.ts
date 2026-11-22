@@ -3,7 +3,7 @@
 // the module-source scan the release slice's tests already carry is pinned for it. It runs after
 // the S2 gate, where the seat and pane exist, and answers in outcomes the command maps to its
 // exits; nothing here claims anything.
-import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
+import { connect } from 'node:net';
 import type { TaskRead } from '../tasks/adapter.ts';
 import { MAX_ANSWER_BYTES, brokerSocket, encodeLine, parseAnswer, type BrokerRequest } from './protocol.ts';
 import { hostedCommit } from '../host/request-scope.ts';
@@ -38,7 +38,8 @@ export function askBroker(root: string, request: BrokerRequest, options: { deadl
     let connected = false;
     let buffer = '';
     let timer: ReturnType<typeof setTimeout> | undefined;
-    hostedCommit('Bun.connect');
+    hostedCommit('node:net.connect');
+    const socket = connect(brokerSocket(root));
     const finish = (outcome: BrokerOutcome) => {
       if (settled) return;
       settled = true;
@@ -46,7 +47,13 @@ export function askBroker(root: string, request: BrokerRequest, options: { deadl
       socket.destroy();
       done(outcome);
     };
-    const read = (chunk: string): void => {
+    timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
+    socket.setEncoding('utf8');
+    socket.once('connect', () => {
+      connected = true;
+      socket.write(encodeLine(request));
+    });
+    socket.on('data', (chunk: string) => {
       buffer += chunk;
       const at = buffer.indexOf('\n');
       if (at < 0) {
@@ -63,19 +70,10 @@ export function askBroker(root: string, request: BrokerRequest, options: { deadl
         return;
       }
       finish(value.notice === undefined ? { kind: 'read', read: value.read } : { kind: 'read', read: value.read, notice: value.notice });
-    };
+    });
     // A connection that never came up is the no-broker case; one that broke after connecting is
     // the fail-safe one — the broker was there and stopped answering.
-    const Bun = socketRuntime();
-    const { conn: socket, options: dial, refused } = dialing(brokerSocket(root), {
-      open: () => {
-        connected = true;
-        socket.write(encodeLine(request));
-      },
-      text: read,
-      close: () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }),
-    });
-    timer = setTimeout(() => finish(connected ? { kind: 'deadline' } : { kind: 'unavailable' }), deadlineMs);
-    Bun.connect(dial).catch(refused);
+    socket.once('error', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
+    socket.on('close', () => finish(connected ? { kind: 'wrong' } : { kind: 'unavailable' }));
   });
 }

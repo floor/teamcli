@@ -29,9 +29,9 @@ import { RUNTIME_WAKE_MAX } from '../readable-wake.ts';
 //     `read` vs `sent (unconfirmed)` classification stay in `src/commands/send.ts` (the send command).
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { readTeamConfig } from '../../file/team-config.ts';
-import { dialing, socketRuntime, type SocketError } from '../../runtime/bun-socket.ts';
 import type { CopyTarget, RelayReceipt as PackageRelayReceipt } from '../../../packages/relay/index.js';
 import { relayStage } from '../relay-stage.ts';
 import {
@@ -667,6 +667,7 @@ export function queryCodexAppServerThreadRead(input: {
   }
 
   return new Promise((resolve) => {
+    const socket = createConnection({ path: socketPath });
     let settled = false;
     let upgraded = false;
     let initSent = false;
@@ -693,14 +694,7 @@ export function queryCodexAppServerThreadRead(input: {
       });
     }, budgetMs);
 
-    const failed = (err: SocketError | undefined): void => {
-      if (err === undefined) {
-        done({
-          ok: false,
-          reason: 'codex app-server control socket closed before thread/read completed',
-        });
-        return;
-      }
+    socket.on('error', (err: NodeJS.ErrnoException) => {
       const code = err.code ?? 'error';
       if (code === 'ENOENT' || code === 'ECONNREFUSED' || code === 'ENOTSOCK') {
         done({
@@ -713,9 +707,18 @@ export function queryCodexAppServerThreadRead(input: {
         ok: false,
         reason: `codex app-server control socket failed (${code})`,
       });
-    };
+    });
 
-    const opened = (): void => {
+    socket.on('close', () => {
+      if (!settled) {
+        done({
+          ok: false,
+          reason: 'codex app-server control socket closed before thread/read completed',
+        });
+      }
+    });
+
+    socket.on('connect', () => {
       const req = [
         'GET /rpc HTTP/1.1',
         'Host: localhost',
@@ -727,9 +730,9 @@ export function queryCodexAppServerThreadRead(input: {
         '',
       ].join('\r\n');
       socket.write(req);
-    };
+    });
 
-    const read = (chunk: Uint8Array): void => {
+    socket.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (!upgraded) {
         const headerEnd = buffer.indexOf('\r\n\r\n');
@@ -830,10 +833,7 @@ export function queryCodexAppServerThreadRead(input: {
           return;
         }
       }
-    };
-    const Bun = socketRuntime();
-    const { conn: socket, options, refused } = dialing(socketPath, { open: opened, bytes: read, close: failed });
-    Bun.connect(options).catch(refused);
+    });
   });
 }
 

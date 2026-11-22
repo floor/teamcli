@@ -32,7 +32,7 @@
 // released when the listen lands and on every other way out of the section.
 import { closeSync, fstatSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { linkSync, mkdirSync, openSync, unlinkSync, writeFileSync } from '../host/guarded-fs.ts';
-import { dialing, serving, socketRuntime, type Conn, type ConnEvents, type SocketError } from '../runtime/bun-socket.ts';
+import { createServer, connect, type Socket } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { anotherPaneRefusal, callerVerdict, noPaneRefusal, standingOf, type Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -442,26 +442,26 @@ async function startWalk(input: StartBrokerInput, path: string): Promise<StartBr
     } else {
       confirmed = undefined;
     }
-    const sockets = new Set<Conn>();
-    hostedCommit('Bun.listen');
-    const Bun = socketRuntime();
-    let server: ReturnType<typeof Bun.listen>;
-    try {
-      server = Bun.listen(
-        serving(path, (socket) => {
-          sockets.add(socket);
-          socket.onClose(() => sockets.delete(socket));
-          return serve(socket, input);
-        }),
-      );
-    } catch (error) {
-      return { kind: 'bind-failed', code: (error as SocketError).code };
-    }
+    const sockets = new Set<Socket>();
+    hostedCommit('node:net.createServer');
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      serve(socket, input);
+    });
+    const failure = await new Promise<{ code?: string } | null>((done) => {
+      server.once('error', (error) => done({ code: (error as NodeJS.ErrnoException).code }));
+      server.listen(path, () => done(null));
+    });
+    if (failure) return { kind: 'bind-failed', code: failure.code };
+    // A later server-level error must not take the broker down silently.
+    server.on('error', (error) => input.stderr(`team broker: ${error.message}\n`));
     const handle: BrokerHandle = {
-      close: async () => {
-        for (const socket of sockets) socket.destroy();
-        server.stop(true);
-      },
+      close: () =>
+        new Promise<void>((done) => {
+          for (const socket of sockets) socket.destroy();
+          server.close(() => done());
+        }),
     };
     return { kind: 'serving', cleared, handle };
   }
@@ -475,26 +475,24 @@ type Probe = 'live' | 'stale' | 'none';
  *  what turns that into a concrete answer. */
 function probeSocket(path: string): Promise<Probe> {
   return new Promise((done) => {
-    let settled = false;
-    const settle = (probe: Probe): void => {
-      if (settled) return;
-      settled = true;
+    const socket = connect(path);
+    socket.once('connect', () => {
       socket.destroy();
-      done(probe);
-    };
-    const Bun = socketRuntime();
-    const { conn: socket, options, refused } = dialing(path, {
-      open: () => settle('live'),
-      close: (error) => settle(error?.code === 'ECONNREFUSED' ? 'stale' : 'none'),
+      done('live');
     });
-    Bun.connect(options).catch(refused);
+    socket.once('error', (error) => {
+      socket.destroy();
+      done((error as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? 'stale' : 'none');
+    });
   });
 }
 
-function serve(socket: Conn, input: StartBrokerInput): ConnEvents {
+function serve(socket: Socket, input: StartBrokerInput): void {
+  socket.on('error', () => socket.destroy());
   socket.setTimeout(REQUEST_IDLE_MS, () => socket.destroy());
+  socket.setEncoding('utf8');
   let buffer = '';
-  const text = (chunk: string): void => {
+  socket.on('data', (chunk: string) => {
     buffer += chunk;
     const at = buffer.indexOf('\n');
     if (at < 0) {
@@ -505,11 +503,10 @@ function serve(socket: Conn, input: StartBrokerInput): ConnEvents {
     buffer = '';
     socket.pause();
     void dispatch(socket, line, input);
-  };
-  return { text };
+  });
 }
 
-async function dispatch(socket: Conn, line: string, input: StartBrokerInput): Promise<void> {
+async function dispatch(socket: Socket, line: string, input: StartBrokerInput): Promise<void> {
   const request = parseRequest(line);
   if (!request) {
     answer(socket, { ok: false, at: 'caller', message: UNKNOWN_REQUEST });
@@ -617,7 +614,7 @@ function sourceIndex(position: number, taken: Set<number>): number {
   return index;
 }
 
-function answer(socket: Conn, value: BrokerAnswer): void {
+function answer(socket: Socket, value: BrokerAnswer): void {
   const line = encodeLine(value);
   if (line.length > MAX_ANSWER_BYTES) {
     socket.end(encodeLine({ ok: false, at: 'read', message: FAILED_READ }));

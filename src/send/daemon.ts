@@ -18,7 +18,7 @@ import { refuseTyping } from './no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, lstatSync, readFileSync } from 'node:fs';
 import { chmodSync, fchmodSync, linkSync, mkdirSync, openSync, unlinkSync, writeFileSync, writeSync } from '../host/guarded-fs.ts';
-import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
+import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { relayStage } from './relay-stage.ts';
@@ -428,6 +428,7 @@ export function probeDaemonSocketReading(socketPath: string, timeoutMs = 400): P
       resolve('refused');
       return;
     }
+    const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;
     const finish = (how: 'answered' | 'refused' | 'timeout'): void => {
@@ -437,24 +438,23 @@ export function probeDaemonSocketReading(socketPath: string, timeoutMs = 400): P
       socket.destroy();
       resolve(how);
     };
-    const Bun = socketRuntime();
-    const { conn: socket, options, refused } = dialing(socketPath, {
-      open: (conn) => conn.write(`${JSON.stringify({ v: 1, op: 'ping' })}\n`),
-      text: (chunk) => {
-        buffer += chunk;
-        const nl = buffer.indexOf('\n');
-        if (nl === -1) return;
-        try {
-          const parsed = JSON.parse(buffer.slice(0, nl)) as { ok?: unknown; pong?: unknown };
-          finish(parsed.ok === true && parsed.pong === true ? 'answered' : 'refused');
-        } catch {
-          finish('refused');
-        }
-      },
-      close: () => finish('refused'),
-    });
     const timer = setTimeout(() => finish('timeout'), timeoutMs);
-    Bun.connect(options).catch(refused);
+    socket.on('error', () => finish('refused'));
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify({ v: 1, op: 'ping' })}\n`);
+    });
+    socket.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      const nl = buffer.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const parsed = JSON.parse(buffer.slice(0, nl)) as { ok?: unknown; pong?: unknown };
+        finish(parsed.ok === true && parsed.pong === true ? 'answered' : 'refused');
+      } catch {
+        finish('refused');
+      }
+    });
+    socket.on('close', () => finish('refused'));
   });
 }
 
@@ -469,7 +469,8 @@ export function requestDaemon(
       resolve(null);
       return;
     }
-    hostedCommit('Bun.connect');
+    hostedCommit('node:net.connect');
+    const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;
     const finish = (response: DaemonResponse | null): void => {
@@ -479,24 +480,23 @@ export function requestDaemon(
       socket.destroy();
       resolve(response);
     };
-    const Bun = socketRuntime();
-    const { conn: socket, options, refused } = dialing(socketPath, {
-      open: (conn) => conn.write(`${JSON.stringify(request)}\n`),
-      text: (chunk) => {
-        buffer += chunk;
-        const nl = buffer.indexOf('\n');
-        if (nl === -1) return;
-        try {
-          const parsed = JSON.parse(buffer.slice(0, nl)) as DaemonResponse;
-          finish(parsed);
-        } catch {
-          finish(null);
-        }
-      },
-      close: () => finish(null),
-    });
     const timer = setTimeout(() => finish(null), timeoutMs);
-    Bun.connect(options).catch(refused);
+    socket.on('error', () => finish(null));
+    socket.on('connect', () => {
+      socket.write(`${JSON.stringify(request)}\n`);
+    });
+    socket.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      const nl = buffer.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const parsed = JSON.parse(buffer.slice(0, nl)) as DaemonResponse;
+        finish(parsed);
+      } catch {
+        finish(null);
+      }
+    });
+    socket.on('close', () => finish(null));
   });
 }
 

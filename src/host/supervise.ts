@@ -3,10 +3,10 @@
 // exits (a recycle, a crash), waiting longer after each quick exit, from one second to thirty. The
 // daemon's stop ends it with SIGTERM: it hands back its queued lines and lets the running one end.
 import { spawn, type ChildProcess } from 'node:child_process';
+import { connect } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { machineConfigDir } from '../daemon/paths.ts';
-import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 
 export type SendServerSupervisor = { stop: () => Promise<void> };
 
@@ -27,6 +27,7 @@ export const PROBE_MISSES = 2;
 export function probeSendHost(socketPath: string, deadlineMs: number): Promise<boolean> {
   return new Promise((settle) => {
     let done = false;
+    const socket = connect(socketPath);
     const finish = (ok: boolean): void => {
       if (done) return;
       done = true;
@@ -34,14 +35,11 @@ export function probeSendHost(socketPath: string, deadlineMs: number): Promise<b
       socket.destroy();
       settle(ok);
     };
-    const Bun = socketRuntime();
-    const { conn: socket, options, refused } = dialing(socketPath, {
-      open: (conn) => conn.write('{"v":1,"probe":true}\n'),
-      bytes: () => finish(true),
-      close: () => finish(false),
-    });
     const timer = setTimeout(() => finish(false), deadlineMs);
-    Bun.connect(options).catch(refused);
+    socket.once('connect', () => socket.write('{"v":1,"probe":true}\n'));
+    socket.once('data', () => finish(true));
+    socket.once('error', () => finish(false));
+    socket.once('close', () => finish(false));
   });
 }
 

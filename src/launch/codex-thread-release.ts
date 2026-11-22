@@ -15,11 +15,11 @@
 // behalf, and the shared daemon other seats use keeps running.
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { decodeServerWsFrames, encodeMaskedWsTextFrame, resolveCodexControlSocketPath } from '../send/push-adapters/codex-relay.ts';
 import { readState } from '../state.ts';
 import { stripSgr } from '../ansi.ts';
 import { hostedCommit } from '../host/request-scope.ts';
-import { dialing, socketRuntime, type SocketError } from '../runtime/bun-socket.ts';
 
 export type RpcCall = { method: string; params: Record<string, unknown> };
 export type RpcReply = { ok: true; result: unknown } | { ok: false; error: string };
@@ -36,7 +36,8 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
   const replies: RpcReply[] = [];
   if (!existsSync(socketPath)) return Promise.resolve({ ok: false, why: 'the app-server socket is not there', replies, absent: true });
   return new Promise((resolve) => {
-    hostedCommit('Bun.connect');
+    hostedCommit('node:net.createConnection');
+    const socket = createConnection({ path: socketPath });
     const key = randomBytes(16).toString('base64');
     const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
     let buffer: Buffer = Buffer.alloc(0);
@@ -57,18 +58,17 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
       const call = calls[next]!;
       send({ id: `call-${String(next)}`, method: call.method, params: call.params });
     };
-    const failed = (err: SocketError | undefined): void => done(err === undefined
-      ? { ok: false, why: 'the app-server closed the connection', replies }
-      : {
-          ok: false,
-          why: `the app-server socket failed (${err.code ?? 'error'})`,
-          replies,
-          ...(!upgraded && (err.code === 'ECONNREFUSED' || err.code === 'ENOENT') ? { absent: true as const } : {}),
-        });
-    const opened = (): void => {
+    socket.on('error', (err: NodeJS.ErrnoException) => done({
+      ok: false,
+      why: `the app-server socket failed (${err.code ?? 'error'})`,
+      replies,
+      ...(!upgraded && (err.code === 'ECONNREFUSED' || err.code === 'ENOENT') ? { absent: true as const } : {}),
+    }));
+    socket.on('close', () => done({ ok: false, why: 'the app-server closed the connection', replies }));
+    socket.on('connect', () => {
       socket.write(['GET /rpc HTTP/1.1', 'Host: localhost', 'Connection: Upgrade', 'Upgrade: websocket', 'Sec-WebSocket-Version: 13', `Sec-WebSocket-Key: ${key}`, '', ''].join('\r\n'));
-    };
-    const read = (chunk: Uint8Array): void => {
+    });
+    socket.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (!upgraded) {
         const end = buffer.indexOf('\r\n\r\n');
@@ -103,10 +103,7 @@ export function codexRpcSession(socketPath: string, calls: RpcCall[], timeoutMs 
         next += 1;
         sendNext();
       }
-    };
-    const Bun = socketRuntime();
-    const { conn: socket, options, refused } = dialing(socketPath, { open: opened, bytes: read, close: failed });
-    Bun.connect(options).catch(refused);
+    });
   });
 }
 
