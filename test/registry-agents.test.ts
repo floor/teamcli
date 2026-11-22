@@ -395,13 +395,18 @@ describe('the long-lived reader', () => {
   });
 
   // A scan is kept while its stamp stands, so the stamp must move with every change a read could see.
-  test('the scan stamp stands while nothing changes and moves with an edit, even one that keeps size and mtime', () => {
+  // A file changed within the racy margin is stamped by none: a same-tick edit (Linux's coarse
+  // clock) would keep every field, so no scan is kept under such a stamp.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
+
+  test('the scan stamp stands while nothing changes and moves with an edit, even one that keeps size and mtime', async () => {
     const first = registerAgent(home, init());
     const dir = agentsDir(home);
     const names = () => readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
     const path = join(dir, `${first.id}.yaml`);
     const pinned = new Date('2026-11-01T00:00:00.000Z');
     utimesSync(path, pinned, pinned);
+    await settle();
     const stamp = agentFolderStamp(dir, names());
     expect(stamp).not.toBeNull();
     expect(readAgents(home)).toHaveLength(1);
@@ -412,15 +417,31 @@ describe('the long-lived reader', () => {
     utimesSync(path, pinned, pinned);
     expect(statSync(path).mtimeMs).toBe(before.mtimeMs);
     expect(statSync(path).size).toBe(before.size);
-    const edited = agentFolderStamp(dir, names());
-    expect(edited).not.toBe(stamp);
+    expect(agentFolderStamp(dir, names())).not.toBe(stamp);
     expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w35:p1']);
+    await settle();
+    const edited = agentFolderStamp(dir, names());
+    expect(edited).not.toBeNull();
+    expect(edited).not.toBe(stamp);
     registerAgent(home, init({ reach: { team: 'teamcli', seat: 'builder-2', session: 'teamcli', pane: 'w37:p1', address: null } }));
+    await settle();
     expect(agentFolderStamp(dir, names())).not.toBe(edited);
     expect(agentFolderStamp(join(home, 'nowhere'), [])).toBeNull();
   });
 
-  test('a linked agent file is stamped by the file the parser reads: an edit of its target moves the stamp', () => {
+  test('a stamp taken within the racy margin of a change is none, so no scan is kept that a same-tick edit could hide behind', () => {
+    const first = registerAgent(home, init());
+    const dir = agentsDir(home);
+    const names = () => readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
+    // Just written: whatever the clock's grain, the next edit may keep every stat field.
+    expect(agentFolderStamp(dir, names())).toBeNull();
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w36:p1']);
+    const path = join(dir, `${first.id}.yaml`);
+    writeFileSync(path, readFileSync(path, 'utf8').replace('w36:p1', 'w35:p1'));
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w35:p1']);
+  });
+
+  test('a linked agent file is stamped by the file the parser reads: an edit of its target moves the stamp', async () => {
     const first = registerAgent(home, init());
     const dir = agentsDir(home);
     const names = () => readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
@@ -430,7 +451,9 @@ describe('the long-lived reader', () => {
     unlinkSync(path);
     symlinkSync(target, path);
     expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w36:p1']);
+    await settle();
     const stamp = agentFolderStamp(dir, names());
+    expect(stamp).not.toBeNull();
     writeFileSync(target, readFileSync(target, 'utf8').replace('w36:p1', 'w35:p1'));
     expect(agentFolderStamp(dir, names())).not.toBe(stamp);
     expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w35:p1']);

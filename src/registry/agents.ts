@@ -217,24 +217,32 @@ function readAgentsMeasured(home: string, options: { fresh?: boolean } = {}): Ag
   return agents;
 }
 
+/** How close to its last change a stamped file is still "racy": Linux stamps a file with the
+ *  kernel's coarse clock (one tick, up to 10 ms), so a same-size edit inside one tick keeps every
+ *  field the stamp reads. The margin, ten ticks, is the state file's (src/state.ts `RACY_NS`). */
+const RACY_MS = 100;
+
 /** What a scan of the agents folder depends on, by stat only: the folder's own inode and mtime,
  *  and each agent file's name, inode, size, mtime and ctime (a mode change moves only the ctime),
  *  each read through a link exactly as the parser's read follows it.
- *  Null when the folder cannot be read. */
+ *  Null when the folder cannot be read, or when the folder or a file changed within the racy
+ *  margin: such a stamp cannot show the next same-tick edit, so no scan is kept under it. */
 export function agentFolderStamp(dir: string, names: readonly string[]): string | null {
   try {
     const folder = statSync(dir);
     let stamp = `${String(folder.ino)}:${String(folder.mtimeMs)}:${String(names.length)}`;
+    let changed = Math.max(folder.mtimeMs, folder.ctimeMs);
     for (const name of names) {
       try {
         // The file the parser reads: a link is followed, so an edit of its target moves the stamp.
         const one = statSync(join(dir, name));
         stamp += `|${name}:${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
+        changed = Math.max(changed, one.mtimeMs, one.ctimeMs);
       } catch (error) {
         stamp += `|${name}:${(error as NodeJS.ErrnoException).code ?? 'error'}`;
       }
     }
-    return stamp;
+    return Date.now() - changed < RACY_MS ? null : stamp;
   } catch {
     return null;
   }
