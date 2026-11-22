@@ -23,7 +23,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, recordRenames, testIo } from './helpers.ts';
+import { gitEnv, recordRenames, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T04:15:00Z');
 const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
@@ -246,6 +246,7 @@ function buildMultiSources(options: {
   };
 
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState,
     startServer: () => true,
     sessionUp: (session) => {

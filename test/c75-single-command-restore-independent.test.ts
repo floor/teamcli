@@ -45,7 +45,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { installKey } from '../src/store/keys.ts';
-import { fixtureBase, gitEnv, recordRenames, testIo } from './helpers.ts';
+import { fixtureBase, gitEnv, recordRenames, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T04:15:00Z');
 const DAY_MS = 86_400_000;
@@ -373,6 +373,7 @@ function fakeWorld(options: {
   };
 
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState,
     startServer: () => true,
     sessionUp: (session) => {

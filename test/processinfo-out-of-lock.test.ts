@@ -17,7 +17,7 @@ import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import type { Launch } from '../src/commands/up.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-10-21T08:00:00Z');
 const SESSION = 'acme';
@@ -143,6 +143,7 @@ function makeHarness(fixture: Fixture, probe: Probe): { sources: RestartSources;
   };
 
   const upLaunch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,

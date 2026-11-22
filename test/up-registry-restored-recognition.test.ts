@@ -21,7 +21,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-10-21T08:15:00Z');
 const SESSION = 'acme';
@@ -145,6 +145,7 @@ function sources(live: string, opts: { pane?: string; status?: string } = {}): {
     },
   ];
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,

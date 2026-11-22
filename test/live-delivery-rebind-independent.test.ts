@@ -32,7 +32,7 @@ import type { Live } from '../src/status/compare.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
-import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T12:00:00.000Z');
 const SESSION = 'acme';
@@ -260,6 +260,7 @@ function makeUpSources(
     ]),
   );
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,

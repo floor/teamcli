@@ -21,6 +21,14 @@ import { emptySession, readState, updateState } from '../src/state.ts';
 /** The service manager's record of a job that is this test process: the pid and program the
  *  daemon's start admission compares against. A fake manager answers with this when a scene
  *  needs the record admission to pass; a scene about a refusal changes one field. */
+/**
+ * A fake launch host's process-birth reader for made-up pids. A scene's pane pids (100, 401, 901,
+ * ...) name no process of the scene, but the real reader asks the machine's process table, where a
+ * real process may hold such a pid; the launch would then record that process's start beside the
+ * scene's identity. A fake host answers no birth, as for a pid no process holds.
+ */
+export const noProcessBirth = (_pid: number): number | null => null;
+
 export function thisProcessJobRecord(): ServiceJobRecord {
   return { pid: process.pid, program: process.execPath };
 }

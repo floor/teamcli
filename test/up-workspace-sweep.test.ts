@@ -31,7 +31,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, gitEnv, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T09:30:00Z');
 const SESSION = 'acme';
@@ -228,6 +228,7 @@ function makeWorld(input: {
     ? processOf(pane)
     : input.processRead(pane, processOf);
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
