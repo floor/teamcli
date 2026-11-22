@@ -29,14 +29,18 @@ beforeEach(() => {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-restore-relaunch-')));
   dir = join(base, '.agents');
   mkdirSync(dir, { recursive: true });
+  // The lead's channel pair in the project folder it starts in: its channel start has no fallback.
+  writeFileSync(join(base, '.mcp.json'), JSON.stringify({ mcpServers: { 'team-inbox': { command: 'team', args: ['mcp', 'serve', '--seat', 'lead'] } } }));
+  mkdirSync(join(base, '.claude'), { recursive: true });
+  writeFileSync(join(base, '.claude', 'settings.local.json'), JSON.stringify({ enabledMcpjsonServers: ['team-inbox'] }));
 });
 afterEach(() => { rmSync(base, { recursive: true, force: true }); });
 
 type SeatSpec = { name: string; launch?: string; channel?: boolean; channelOff?: boolean };
 
-function team(seats: SeatSpec[], entity: string | null = null): TeamFile {
+function team(seats: SeatSpec[], entity: string | null = null, trust: string[] = []): TeamFile {
   return {
-    project: 'proj', entity, orchestrator: 'lead', operator: 'lead', trust: [], machine: LIMITS,
+    project: 'proj', entity, orchestrator: 'lead', operator: 'lead', trust, machine: LIMITS,
     seats: seats.map((one) => ({ name: one.name, cli: 'claude-code', launch: one.launch ?? FLAGGED, cwd: '.', ...(one.channelOff === true ? { channelOff: true } : {}) })),
   } as unknown as TeamFile;
 }
@@ -236,5 +240,16 @@ describe('a restored Claude seat comes back through its launch line', () => {
       await run(depsOf(w));
       expect(w.notices).toHaveLength(2);
     }
+  });
+
+  test('the fallback decision comes first: a flagged line whose channel start falls back is not relaunched', async () => {
+    const seats = [{ name: 'worker' }];
+    restoredState(seats);
+    const w = world();
+    w.status['w0:p1'] = 'idle';
+    // A legacy trust form: the planning launches the seat without its channel, even its own flag.
+    const out = await pass(w, team(seats, null, ['src/**']));
+    expect(w.restarts).toEqual([]);
+    expect(out).toEqual({ lines: [], pending: null });
   });
 });

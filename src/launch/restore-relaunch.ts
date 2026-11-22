@@ -121,11 +121,11 @@ export async function relaunchRestoredSeats(input: {
   };
   let loadHeld: string | null = null;
   const seats = team.seats.filter((seat): seat is Seat => seat.cli === 'claude-code' && seat.stopped !== true && seat.human !== true);
-  // The launch carries the channel flag by the planning's own rule (src/launch/plan.ts): a line
-  // that names it, or a Claude seat the plan puts it on — one that does not decline the channel
-  // and whose channel start has no fallback — whatever its raw recipe holds.
-  const carriesChannel = (seat: Seat): boolean => channelOptionProven(seat.launch)
-    || (claudeChannelSeat(seat) && channelLaunchFallback(team, seat, root, sources.home) === undefined);
+  // The launch carries the channel flag by the planning's own rule (src/launch/plan.ts): its
+  // fallback decision comes first and takes even a line's own flag off, then a line that names
+  // the flag, or a Claude seat the plan puts it on — one that does not decline the channel.
+  const carriesChannel = (seat: Seat): boolean => channelLaunchFallback(team, seat, root, sources.home) === undefined
+    && (channelOptionProven(seat.launch) || claudeChannelSeat(seat));
   for (const seat of seats) {
     // Re-read right before each decision: the restart before it changed the state.
     const held = readState(dir).sessions[session]?.seats[seat.name];
