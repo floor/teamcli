@@ -2305,9 +2305,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
-| `--general` | yes | no | no |
 | `--help` | no | no | no |
-| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2333,10 +2331,8 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--entity` | yes | no | no |
-| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
-| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
