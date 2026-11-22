@@ -80,7 +80,7 @@ import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { currentCodexRecipe } from '../launch/features.ts';
 import { featureDialogClose } from '../launch/reboot.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type DownSeat, type Step, type UpSeat } from '../launch/plan.ts';
 import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
@@ -1174,6 +1174,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const tree = worktreeOf(recordedSession, next.name);
   if (tree !== undefined) planSeat.worktree = tree.path;
   if (resolveLaunch && input.resume !== undefined) planSeat.resolveSession = input.resume;
+  if (resolveLaunch && input.resume !== undefined && input.selfRequest !== undefined) planSeat.resumeRequired = true;
+  // A self-restart resumes its conversation or does not run: one with no conversation to carry
+  // is refused before anything is touched.
+  if (input.selfRequest !== undefined && input.resume !== input.selfRequest.conversation) {
+    return { kind: 'continuity', message: `${name}: its conversation ${input.selfRequest.conversation} is not the one this restart would resume; nothing was stopped` };
+  }
   // A shipped launcher is package code and needs no cover; a launcher file in the team's folder does.
   if (resolveLaunch && !isShippedLauncher(planSeat.launcher)) {
     const covered = launcherCoverRefusal(
@@ -1255,7 +1261,16 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // A launch the plan refuses is refused here, before the seat is stopped: a restart never stops
   // a seat it then cannot start (iris, 2026-11-14). The running seat keeps running.
   const held = preview.find((step) => step.do?.do === 'refuse' && step.do.seat === name);
-  if (!dry && held?.do?.do === 'refuse') return { kind: 'not-ready', message: `${name}: ${held.do.why}; left as it is` };
+  if (!dry && held?.do?.do === 'refuse') {
+    return input.selfRequest !== undefined
+      ? { kind: 'continuity', message: `${name}: ${held.do.why}; its self-restart does not run, nothing was stopped` }
+      : { kind: 'not-ready', message: `${name}: ${held.do.why}; left as it is` };
+  }
+  // The final line, launcher resolution included, must target the requested conversation.
+  if (!dry && input.selfRequest !== undefined) {
+    const problem = selfResumeProblem(name, next.cli, preview, input.selfRequest.conversation);
+    if (problem !== null) return problem;
+  }
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -2786,6 +2801,17 @@ function queueSelfRestart(out: Io, json: boolean, input: {
     // exit: restart.self-unrecorded
     return 1;
   }
+  // A self-restart resumes or does not run: a line that cannot carry the conversation is refused
+  // now, and the daemon's run checks the final resolved line again before the stop.
+  const carried = resumeCarry(declared.cli, declared.launch, held.agent_session);
+  if (carried.kind === 'refuse') {
+    refuse(out, json, 'restart', {
+      id: 'restart.continuity',
+      message: `${name}: its launch line cannot resume its conversation ${held.agent_session} (${carried.why}); a self-restart never starts a fresh one, so nothing was queued`,
+      repair: null,
+    });
+    return 1;
+  }
   writeSelfRestartRequest({
     home: input.home, dir: input.dir, session, seat: name, conversation: held.agent_session,
     pane: held.pane, launched: held.launched, now: input.now,
@@ -2930,6 +2956,15 @@ function abandonWorkingRefused(out: Io, json: boolean, name: string): number {
 /** A self-restart's rule for an observation before the stop: the request's own pane, free at a
  *  recognised empty prompt — no draft, dialog, unread screen, exit text or taken pane. Null
  *  when the stop may go on; the deferral (nothing stopped) otherwise. */
+/** Whether the planned launch of `name` names `conversation` as its resume target; the
+ *  continuity refusal otherwise. */
+function selfResumeProblem(name: string, cli: string, plan: readonly Step[], conversation: string): { kind: 'continuity'; message: string } | null {
+  const launch = plan.find((step) => step.do?.do === 'launch' && step.do.seat === name);
+  const command = launch?.do?.do === 'launch' ? launch.do.command : undefined;
+  if (command !== undefined && namedResumeTarget(cli, command) === conversation) return null;
+  return { kind: 'continuity', message: `${name}: its launch line would not resume its conversation ${conversation}; its self-restart does not run, nothing was stopped` };
+}
+
 /** The pre-stop deferral of a self-restart: nothing was stopped, and the request stays queued. */
 function deferredOf(why: string): { kind: 'deferred'; message: string } {
   return { kind: 'deferred', message: `${why}; its self-restart waits, nothing was stopped` };

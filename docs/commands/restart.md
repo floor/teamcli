@@ -139,9 +139,17 @@ is dropped: an attempt that may have acted is never run again. A request left cl
 ended mid-run is put back on the next pass only when it carries no stopping mark; one with the mark
 is said to the lead and dropped.
 
-A self-restart resumes the seat's conversation or fails: when the CLI cannot resume it, no fresh
-conversation is started. The run ends `restart.continuity`, the seat is left stopped, and the lead
-is told that continuity failed. A request that has waited 30 minutes without the seat
+A self-restart resumes the seat's conversation or does not run. `--self` refuses with
+`restart.continuity` and queues nothing when the seat's launch line cannot carry the
+conversation. A seat on a launcher gets the conversation on its resolved line. Before the stop,
+the run checks that the final line, after launcher resolution, resumes exactly the requested
+conversation. If it does not, the run ends `restart.continuity` and nothing is stopped. When the
+CLI itself then refuses the resume, no fresh conversation is started: the run ends
+`restart.continuity`, the seat is left stopped, and the lead is told that continuity failed.
+
+A claim's stopping mark is removed only once the claim itself is confirmed gone. A claim is put
+back in the queue only when the queue name then holds it, or holds a newer request; any other
+file error keeps the claim for a later pass. A request that has waited 30 minutes without the seat
 coming idle is given up and said to the lead the same way; the seat queues it again with
 `--self`. The daemon log says what each pass did.
 

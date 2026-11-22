@@ -243,4 +243,18 @@ describe('the daemon runs a queued self-restart', () => {
     expect(queued()).toBe(false);
     expect(w.notices).toHaveLength(1);
   });
+
+  test('a marked claim that cannot be removed keeps its mark and is never replayed', async () => {
+    const claimed = `${selfRestartPath(dir, SESSION, 'lead')}.claimed-00aa`;
+    // A claim the filesystem will not unlink (a non-empty folder stands at its name).
+    mkdirSync(join(claimed, 'held'), { recursive: true });
+    writeFileSync(`${claimed}.stopping`, `${T0.toISOString()}\n`);
+    const w = world();
+    w.status = 'idle';
+    await pass(w);
+    await pass(w);
+    expect(existsSync(`${claimed}.stopping`)).toBe(true);
+    expect(queued()).toBe(false);
+    expect(w.restarts).toEqual([]);
+  });
 });

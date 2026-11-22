@@ -98,9 +98,8 @@ function claim(path: string, text: string | null): Claimed | null {
   let now: string | null = null;
   try { now = readStateFile(claimed); } catch { now = null; }
   const held: Claimed = {
-    // Back in the queue, unless a newer request took the name meanwhile: that one is kept.
-    release: () => { try { linkSync(claimed, path); } catch { /* a newer request stands */ } drop(claimed); },
-    done: () => { drop(claimed); drop(stoppingMark(claimed)); },
+    release: () => requeue(claimed, path),
+    done: () => discardClaim(claimed),
     stopping: () => {
       try { writeStateFile(stoppingMark(claimed), `${new Date().toISOString()}\n`); return true; } catch { return false; }
     },
@@ -118,6 +117,29 @@ const stoppingMark = (claimed: string): string => `${claimed}.stopping`;
 
 function drop(path: string): void {
   try { unlinkSync(path); } catch { /* already taken */ }
+}
+
+/** Whether `path` is gone: removed now, or already absent. Any other error keeps it. */
+function gone(path: string): boolean {
+  try { unlinkSync(path); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
+}
+
+/** Removes a finished claim. Its stopping mark goes only once the claim is confirmed gone: a
+ *  claim that survives keeps its mark, so a later pass never replays it. */
+function discardClaim(claimed: string): void {
+  if (gone(claimed)) gone(stoppingMark(claimed));
+}
+
+/** Puts a claim back in the queue. The claim is discarded only once the queue name holds it (the
+ *  link succeeded) or a newer request is confirmed there; any other error keeps the claim, and
+ *  a later pass tries again. */
+function requeue(claimed: string, queued: string): boolean {
+  try {
+    linkSync(claimed, queued);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false;
+  }
+  return gone(claimed);
 }
 
 /** A UUID-shaped id, stable for one request: a retried notice finds the first. */
@@ -174,15 +196,14 @@ export async function runSelfRestarts(input: {
       const mark = stoppingMark(path);
       const { request } = readRequest(home, path);
       if (existsSync(mark)) {
+        // The notice id is the request's own: a claim that could not be removed this pass says
+        // the same notice again, never a second one.
         if (request !== null) report(request, `${request.seat}: an interrupted self-restart had begun stopping its seat; dropped, not run again: check the seat`);
-        drop(path);
-        drop(mark);
+        discardClaim(path);
         continue;
       }
-      if (request === null || request.session !== session) { drop(path); continue; }
-      try { linkSync(path, queuedAt); } catch { /* a newer request stands */ }
-      drop(path);
-      lines.push(`${request.seat}: an interrupted self-restart was put back in the queue; it had not begun stopping its seat`);
+      if (request === null || request.session !== session) { gone(path); continue; }
+      if (requeue(path, queuedAt)) lines.push(`${request.seat}: an interrupted self-restart was put back in the queue; it had not begun stopping its seat`);
     }
     // A stopping mark whose claim is gone has nothing left to say.
     let files: string[];

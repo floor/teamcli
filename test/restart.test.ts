@@ -13,7 +13,6 @@ import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { selfRestartPath } from '../src/launch/self-restart.ts';
-import { handoverPath } from '../src/handover/paths.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
@@ -1344,6 +1343,24 @@ describe('team restart <seat>', () => {
     expect(request.signature).toMatch(/^[0-9a-f]+$/);
   });
 
+  test('--self for a seat whose line cannot carry its conversation queues nothing', async () => {
+    const yaml = TEAM_YAML.replace(
+      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
+      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5 --session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n',
+    );
+    const fixture = makeFixture(yaml);
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+      } as never;
+    });
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+    expect(await runRestart(['worker', '--self'], io, sources)).toBe(1);
+    expect(io.err).toContain('a self-restart never starts a fresh one, so nothing was queued');
+    expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
+  });
+
   test('--self for another seat\'s pane is refused: no seat queues another\'s restart', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
@@ -1367,77 +1384,22 @@ describe('team restart <seat>', () => {
     expect(json.err).toContain('--self takes no other option');
   });
 
-  test('a self-restart request is enforced under the run lock: same pane and launch, an empty idle prompt', async () => {
-    const scene = (workerScreen: 'idle' | 'unsent' | 'working') => {
-      const fixture = makeFixture(withoutChannel('worker'));
-      updateState(fixture.dir, (state) => {
-        (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', agent_session: 'conv-worker' };
-      });
-      return { fixture, ...makeHarness(fixture, { workerScreen }) };
-    };
-    const request = { seat: 'worker', pane: 'pane-old', launched: 'null', conversation: 'conv-worker' };
-    // Unsent text in the box: the ordinary restart would copy it; the self-restart waits.
-    const drafted = scene('unsent');
-    const draftIo = testIo(drafted.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker', '--json'], draftIo, drafted.sources, { selfRequest: request })).toBe(1);
-    expect(draftIo.out).toContain('"id": "restart.deferred"');
-    expect(draftIo.out).toContain('its self-restart waits, nothing was stopped');
-    expect(drafted.did.closed).toEqual([]);
-    // A launch other than the request's: nothing is stopped.
-    const moved = scene('idle');
-    const movedIo = testIo(moved.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], movedIo, moved.sources, { selfRequest: { ...request, launched: '{"shell":1}' } })).toBe(1);
-    expect(movedIo.err).toContain('its launch or conversation changed since its self-restart request');
-    expect(moved.did.closed).toEqual([]);
-    // The same launch now holds another conversation: nothing is stopped either.
-    const switched = testIo(moved.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], switched, moved.sources, { selfRequest: { ...request, conversation: 'conv-earlier' } })).toBe(1);
-    expect(switched.err).toContain('its launch or conversation changed since its self-restart request');
-    expect(moved.did.closed).toEqual([]);
-    // A checkpoint ask makes the run read the pane once more before the stop: an unread screen that
-    // appears by then (closed without typing by an ordinary restart) defers it under the strict rule.
-    const late = scene('idle');
-    updateState(late.fixture.dir, (state) => {
-      state.checkpoints = { worker: { by: 'owner', path: handoverPath(late.fixture.dir, 'worker', NOW), session: 'acme', at: NOW.toISOString(), deadline: NOW.toISOString() } };
+  test('a self-restart with no conversation to resume does not run: nothing is stopped', async () => {
+    const fixture = makeFixture(withoutChannel('worker'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', agent_session: 'conv-worker' };
     });
-    const screen = late.sources.screen;
-    let reads = 0;
-    late.sources.screen = (...args) => {
-      const pane = args[1];
-      if (pane === 'pane-old' && ++reads > 2) return { kind: 'unknown' } as ReturnType<typeof screen>;
-      return screen(...args);
-    };
-    const lateIo = testIo(late.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker', '--json'], lateIo, late.sources, { selfRequest: request })).toBe(1);
-    expect(lateIo.out).toContain('"id": "restart.deferred"');
-    expect(late.did.closed).toEqual([]);
-    expect(reads).toBeGreaterThan(2);
-    // A request for another seat restarts nothing.
-    const other = testIo(moved.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], other, moved.sources, { selfRequest: { ...request, seat: 'ops' } })).toBe(1);
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const request = { seat: 'worker', pane: 'pane-old', launched: 'null', conversation: 'conv-worker' };
+    expect(await runRestart(['worker', '--json'], io, sources, { selfRequest: request })).toBe(1);
+    expect(io.out).toContain('"id": "restart.continuity"');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    // A request for another seat restarts nothing either.
+    const other = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], other, sources, { selfRequest: { ...request, seat: 'ops' } })).toBe(1);
     expect(other.err).toContain('restarts no other seat');
-    // A turn running when the restart reads the seat is a deferral too, never an ordinary busy.
-    const working = scene('working');
-    const workingIo = testIo(working.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker', '--json'], workingIo, working.sources, { selfRequest: request })).toBe(1);
-    expect(workingIo.out).toContain('"id": "restart.deferred"');
-    expect(working.did.closed).toEqual([]);
-    // The stopping mark could not be written: nothing is stopped.
-    const unmarked = scene('idle');
-    const unmarkedIo = testIo(unmarked.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker', '--json'], unmarkedIo, unmarked.sources, { selfRequest: { ...request, stopping: () => false } })).toBe(1);
-    expect(unmarkedIo.out).toContain('"id": "restart.deferred"');
-    expect(unmarked.did.closed).toEqual([]);
-    expect(unmarked.did.typed).toEqual([]);
-    // The same pane and launch at an empty idle prompt: the mark is written before the first
-    // pane effect, then the seat is restarted.
-    const ready = scene('idle');
-    const readyIo = testIo(ready.fixture.root, { kind: 'owner' });
-    const atMark: { typed: number; closed: number }[] = [];
-    const marked = { ...request, stopping: () => { atMark.push({ typed: ready.did.typed.length, closed: ready.did.closed.length }); return true; } };
-    expect(await runRestart(['worker'], readyIo, ready.sources, { selfRequest: marked }), readyIo.err).toBe(0);
-    expect(atMark).toEqual([{ typed: 0, closed: 0 }]);
-    expect(readyIo.out).toContain('team restart: restarted worker');
   });
 
   test('refuses self-restart from a seat caller', async () => {
