@@ -130,13 +130,18 @@ session, carrying the request. Under its run lock it checks again that the seat 
 request's pane with the request's launch and conversation; a different one drops the request. Every
 reading of the pane up to the stop, the last one included, must show an empty, recognised idle
 prompt. This is stricter than an ordinary restart: unsent text, a dialog or a screen it cannot read
-is never copied, closed or taken. Such a run stops nothing and ends `restart.deferred`, and only
-then does the request go back to the queue, unless a newer one replaced it. Any other outcome,
-including a refusal after the stop began, is said once to the team's lead, in the request's
-session, with the refusal's words, and the request is dropped: an attempt that may have acted is
-never run again. A request left claimed by a pass that ended mid-run is put back on the next pass
-when its seat still runs the same launch on its pane, and is otherwise said to the lead and
-dropped. A request that has waited 30 minutes without the seat
+is never copied, closed or taken. Any refusal before the first effect on the pane, a running turn
+or a dialog included, stops nothing and ends `restart.deferred`; only then does the request go back
+to the queue, unless a newer one replaced it. Right before the first effect on the pane, the run
+marks the request as stopping. Any outcome after that, including a refusal once the stop began, is
+said once to the team's lead, in the request's session, with the refusal's words, and the request
+is dropped: an attempt that may have acted is never run again. A request left claimed by a pass that
+ended mid-run is put back on the next pass only when it carries no stopping mark; one with the mark
+is said to the lead and dropped.
+
+A self-restart resumes the seat's conversation or fails: when the CLI cannot resume it, no fresh
+conversation is started. The run ends `restart.continuity`, the seat is left stopped, and the lead
+is told that continuity failed. A request that has waited 30 minutes without the seat
 coming idle is given up and said to the lead the same way; the seat queues it again with
 `--self`. The daemon log says what each pass did.
 

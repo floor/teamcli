@@ -1368,7 +1368,7 @@ describe('team restart <seat>', () => {
   });
 
   test('a self-restart request is enforced under the run lock: same pane and launch, an empty idle prompt', async () => {
-    const scene = (workerScreen: 'idle' | 'unsent') => {
+    const scene = (workerScreen: 'idle' | 'unsent' | 'working') => {
       const fixture = makeFixture(withoutChannel('worker'));
       updateState(fixture.dir, (state) => {
         (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', agent_session: 'conv-worker' };
@@ -1416,10 +1416,27 @@ describe('team restart <seat>', () => {
     const other = testIo(moved.fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], other, moved.sources, { selfRequest: { ...request, seat: 'ops' } })).toBe(1);
     expect(other.err).toContain('restarts no other seat');
-    // The same pane and launch at an empty idle prompt: restarted.
+    // A turn running when the restart reads the seat is a deferral too, never an ordinary busy.
+    const working = scene('working');
+    const workingIo = testIo(working.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--json'], workingIo, working.sources, { selfRequest: request })).toBe(1);
+    expect(workingIo.out).toContain('"id": "restart.deferred"');
+    expect(working.did.closed).toEqual([]);
+    // The stopping mark could not be written: nothing is stopped.
+    const unmarked = scene('idle');
+    const unmarkedIo = testIo(unmarked.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--json'], unmarkedIo, unmarked.sources, { selfRequest: { ...request, stopping: () => false } })).toBe(1);
+    expect(unmarkedIo.out).toContain('"id": "restart.deferred"');
+    expect(unmarked.did.closed).toEqual([]);
+    expect(unmarked.did.typed).toEqual([]);
+    // The same pane and launch at an empty idle prompt: the mark is written before the first
+    // pane effect, then the seat is restarted.
     const ready = scene('idle');
     const readyIo = testIo(ready.fixture.root, { kind: 'owner' });
-    expect(await runRestart(['worker'], readyIo, ready.sources, { selfRequest: request }), readyIo.err).toBe(0);
+    const atMark: { typed: number; closed: number }[] = [];
+    const marked = { ...request, stopping: () => { atMark.push({ typed: ready.did.typed.length, closed: ready.did.closed.length }); return true; } };
+    expect(await runRestart(['worker'], readyIo, ready.sources, { selfRequest: marked }), readyIo.err).toBe(0);
+    expect(atMark).toEqual([{ typed: 0, closed: 0 }]);
     expect(readyIo.out).toContain('team restart: restarted worker');
   });
 

@@ -101,7 +101,7 @@ describe('the daemon runs a queued self-restart', () => {
     const lines = await pass(w);
     expect(w.restarts).toEqual([['lead', '--resume', 'conv-lead', '--session', SESSION, '--json']]);
     // The request's own pane and launch ride into the restart, which enforces them under its lock.
-    expect(w.requests).toEqual([{ seat: 'lead', pane: 'w0:p1', launched: JSON.stringify(LAUNCHED), conversation: 'conv-lead' }]);
+    expect(w.requests).toMatchObject([{ seat: 'lead', pane: 'w0:p1', launched: JSON.stringify(LAUNCHED), conversation: 'conv-lead' }]);
     expect(lines).toEqual(['lead: restarted itself with its conversation conv-lead']);
     expect(queued()).toBe(false);
     expect(hasSelfRestartRequests(dir)).toBe(false);
@@ -197,22 +197,50 @@ describe('the daemon runs a queued self-restart', () => {
     expect(w.notices.map((one) => one.body)).toEqual(['lead: self-restart failed (the seat did not come back)']);
   });
 
-  test('an interrupted claim is put back while the seat runs the same launch, and reported otherwise', async () => {
+  test('an interrupted claim is put back only when it had not begun stopping its seat', async () => {
     const folder = join(dir, 'self-restart', SESSION);
-    const strand = (): void => { queue(); renameSync(selfRestartPath(dir, SESSION, 'lead'), `${selfRestartPath(dir, SESSION, 'lead')}.claimed-00ff`); };
+    const claimed = `${selfRestartPath(dir, SESSION, 'lead')}.claimed-00ff`;
+    const strand = (): void => { queue(); renameSync(selfRestartPath(dir, SESSION, 'lead'), claimed); };
     strand();
     const w = world();
-    expect(await pass(w)).toEqual(['lead: an interrupted self-restart was put back in the queue; its seat still runs the same launch']);
-    expect(queued()).toBe(true);
+    expect(await pass(w)).toEqual(['lead: an interrupted self-restart was put back in the queue; it had not begun stopping its seat']);
     expect(readdirSync(folder)).toEqual(['lead.json']);
-    // The seat was relaunched meanwhile: the claim may have acted, so it is said and dropped.
+    // Its restart had recorded that it was stopping: said once and dropped, never run again.
     strand();
-    const state = JSON.parse(readFileSync(join(dir, 'team.state.json'), 'utf8'));
-    state.sessions[SESSION].seats.lead.launched = { shell: 701, cli: [801] };
-    writeFileSync(join(dir, 'team.state.json'), JSON.stringify(state));
+    writeFileSync(`${claimed}.stopping`, `${T0.toISOString()}\n`);
+    w.status = 'idle';
     await pass(w);
-    expect(w.notices.map((one) => one.body)).toEqual(['lead: an interrupted self-restart may have acted on its seat; dropped, check the seat']);
+    expect(w.notices.map((one) => one.body)).toEqual(['lead: an interrupted self-restart had begun stopping its seat; dropped, not run again: check the seat']);
     expect(readdirSync(folder)).toEqual([]);
     expect(w.restarts).toEqual([]);
+  });
+
+  test('the stopping mark is written beside the claim the restart acts on, and cleared after', async () => {
+    queue();
+    const w = world();
+    w.status = 'idle';
+    const deps = depsOf(w);
+    const seen: string[][] = [];
+    await runSelfRestarts({
+      home: base, root: base, dir, team: TEAM, sources: sourcesOf(w), caller: { kind: 'owner' },
+      deps: { ...deps, restart: async (argv, io, request) => {
+        expect(request.stopping?.()).toBe(true);
+        seen.push(readdirSync(join(dir, 'self-restart', SESSION)).sort());
+        return deps.restart(argv, io, request);
+      } },
+    });
+    expect(seen[0]!.some((one) => /^lead\.json\.claimed-[0-9a-f]+\.stopping$/.test(one))).toBe(true);
+    expect(readdirSync(join(dir, 'self-restart', SESSION))).toEqual([]);
+  });
+
+  test('a lost conversation is reported as a failed continuity and dropped', async () => {
+    queue();
+    const w = world();
+    w.status = 'idle';
+    w.exit = 1;
+    w.refusal = 'restart.continuity';
+    await pass(w);
+    expect(queued()).toBe(false);
+    expect(w.notices).toHaveLength(1);
   });
 });

@@ -13,7 +13,7 @@
 // machine's message key and the seat's recorded launch, pane and conversation are still the ones
 // the request names. A request that describes an earlier launch is dropped unrun.
 import { createHash, randomBytes } from 'node:crypto';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -100,7 +100,10 @@ function claim(path: string, text: string | null): Claimed | null {
   const held: Claimed = {
     // Back in the queue, unless a newer request took the name meanwhile: that one is kept.
     release: () => { try { linkSync(claimed, path); } catch { /* a newer request stands */ } drop(claimed); },
-    done: () => drop(claimed),
+    done: () => { drop(claimed); drop(stoppingMark(claimed)); },
+    stopping: () => {
+      try { writeStateFile(stoppingMark(claimed), `${new Date().toISOString()}\n`); return true; } catch { return false; }
+    },
   };
   if (now !== text) {
     held.release();
@@ -108,7 +111,10 @@ function claim(path: string, text: string | null): Claimed | null {
   }
   return held;
 }
-type Claimed = { release: () => void; done: () => void };
+type Claimed = { release: () => void; done: () => void; stopping: () => boolean };
+
+/** The mark a claim carries once its restart is about to act on the pane: never replayed. */
+const stoppingMark = (claimed: string): string => `${claimed}.stopping`;
 
 function drop(path: string): void {
   try { unlinkSync(path); } catch { /* already taken */ }
@@ -156,26 +162,29 @@ export async function runSelfRestarts(input: {
   };
   for (const session of sessions) {
     // A claim left by an earlier pass that ended mid-run (the daemon's passes run one at a time,
-    // so any claim found here is not this pass's): put back in the queue when the seat still runs
-    // the request's launch on its pane, so nothing was stopped; otherwise said once and dropped.
+    // so any claim found here is not this pass's). One whose restart had recorded that it was
+    // stopping may have acted on the pane: said once to the lead and dropped, never replayed.
+    // One without that mark acted on nothing and goes back in the queue, unless a newer request
+    // stands there; the ordinary checks then judge it again.
     let claims: string[];
     try { claims = readdirSync(folderOf(dir, session)).filter((one) => /\.json\.claimed-[0-9a-f]+$/.test(one)); } catch { claims = []; }
     for (const file of claims) {
       const path = join(folderOf(dir, session), file);
       const queuedAt = path.slice(0, path.lastIndexOf('.claimed-'));
+      const mark = stoppingMark(path);
       const { request } = readRequest(home, path);
-      if (request === null || request.session !== session) { drop(path); continue; }
-      const held = readState(dir).sessions[session]?.seats[request.seat];
-      const live = sources.agents(session)?.some((one) => one.pane === request.pane) === true;
-      if (live && held?.pane === request.pane && identity(held.launched) === request.launched && held.agent_session === request.conversation) {
-        try { linkSync(path, queuedAt); } catch { /* a newer request stands */ }
+      if (existsSync(mark)) {
+        if (request !== null) report(request, `${request.seat}: an interrupted self-restart had begun stopping its seat; dropped, not run again: check the seat`);
         drop(path);
-        lines.push(`${request.seat}: an interrupted self-restart was put back in the queue; its seat still runs the same launch`);
-      } else {
-        drop(path);
-        report(request, `${request.seat}: an interrupted self-restart may have acted on its seat; dropped, check the seat`);
+        drop(mark);
+        continue;
       }
+      if (request === null || request.session !== session) { drop(path); continue; }
+      try { linkSync(path, queuedAt); } catch { /* a newer request stands */ }
+      drop(path);
+      lines.push(`${request.seat}: an interrupted self-restart was put back in the queue; it had not begun stopping its seat`);
     }
+    // A stopping mark whose claim is gone has nothing left to say.
     let files: string[];
     try { files = readdirSync(folderOf(dir, session)).filter((one) => one.endsWith('.json')); } catch { continue; }
     for (const file of files) {
@@ -218,7 +227,7 @@ export async function runSelfRestarts(input: {
         stdout: (one) => out.push(one), stderr: (one) => out.push(one),
       };
       const argv = [seat, '--resume', conversation, '--session', session, '--json', ...(input.launchFile === undefined ? [] : ['--file', input.launchFile])];
-      const exit = await deps.restart(argv, io, { seat, pane: request.pane, launched: request.launched, conversation });
+      const exit = await deps.restart(argv, io, { seat, pane: request.pane, launched: request.launched, conversation, stopping: taken.stopping });
       if (exit === 0) {
         taken.done();
         lines.push(`${seat}: restarted itself with its conversation ${conversation}`);

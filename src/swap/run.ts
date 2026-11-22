@@ -384,6 +384,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
       return { kind: 'retry', seat: name, why: `another run holds the session's run lock; the queue stands` };
     case 'herdr':
       return { kind: 'retry', seat: name, why: 'herdr cannot be read; the queue stands' };
+    case 'continuity':
     case 'not-ready': {
       logLine(dir, 'swap', input.by, `${name}: the swap was refused: ${performed.message}`, now());
       return { kind: 'failed', seat: name, why: performed.message };

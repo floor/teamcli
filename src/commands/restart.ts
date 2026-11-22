@@ -303,7 +303,12 @@ export default restart;
 
 /** What the daemon carries into a restart it runs for a seat's own queued request
  *  (`../launch/self-restart.ts`): never a command-line word, so no caller can claim it. */
-export type SelfRequest = { seat: string; pane: string; launched: string; conversation: string };
+export type SelfRequest = {
+  seat: string; pane: string; launched: string; conversation: string;
+  /** Persists the request's `stopping` mark; called once, right before the first pane effect.
+   *  False when the mark could not be written: nothing is stopped then. */
+  stopping?: () => boolean;
+};
 
 export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources, internal: { selfRequest?: SelfRequest } = {}): Promise<number> {
   let out = cleanedIo(io);
@@ -878,6 +883,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       refuse(out, json, 'restart', { id: 'restart.deferred', message: performed.message, repair: null });
       // exit: restart.deferred
       return 1;
+    case 'continuity':
+      refuse(out, json, 'restart', { id: 'restart.continuity', message: performed.message, repair: null });
+      // exit: restart.continuity
+      return 1;
     case 'not-ready':
       return notReadyRefused(out, json, performed.message);
     case 'herdr':
@@ -1029,6 +1038,8 @@ export type PerformResult =
   | { kind: 'busy'; message: string }
   /** A self-restart found its seat not idle at an empty prompt before anything was stopped. */
   | { kind: 'deferred'; message: string }
+  /** A self-restart's conversation could not be resumed: the seat was stopped, nothing fresh started. */
+  | { kind: 'continuity'; message: string }
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
   | { kind: 'run-lock'; held: number; startedAt: number | null }
@@ -1096,7 +1107,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
   if (inspected.kind === 'replaced') return { kind: 'replaced', takeable: inspected.takeable };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
-  if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
+  if (inspected.kind === 'busy') return input.selfRequest !== undefined ? deferredOf(inspected.message) : { kind: 'busy', message: inspected.message };
 
   // Preflight the relaunch before stopping the seat so a preflight refusal leaves the seat running.
   const profile = profileFor(next.cli);
@@ -1334,7 +1345,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
     if (rechecked.kind === 'replaced') return { kind: 'replaced', takeable: rechecked.takeable };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
-    if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
+    if (rechecked.kind === 'busy') return input.selfRequest !== undefined ? deferredOf(rechecked.message) : { kind: 'busy', message: rechecked.message };
     if (input.selfRequest !== undefined) {
       if (freshRecorded?.pane !== input.selfRequest.pane || JSON.stringify(freshRecorded.launched ?? null) !== input.selfRequest.launched
         || freshRecorded.agent_session !== input.selfRequest.conversation) {
@@ -1452,7 +1463,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
         if (seen.kind === 'replaced') return { kind: 'replaced', takeable: seen.takeable };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
-        if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
+        if (seen.kind === 'busy') return input.selfRequest !== undefined ? deferredOf(seen.message) : { kind: 'busy', message: seen.message };
         // A self-restart's strict rule governs the last observation before the stop, too.
         if (input.selfRequest !== undefined) {
           const strict = selfStrictProblem(name, input.selfRequest, seen);
@@ -1470,6 +1481,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const endpointProblem = restartEndpointProblem();
       if (endpointProblem) return { kind: 'not-ready', message: `${name}: ${endpointProblem}; left running, nothing typed` };
 
+      // A self-restart records that it is stopping before the first pane effect: a pass that ends
+      // after this point is never replayed.
+      if (input.selfRequest?.stopping !== undefined && !input.selfRequest.stopping()) {
+        return deferredOf(`${name}: its self-restart could not record that it is stopping`);
+      }
       // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
       // old record is cleared below either way.
       let stopped = true;
@@ -1732,7 +1748,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
       if ('note' in lined) logLine(dir, input.command, who, lined.note, sources.now());
     }
-    const report = await executePlan(plan, session, host);
+    // A self-restart resumes its conversation or fails: the executor never falls back to a fresh one.
+    const resumeRefused = new Set<string>();
+    const report = await executePlan(plan, session, host, input.selfRequest === undefined ? undefined : { noFreshFallback: new Set([name]), resumeRefused });
+    if (resumeRefused.has(name)) {
+      logLine(dir, input.command, who, `${name}: its conversation ${resumed ?? ''} could not be resumed; no fresh conversation was started`, sources.now());
+      return { kind: 'continuity', message: `${name}: its conversation ${resumed ?? ''} could not be resumed, so continuity failed; the seat was stopped and no fresh conversation was started` };
+    }
     let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
@@ -2908,10 +2930,15 @@ function abandonWorkingRefused(out: Io, json: boolean, name: string): number {
 /** A self-restart's rule for an observation before the stop: the request's own pane, free at a
  *  recognised empty prompt — no draft, dialog, unread screen, exit text or taken pane. Null
  *  when the stop may go on; the deferral (nothing stopped) otherwise. */
+/** The pre-stop deferral of a self-restart: nothing was stopped, and the request stays queued. */
+function deferredOf(why: string): { kind: 'deferred'; message: string } {
+  return { kind: 'deferred', message: `${why}; its self-restart waits, nothing was stopped` };
+}
+
 function selfStrictProblem(name: string, request: SelfRequest, seen: InspectedSeat): { kind: 'deferred'; message: string } | null {
   if (seen.kind === 'ok' && seen.agent?.pane === request.pane && seen.where === 'free' && seen.draftScreen === undefined
     && seen.settingsDialog !== true && seen.unrecognised === undefined && !seen.exitInBox && !seen.atExitQuestion && seen.taken !== true) return null;
-  return { kind: 'deferred', message: `${name} is not idle at an empty prompt; its self-restart waits, nothing was stopped` };
+  return deferredOf(`${name} is not idle at an empty prompt`);
 }
 
 function busyRefused(out: Io, json: boolean, message: string): number {
