@@ -285,6 +285,14 @@ async function open(initial: Phase): Promise<Scene> {
   return scene;
 }
 
+/** Waits until the stuck root's newest child is the one its last restart started, then steps
+ *  ordinary beats until it has answered twice, as `open` does for the first children. */
+async function replacementAnswered(scene: Scene): Promise<void> {
+  await until(() => of(scene, scene.stuck).length === kills(scene, scene.stuck) + 1, 'the restarted child was not started again');
+  for (let i = 0; latest(scene, scene.stuck).heard < 2 && i < 50; i++) await scene.step();
+  expect(latest(scene, scene.stuck).heard).toBeGreaterThanOrEqual(2);
+}
+
 function of(scene: Scene, root: string): Fake[] {
   return scene.spawned.filter((child) => child.root === root);
 }
@@ -448,8 +456,16 @@ describe('a stuck watch or a late chores child is restarted for its own root', (
     const scene = await open('starting');
     try {
       const startedAt = scene.clock.at;
-      for (let i = 0; kills(scene, scene.stuck) < 3 && i < 8; i++) await scene.step(START_JUMP_MS);
+      // Each jump is taken only once the child the last restart started is running and has
+      // answered: the fleet starts the replacement asynchronously, and a jump taken before it
+      // exists dates its birth after the jump, so it is never late and nothing is left (seen on
+      // a loaded CI runner, where the condition below then never arrived).
+      for (let i = 0; kills(scene, scene.stuck) < 3 && i < 8; i++) {
+        await replacementAnswered(scene);
+        await scene.step(START_JUMP_MS);
+      }
       expect(kills(scene, scene.stuck)).toBe(3);
+      await replacementAnswered(scene);
       await scene.step(START_JUMP_MS);
       await until(() => decisionLines(scene.stuck, 'left for a person').length === 1, 'the lead was not told the child was left');
       const left = decisionText(decisionLines(scene.stuck, 'left for a person')[0] ?? '');
