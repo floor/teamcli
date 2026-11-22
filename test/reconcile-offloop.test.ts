@@ -917,11 +917,21 @@ describe('the daemon heartbeat and endpoint supervision', () => {
         ? { heartbeatAt: read.state.heartbeatAt, scanned: entry.firstPass.scanned }
         : null;
     }, 5_000);
-    await sleep(40);
-    const later = readStateOk(home);
-    expect(later.heartbeatAt).not.toBe(first.heartbeatAt);
-    expect(later.roots[0]?.bus).toBe('serving');
-    expect(later.roots[0]?.firstPass?.running).toBe(true);
+    // The heartbeat moves on while the pass still runs. One fixed 40 ms sample was too tight on a
+    // loaded shared runner (a state write can land a beat late with no stall at all), so the
+    // record is polled: a later heartbeat seen while the pass runs passes, and a pass that ends
+    // before any later heartbeat was recorded is the stall this scene exists to catch.
+    const later = await waitForValue(() => {
+      const read = readDaemonState(home);
+      if (read.kind !== 'ok') return null;
+      const entry = read.state.roots[0];
+      if (read.state.heartbeatAt !== first.heartbeatAt) return { state: read.state, running: entry?.firstPass?.running === true };
+      if (entry?.firstPass?.running !== true) return { state: read.state, running: false };
+      return null;
+    }, 5_000);
+    expect(later.state.heartbeatAt).not.toBe(first.heartbeatAt);
+    expect(later.state.roots[0]?.bus).toBe('serving');
+    expect(later.running).toBe(true);
     // The start returned while the pass still ran; close aborts and drains it.
     const result = await started;
     expect(result.kind).toBe('serving');

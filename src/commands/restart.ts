@@ -81,7 +81,7 @@ import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { currentCodexRecipe } from '../launch/features.ts';
 import { featureDialogClose } from '../launch/reboot.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
-import { formatPlan, registryLaunches, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, registryLaunches, upPlan, type DownSeat, type Step, type UpSeat } from '../launch/plan.ts';
 import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { launcherCoverRefusal } from '../launch/launcher-cover.ts';
 import { loadTeamLaunchers } from '../launch/resolve-flag.ts';
@@ -124,9 +124,13 @@ import { realSources as downSources, stateOfPane } from './down.ts';
 import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 import { codexThreadFreeFor, shippedCodexThreadWait } from '../launch/codex-thread-release.ts';
+import { writeSelfRestartRequest } from '../launch/self-restart.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
        team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
+       team restart <own-seat> --self
+
+--self is the seat's restart of itself, run from its own recorded pane: it queues the restart and returns at once, and the daemon restarts the seat with its recorded conversation once its turn has ended and its input line is empty. It takes no other option.
 
 A <seat> written as <seat>@<team> names another team's seat by its registry id, project or session: only that team's owner or leads, or the entity's main orchestrator, may restart it that way, and it takes no --file, --session or --client.
 
@@ -298,12 +302,25 @@ function registryDeclaredTeam(
 export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
 export default restart;
 
-export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources): Promise<number> {
+/** What the daemon carries into a restart it runs for a seat's own queued request
+ *  (`../launch/self-restart.ts`): never a command-line word, so no caller can claim it. */
+export type SelfRequest = {
+  seat: string; pane: string; launched: string; conversation: string;
+  /** Persists the request's `stopping` mark; called once, right before the first pane effect.
+   *  False when the mark could not be written: nothing is stopped then. */
+  stopping?: () => boolean;
+};
+
+export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources, internal: { selfRequest?: SelfRequest } = {}): Promise<number> {
   let out = cleanedIo(io);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json', 'resolve-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'resume'], ['abandon', 'fresh', 'dry-run', 'json', 'resolve-launch', 'self']);
+  const self = args.flags.has('self');
+  if (self && args.error === undefined && (Object.keys(args.values).length > 0 || args.flags.size > 1 || (args.rest[0] ?? '').includes('@'))) {
+    return usage(out, json, '--self takes no other option: run `team restart <own-seat> --self` from the seat\'s own pane');
+  }
   const resumeProblem = args.error === undefined && args.values.resume !== undefined
     ? args.values.resume.trim() === ''
       ? '--resume requires a session id'
@@ -485,6 +502,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ? { ...judgeCallerOf(io, fixedSession === 'default' ? undefined : fixedSession), session: fixedSession }
     : judgeCallerIn(io, dir, team, verdictOf);
   const { caller, shown, session } = judged;
+  if (self) return queueSelfRestart(out, json, { home, dir, team, name, session, caller, shown, now: sources.now() });
   // The who-may-run-it verdict and the entity's main orchestrator are read before dev mode:
   // an address is admitted on proof alone, ahead of any dev-mode read, log or fold, so a refused
   // address leaves nothing in the target team's log. The entity's main orchestrator stands as,
@@ -683,8 +701,12 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       );
     }
     const pinnedLaunch = pinnedRead.recorded.launch ?? declared.launch;
-    const carried = resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
-    if (carried.kind !== 'line') {
+    // A self-restart on a launcher runs the launcher's resolved line, never the recorded recipe
+    // (a first launch can record the legacy `launch:` text): the plan carries the conversation
+    // onto the resolved line, and the check before the stop verifies it. The ownership proof
+    // above stands for every seat.
+    const carried = selfLineFromResolver(internal.selfRequest, declared) ? null : resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
+    if (carried !== null && carried.kind !== 'line') {
       return notReadyRefused(
         out,
         json,
@@ -786,10 +808,15 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
   }
 
+  const selfRequest = internal.selfRequest;
+  if (selfRequest !== undefined && selfRequest.seat !== name) {
+    return notReadyRefused(out, json, `${name}: a self-restart request for ${plainLine(selfRequest.seat)} restarts no other seat; left as it is`);
+  }
   const performed = await performRestart({
     out,
     json,
     notes,
+    ...(selfRequest === undefined ? {} : { selfRequest }),
     dir,
     root,
     home,
@@ -803,7 +830,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     agents,
     abandon,
     owner: clientRun === null && caller.kind === 'owner',
-    callerText: clientText ?? describeCaller(caller),
+    callerText: clientText ?? (selfRequest !== undefined ? `daemon for ${name}'s own request` : describeCaller(caller)),
     standing,
     ceilings,
     dev,
@@ -857,6 +884,14 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       return abandonWorkingRefused(out, json, name);
     case 'busy':
       return busyRefused(out, json, performed.message);
+    case 'deferred':
+      refuse(out, json, 'restart', { id: 'restart.deferred', message: performed.message, repair: null });
+      // exit: restart.deferred
+      return 1;
+    case 'continuity':
+      refuse(out, json, 'restart', { id: 'restart.continuity', message: performed.message, repair: null });
+      // exit: restart.continuity
+      return 1;
     case 'not-ready':
       return notReadyRefused(out, json, performed.message);
     case 'herdr':
@@ -960,6 +995,11 @@ export type PerformInput = {
   resume?: string;
   /** True when `resume` was explicitly pinned via `--resume <cli-session-id>`. */
   pinnedResume?: boolean;
+  /** The seat's own queued request this run carries out: under the run lock, the seat must still
+   *  be on the request's pane with the request's launch, at an empty, recognised idle prompt —
+   *  no unsent text, no dialog, no unread screen — or nothing is stopped. Stricter than the
+   *  ordinary locked recheck, which copies a draft and closes a settings dialog. */
+  selfRequest?: SelfRequest;
   /** Plain words for the pre-close context line when `resume` is absent: no recorded
    *  conversation, not resuming one with its reason, or a carried one dropped before the launch.
    *  The line then states why the relaunch starts a fresh conversation. */
@@ -1001,6 +1041,10 @@ export type PerformResult =
   | { kind: 'replaced'; takeable: boolean }
   | { kind: 'abandon-working' }
   | { kind: 'busy'; message: string }
+  /** A self-restart found its seat not idle at an empty prompt before anything was stopped. */
+  | { kind: 'deferred'; message: string }
+  /** A self-restart's conversation could not be resumed: the seat was stopped, nothing fresh started. */
+  | { kind: 'continuity'; message: string }
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
   | { kind: 'run-lock'; held: number; startedAt: number | null }
@@ -1068,7 +1112,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
   if (inspected.kind === 'replaced') return { kind: 'replaced', takeable: inspected.takeable };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
-  if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
+  if (inspected.kind === 'busy') return input.selfRequest !== undefined ? deferredOf(inspected.message) : { kind: 'busy', message: inspected.message };
 
   // Preflight the relaunch before stopping the seat so a preflight refusal leaves the seat running.
   const profile = profileFor(next.cli);
@@ -1135,6 +1179,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   const tree = worktreeOf(recordedSession, next.name);
   if (tree !== undefined) planSeat.worktree = tree.path;
   if (resolveLaunch && input.resume !== undefined) planSeat.resolveSession = input.resume;
+  if (resolveLaunch && input.resume !== undefined && input.selfRequest !== undefined) planSeat.resumeRequired = true;
+  // A self-restart resumes its conversation or does not run: one with no conversation to carry
+  // is refused before anything is touched.
+  if (input.selfRequest !== undefined && input.resume !== input.selfRequest.conversation) {
+    return { kind: 'continuity', message: `${name}: its conversation ${input.selfRequest.conversation} is not the one this restart would resume; nothing was stopped` };
+  }
   // A shipped launcher is package code and needs no cover; a launcher file in the team's folder does.
   if (resolveLaunch && !isShippedLauncher(planSeat.launcher)) {
     const covered = launcherCoverRefusal(
@@ -1159,7 +1209,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // The caller's plain words for why no conversation is carried; the drop below replaces them
   // with its own reason, so the context line always names the decision that stood last.
   let resumeNote = input.resumeNote;
-  if (input.resume !== undefined) {
+  if (input.resume !== undefined && selfLineFromResolver(input.selfRequest, next)) {
+    // The launcher's resolved line runs, not this recipe: the plan carries the conversation onto
+    // it (`resumeRequired`), and the check before the stop verifies the final target.
+    resumed = input.resume;
+  } else if (input.resume !== undefined) {
     const carried = resumeCarry(next.cli, planSeat.launch, input.resume);
     if (carried.kind === 'line') {
       planSeat.launch = carried.line;
@@ -1216,7 +1270,16 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // A launch the plan refuses is refused here, before the seat is stopped: a restart never stops
   // a seat it then cannot start (iris, 2026-11-14). The running seat keeps running.
   const held = preview.find((step) => step.do?.do === 'refuse' && step.do.seat === name);
-  if (!dry && held?.do?.do === 'refuse') return { kind: 'not-ready', message: `${name}: ${held.do.why}; left as it is` };
+  if (!dry && held?.do?.do === 'refuse') {
+    return input.selfRequest !== undefined
+      ? { kind: 'continuity', message: `${name}: ${held.do.why}; its self-restart does not run, nothing was stopped` }
+      : { kind: 'not-ready', message: `${name}: ${held.do.why}; left as it is` };
+  }
+  // The final line, launcher resolution included, must target the requested conversation.
+  if (!dry && input.selfRequest !== undefined) {
+    const problem = selfResumeProblem(name, next.cli, preview, input.selfRequest.conversation);
+    if (problem !== null) return problem;
+  }
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
@@ -1306,7 +1369,15 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
     if (rechecked.kind === 'replaced') return { kind: 'replaced', takeable: rechecked.takeable };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
-    if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
+    if (rechecked.kind === 'busy') return input.selfRequest !== undefined ? deferredOf(rechecked.message) : { kind: 'busy', message: rechecked.message };
+    if (input.selfRequest !== undefined) {
+      if (freshRecorded?.pane !== input.selfRequest.pane || JSON.stringify(freshRecorded.launched ?? null) !== input.selfRequest.launched
+        || freshRecorded.agent_session !== input.selfRequest.conversation) {
+        return { kind: 'not-ready', message: `${name}: its launch or conversation changed since its self-restart request; left as it is` };
+      }
+      const strict = selfStrictProblem(name, input.selfRequest, rechecked);
+      if (strict !== null) return strict;
+    }
 
     // The unsent text, copied under the run lock before the pane is closed, so neither a failed
     // launch nor this process ending loses it. The copy stays until the text is read back in
@@ -1416,7 +1487,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
         if (seen.kind === 'replaced') return { kind: 'replaced', takeable: seen.takeable };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
-        if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
+        if (seen.kind === 'busy') return input.selfRequest !== undefined ? deferredOf(seen.message) : { kind: 'busy', message: seen.message };
+        // A self-restart's strict rule governs the last observation before the stop, too.
+        if (input.selfRequest !== undefined) {
+          const strict = selfStrictProblem(name, input.selfRequest, seen);
+          if (strict !== null) return strict;
+        }
         stopObs = seen;
       }
 
@@ -1429,6 +1505,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const endpointProblem = restartEndpointProblem();
       if (endpointProblem) return { kind: 'not-ready', message: `${name}: ${endpointProblem}; left running, nothing typed` };
 
+      // A self-restart records that it is stopping before the first pane effect: a pass that ends
+      // after this point is never replayed.
+      if (input.selfRequest?.stopping !== undefined && !input.selfRequest.stopping()) {
+        return deferredOf(`${name}: its self-restart could not record that it is stopping`);
+      }
       // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
       // old record is cleared below either way.
       let stopped = true;
@@ -1691,7 +1772,13 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       const lined = ensureSeatLine({ home, team, root, by: who, session }, declared);
       if ('note' in lined) logLine(dir, input.command, who, lined.note, sources.now());
     }
-    const report = await executePlan(plan, session, host);
+    // A self-restart resumes its conversation or fails: the executor never falls back to a fresh one.
+    const resumeRefused = new Set<string>();
+    const report = await executePlan(plan, session, host, input.selfRequest === undefined ? undefined : { noFreshFallback: new Set([name]), resumeRefused });
+    if (resumeRefused.has(name)) {
+      logLine(dir, input.command, who, `${name}: its conversation ${resumed ?? ''} could not be resumed; no fresh conversation was started`, sources.now());
+      return { kind: 'continuity', message: `${name}: its conversation ${resumed ?? ''} could not be resumed, so continuity failed; the seat was stopped and no fresh conversation was started` };
+    }
     let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
@@ -2682,10 +2769,68 @@ function selfRefused(out: Io, json: boolean, callerName: string): number {
   refuse(out, json, 'restart', {
     id: 'restart.self',
     message: `the ${callerName} cannot restart its own recorded pane; another \`leads\` seat (or the owner) restarts it`,
-    repair: null,
+    repair: `team restart ${callerName} --self`,
   });
   // exit: restart.self
   return 1;
+}
+
+/**
+ * `team restart <own-seat> --self`: the seat's restart of itself. A restart run here would close
+ * the pane running it, so this records one signed request (`../launch/self-restart.ts`) and
+ * returns; the daemon runs the ordinary restart with the seat's recorded conversation once the
+ * seat is idle at an empty prompt. Only the seat itself, proven on its recorded pane in this
+ * session, queues it: no seat queues another's, and this is no new reach for a lead.
+ */
+function queueSelfRestart(out: Io, json: boolean, input: {
+  home: string; dir: string; team: TeamFile; name: string; session: string; caller: Caller; shown: Caller; now: Date;
+}): number {
+  const { name, session, caller } = input;
+  const own = caller.kind === 'seat' && callerVerdict(caller, name, standingOf(input.dir, session, caller)).kind === 'ok';
+  if (!own) {
+    refuse(out, json, 'restart', {
+      id: 'restart.self-caller',
+      message: `--self restarts only the seat this call runs as, from its own recorded pane; this call is ${plainLine(describeCaller(input.shown))}, not ${plainLine(name)}`,
+      repair: null,
+    });
+    // exit: restart.self-caller
+    return 1;
+  }
+  const declared = input.team.seats.find((seat) => seat.name === name);
+  if (declared === undefined) return unknownRefused(out, json, name);
+  const held = readState(input.dir).sessions[session]?.seats[name];
+  if (declared.human === true || held?.pane === undefined || held.launched === undefined || !held.agent_session) {
+    refuse(out, json, 'restart', {
+      id: 'restart.self-unrecorded',
+      message: declared.human === true
+        ? `${name} is a human's pane: nothing is typed into it or launched over it`
+        : `${name} records no launch and conversation on its pane, so there is nothing to resume; the owner or a \`leads\` seat restarts it`,
+      repair: null,
+    });
+    // exit: restart.self-unrecorded
+    return 1;
+  }
+  // A self-restart resumes or does not run: a line that cannot carry the conversation is refused
+  // now. A seat on a launcher never runs its `launch:` text (the launcher's resolved line is the
+  // one it runs, and the plan carries the conversation onto it), so that text is not judged
+  // here; the daemon's run checks the final resolved line before the stop for every seat.
+  const carried = selfLineFromResolver(true, declared) ? null : resumeCarry(declared.cli, declared.launch, held.agent_session);
+  if (carried !== null && carried.kind === 'refuse') {
+    refuse(out, json, 'restart', {
+      id: 'restart.continuity',
+      message: `${name}: its launch line cannot resume its conversation ${held.agent_session} (${carried.why}); a self-restart never starts a fresh one, so nothing was queued`,
+      repair: null,
+    });
+    return 1;
+  }
+  writeSelfRestartRequest({
+    home: input.home, dir: input.dir, session, seat: name, conversation: held.agent_session,
+    pane: held.pane, launched: held.launched, now: input.now,
+  });
+  logLine(input.dir, 'restart', describeCaller(caller), `self-restart queued for ${name} with its conversation ${held.agent_session}`, input.now);
+  out.stdout(`${name}: restart queued; the daemon relaunches it with its conversation ${held.agent_session} once its turn ends and its input line is empty\n`);
+  // exit: restart.self-queued
+  return 0;
 }
 
 function temporaryRefused(out: Io, json: boolean, name: string, like: string): number {
@@ -2817,6 +2962,40 @@ function abandonWorkingRefused(out: Io, json: boolean, name: string): number {
   });
   // exit: restart.abandon-working
   return 1;
+}
+
+/** A self-restart's rule for an observation before the stop: the request's own pane, free at a
+ *  recognised empty prompt — no draft, dialog, unread screen, exit text or taken pane. Null
+ *  when the stop may go on; the deferral (nothing stopped) otherwise. */
+/**
+ * The one rule every self-restart check uses for which line it judges: a seat on a launcher
+ * runs the launcher's resolved line, never its `launch:` text or a recorded recipe (a first
+ * launch can record the legacy text), so those are never judged for a self-restart; the plan
+ * carries the conversation onto the resolved line and the check before the stop verifies it.
+ * A seat with no launcher runs its own line, and that line is judged as before.
+ */
+function selfLineFromResolver(self: SelfRequest | true | undefined, seat: Pick<Seat, 'launcher'>): boolean {
+  return self !== undefined && seat.launcher !== undefined && seat.launcher !== '';
+}
+
+/** Whether the planned launch of `name` names `conversation` as its resume target; the
+ *  continuity refusal otherwise. */
+function selfResumeProblem(name: string, cli: string, plan: readonly Step[], conversation: string): { kind: 'continuity'; message: string } | null {
+  const launch = plan.find((step) => step.do?.do === 'launch' && step.do.seat === name);
+  const command = launch?.do?.do === 'launch' ? launch.do.command : undefined;
+  if (command !== undefined && namedResumeTarget(cli, command) === conversation) return null;
+  return { kind: 'continuity', message: `${name}: its launch line would not resume its conversation ${conversation}; its self-restart does not run, nothing was stopped` };
+}
+
+/** The pre-stop deferral of a self-restart: nothing was stopped, and the request stays queued. */
+function deferredOf(why: string): { kind: 'deferred'; message: string } {
+  return { kind: 'deferred', message: `${why}; its self-restart waits, nothing was stopped` };
+}
+
+function selfStrictProblem(name: string, request: SelfRequest, seen: InspectedSeat): { kind: 'deferred'; message: string } | null {
+  if (seen.kind === 'ok' && seen.agent?.pane === request.pane && seen.where === 'free' && seen.draftScreen === undefined
+    && seen.settingsDialog !== true && seen.unrecognised === undefined && !seen.exitInBox && !seen.atExitQuestion && seen.taken !== true) return null;
+  return deferredOf(`${name} is not idle at an empty prompt`);
 }
 
 function busyRefused(out: Io, json: boolean, message: string): number {

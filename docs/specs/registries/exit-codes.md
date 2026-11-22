@@ -399,7 +399,10 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `rename.invocation` | the invocation can't be read | present at 0.5.0 | `contract/exit-codes.json` | command `rename`; exit `2` |
 | `restart.dry-run` | the stop and launch plan was printed and nothing was touched | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `0` |
 | `restart.ready` | the seat was restarted in a new pane | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `0` |
+| `restart.self-queued` | `--self` queued the seat's restart for the daemon | added in this release | `contract/exit-codes.json` | command `restart`; exit `0` |
 | `restart.abandon-working` | a seat caller passed --abandon on a working seat | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
+| `restart.continuity` | a self-restart cannot or could not resume the seat's conversation: refused at queue time or before the stop when the final launch line would not resume it, or the seat was stopped and the CLI refused the resume; no fresh conversation is ever started | added in this release | `contract/exit-codes.json` | command `restart`; exit `1` |
+| `restart.deferred` | a self-restart was refused before any effect on the seat's pane (not idle at an empty prompt, or its stopping mark not written); nothing was stopped | added in this release | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.busy` | the seat is busy and --abandon was not given, or graceful stop did not close the pane | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.caller` | the caller may not restart a seat, or passed an owner-only flag | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.detached` | a run with no terminal | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
@@ -410,6 +413,8 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `restart.replaced` | the old pane holds a process that is not the seat's CLI | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.run-lock` | another session-mutating run is holding the session | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.self` | a seat caller tried to restart its own recorded pane | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
+| `restart.self-caller` | `--self` was run by a caller that is not the named seat on its recorded pane | added in this release | `contract/exit-codes.json` | command `restart`; exit `1` |
+| `restart.self-unrecorded` | `--self` for a seat whose record holds no launch or conversation, or a human's pane | added in this release | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.signed-off` | the seat is parked or stopped | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.temporary` | the seat is a temporary copy | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.unknown` | the seat is not a declared seat | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |

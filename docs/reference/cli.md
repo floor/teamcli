@@ -3589,6 +3589,7 @@ Usage:
 
     team restart <seat> [--abandon] [--fresh] [--resume <cli-session-id>] [--resolve-launch] [--dry-run] [--session <name>] [--file <path>] [--json]
     team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
+    team restart <own-seat> --self
 
 ### Who may run it
 
@@ -3609,6 +3610,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--resolve-launch` | no | no | no |
 | `--resume` | yes | no | no |
+| `--self` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
 | `-h` | no | no | yes |
@@ -3617,7 +3619,8 @@ Usage:
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `seat` | no | no |
+| `seat` | yes | no |
+| `own-seat` | yes | no |
 
 ## `resume`
 

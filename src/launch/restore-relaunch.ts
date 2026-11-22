@@ -97,7 +97,7 @@ export function unreachableAfterRestore(dir: string, session: string, seat: stri
 }
 
 /** Whether herdr reads the seat's pane idle with an empty prompt: no turn, no text, no dialog. */
-function idleNow(sources: UpSources, session: string, pane: string, cli: string): boolean {
+export function idleNow(sources: UpSources, session: string, pane: string, cli: string): boolean {
   const agent = sources.agents(session)?.find((one) => one.pane === pane);
   if (agent === undefined || (agent.status !== 'idle' && agent.status !== 'done')) return false;
   const text = sources.launch?.paneText(session, pane) ?? null;

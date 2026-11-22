@@ -446,6 +446,9 @@ export interface UpSeat {
   /** The session the resolver is given, including a blank one it refuses. Absent when this
    *  run has no session to give. Ignored unless the launch is asked to resolve a launcher. */
   resolveSession?: string;
+  /** The launch must resume `resolveSession` (a queued self-restart): a launcher's resolved line
+   *  is given the resume words, and a line that cannot carry them refuses the seat. */
+  resumeRequired?: true;
   /** Relative to the root. */
   cwd: string;
   /** The seat's recorded worktree, relative to the root or absolute. */
@@ -1759,7 +1762,19 @@ export function upPlan(input: UpInput): Step[] {
             `GIT_COMMITTER_NAME=${id.authorName}`, `GIT_COMMITTER_EMAIL=${id.authorEmail}`);
         }
       }
-      baseLine = envWords.length === 0 ? decided.command : `${envWords.join(' ')} ${decided.command}`;
+      // A launch that must resume carries the conversation on the resolved line itself: the
+      // resolver's resume decision is not part of its argv, and a shipped line names none.
+      let resolvedLine = decided.command;
+      if (seat.resumeRequired === true && seat.resolveSession !== undefined) {
+        const carried = resumeCarry(seat.cli, resolvedLine, seat.resolveSession);
+        if (carried.kind === 'refuse') {
+          const why = `its launcher's line cannot resume its conversation (${carried.why})`;
+          steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
+          continue;
+        }
+        resolvedLine = carried.line;
+      }
+      baseLine = envWords.length === 0 ? resolvedLine : `${envWords.join(' ')} ${resolvedLine}`;
       fromResolver = true;
       shippedLaunch = shipped !== null;
       // The resolver's line replaces the declared one, so the channel flag placed on the declared

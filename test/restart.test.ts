@@ -12,6 +12,7 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { selfRestartPath } from '../src/launch/self-restart.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
@@ -1320,6 +1321,107 @@ describe('team restart <seat>', () => {
     expect(io.out).toContain('team restart: restarted worker; pane none -> pane-new\n');
     expect(did.closed).toEqual([]);
     expect(did.created).toBe(1);
+  });
+
+  test('--self from the seat\'s own pane queues the restart, returns at once, and signs the request', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+      } as never;
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+
+    const code = await runRestart(['worker', '--self'], io, sources);
+    expect(code).toBe(0);
+    expect(io.out).toBe('worker: restart queued; the daemon relaunches it with its conversation conv-worker once its turn ends and its input line is empty\n');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    const request = JSON.parse(readFileSync(selfRestartPath(fixture.dir, 'acme', 'worker'), 'utf8'));
+    expect(request).toMatchObject({ format: 1, seat: 'worker', session: 'acme', conversation: 'conv-worker', pane: 'pane-worker', launched: JSON.stringify({ shell: 701, cli: [801] }) });
+    expect(request.signature).toMatch(/^[0-9a-f]+$/);
+  });
+
+  test('--self for a seat whose line cannot carry its conversation queues nothing', async () => {
+    const yaml = TEAM_YAML.replace(
+      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
+      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5 --session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n',
+    );
+    const fixture = makeFixture(yaml);
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+      } as never;
+    });
+    const { sources } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+    expect(await runRestart(['worker', '--self'], io, sources)).toBe(1);
+    expect(io.err).toContain('a self-restart never starts a fresh one, so nothing was queued');
+    expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
+    // On a launcher the `launch:` text is never run, so the same legacy line queues fine.
+    const onLauncher = makeFixture(yaml.replace('--session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n', '--session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n    launcher: claude-code\n    cwd: .\n'));
+    updateState(onLauncher.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+      } as never;
+    });
+    const launcherIo = testIo(onLauncher.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+    expect(await runRestart(['worker', '--self'], launcherIo, makeHarness(onLauncher).sources), launcherIo.err).toBe(0);
+    expect(existsSync(selfRestartPath(onLauncher.dir, 'acme', 'worker'))).toBe(true);
+    // A legacy `--continue` or `--resume <other id>` on a launcher seat's unused line queues too.
+    for (const legacy of ['--continue', '--resume 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b']) {
+      const other = makeFixture(yaml.replace('--session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b\n', `${legacy}\n    launcher: claude-code\n    cwd: .\n`));
+      updateState(other.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).seats.worker = {
+          stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker',
+        } as never;
+      });
+      const otherIo = testIo(other.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+      expect(await runRestart(['worker', '--self'], otherIo, makeHarness(other).sources), otherIo.err).toBe(0);
+      expect(existsSync(selfRestartPath(other.dir, 'acme', 'worker'))).toBe(true);
+    }
+  });
+
+  test('--self for another seat\'s pane is refused: no seat queues another\'s restart', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+      session.seats.worker = { stage: 'ready', pane: 'pane-worker', workspace: 'ws-worker', launched: { shell: 701, cli: [801] }, agent_session: 'conv-worker' } as never;
+    });
+    const { sources } = makeHarness(fixture);
+    // The lead names the worker; the worker stands on another pane than its record.
+    for (const caller of [
+      { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' },
+      { kind: 'seat', name: 'worker', pane: 'pane-other', session: 'acme' },
+    ] as Caller[]) {
+      const io = testIo(fixture.root, caller);
+      expect(await runRestart(['worker', '--self'], io, sources)).toBe(1);
+      expect(io.err).toContain('--self restarts only the seat this call runs as, from its own recorded pane');
+    }
+    expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
+    const json = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' });
+    expect(await runRestart(['worker', '--self', '--resume', 'conv-worker'], json, sources)).toBe(2);
+    expect(json.err).toContain('--self takes no other option');
+  });
+
+  test('a self-restart with no conversation to resume does not run: nothing is stopped', async () => {
+    const fixture = makeFixture(withoutChannel('worker'));
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', agent_session: 'conv-worker' };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const request = { seat: 'worker', pane: 'pane-old', launched: 'null', conversation: 'conv-worker' };
+    expect(await runRestart(['worker', '--json'], io, sources, { selfRequest: request })).toBe(1);
+    expect(io.out).toContain('"id": "restart.continuity"');
+    expect(did.closed).toEqual([]);
+    expect(did.created).toBe(0);
+    // A request for another seat restarts nothing either.
+    const other = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], other, sources, { selfRequest: { ...request, seat: 'ops' } })).toBe(1);
+    expect(other.err).toContain('restarts no other seat');
   });
 
   test('refuses self-restart from a seat caller', async () => {

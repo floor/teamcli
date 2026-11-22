@@ -5,11 +5,11 @@
 //
 // This file exists so the sync terminal-host reads of a restore pass block this process alone.
 // The daemon's own loop only awaits the result line, so its heartbeat is never held by a pass.
-import { runRestoreSweepForRoute, type RestoreSweepResult } from '../../launch/restore-sweep.ts';
+import { runRestoreSweepForRoute, runSelfRestartsForRoute, type RestoreSweepResult, type SelfRestartPassResult } from '../../launch/restore-sweep.ts';
 import { acceptRestoreDoor, readRestoreDoor } from './token.ts';
 
 /** One result line, or a refusal. The parent reads exactly this shape from stdout. */
-type Report = { ok: true; result: RestoreSweepResult } | { ok: false; reason: string };
+type Report = { ok: true; result: RestoreSweepResult | SelfRestartPassResult } | { ok: false; reason: string };
 
 function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -43,7 +43,13 @@ if (read.kind === 'refused') {
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
   try {
-    const result = await runRestoreSweepForRoute({
+    const result: RestoreSweepResult | SelfRestartPassResult = read.request.pass === 'self-restart'
+      ? { kind: 'self-restart', lines: await runSelfRestartsForRoute({
+        home: read.request.home,
+        root: read.request.root,
+        ...(read.request.teamFile === undefined ? {} : { teamFile: read.request.teamFile }),
+      }) }
+      : await runRestoreSweepForRoute({
       home: read.request.home,
       root: read.request.root,
       ...(read.request.teamFile === undefined ? {} : { teamFile: read.request.teamFile }),

@@ -678,6 +678,11 @@ export type ExecuteOptions = {
   /** The host is closing: stop between seat steps, and let the stop pass finish what this run
    *  made. The daemon's restore sweep passes its closing flag here. */
   isClosing?: () => boolean;
+  /** Seats whose resume must not fall back to a fresh conversation (a queued self-restart): a
+   *  resume the CLI refuses at runtime leaves the seat out, and its name is added to
+   *  `resumeRefused` so the caller can say continuity failed. */
+  noFreshFallback?: ReadonlySet<string>;
+  resumeRefused?: Set<string>;
   /** Recheck original-pane absence before automatic restore mutates a seat. */
   restoreGuard?(seat: string): string | null;
   /** A fresh read of a seat's worktree evidence (its folder, every other seat's, and whether
@@ -2154,6 +2159,15 @@ export async function executePlan(
               return front !== null && !reportedLiveAgent(front, processNames);
             };
             const screen = fresh === null || !shellBackNow() ? null : (host.paneText?.(session, here.pane) ?? null);
+            if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen)) && options?.noFreshFallback?.has(op.seat) === true) {
+              // No fresh conversation for this seat: it is left at its shell and said as such.
+              options.resumeRefused?.add(op.seat);
+              host.log(op.seat, 'its recorded conversation was not found by the CLI; no fresh conversation was started');
+              endedRead = screen;
+              endedFor = Math.round((host.now() - startedAt) / 1000);
+              outcome = 'ended';
+              break;
+            }
             if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen))) {
               freshAfterMissing = true;
               const relaunch = withLaunchSession(op.cli ?? '', fresh);

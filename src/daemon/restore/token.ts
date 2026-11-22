@@ -36,6 +36,9 @@ export type RestoreChildRequest = {
   /** The session the daemon hosts this route under. The pass refuses when the team it loads
    *  names another session, so a late pass never acts in a session the daemon did not watch. */
   session?: string;
+  /** `self-restart`: the child runs the route's queued self-restarts (`launch/self-restart.ts`)
+   *  instead of the restore pass. */
+  pass?: 'self-restart';
 };
 
 /** The on-disk claims written to `restore.inherit.<nonce>.json`. Holds `secretHash`, never the
@@ -68,6 +71,7 @@ export function restoreRequestProblem(raw: unknown): string | null {
   if (request.session !== undefined && (typeof request.session !== 'string' || request.session === '')) {
     return 'the token names a malformed session';
   }
+  if (request.pass !== undefined && request.pass !== 'self-restart') return 'the token names an unknown pass';
   return null;
 }
 
@@ -101,6 +105,7 @@ export function writeRestoreDoor(input: RestoreDoorMint, options: WriteTokenOpti
     root: input.root,
     ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
     ...(input.session === undefined ? {} : { session: input.session }),
+    ...(input.pass === undefined ? {} : { pass: input.pass }),
     exp: new Date(now.getTime() + RESTORE_DOOR_MS).toISOString(),
     daemonPid: input.daemonPid ?? process.pid,
     secretHash: sha256(secret),
@@ -153,6 +158,7 @@ function cleanRequestOf(claims: RestoreChildRequest): RestoreChildRequest {
     root: claims.root,
     ...(claims.teamFile === undefined ? {} : { teamFile: claims.teamFile }),
     ...(claims.session === undefined ? {} : { session: claims.session }),
+    ...(claims.pass === undefined ? {} : { pass: claims.pass }),
   };
 }
 
