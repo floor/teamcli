@@ -31,8 +31,10 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-docs-')));
   const home = join(base, 'home');
   const root = join(home, 'Code', project);
-  mkdirSync(home);
-  mkdirSync(root, { recursive: true });
+  // The folders' modes are the fixture's, not the umask's: under a umask of 002 a project folder
+  // would be group-writable, which a seat's channel refuses as its working folder.
+  mkdirSync(home, { mode: 0o755 });
+  mkdirSync(root, { recursive: true, mode: 0o755 });
 
   const git = (...args: string[]): GitRun => {
     const result = spawnSync('git', args, {

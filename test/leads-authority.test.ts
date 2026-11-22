@@ -130,8 +130,19 @@ test('a lead sync that names also_in leaves the recorded memberships unchanged',
 
 const NOW = new Date('2026-11-07T18:00:00Z');
 
+// The commit names its own author: a runner with no git identity configured (a CI machine)
+// refuses a commit that names none.
 function git(cwd: string, ...args: string[]): void {
-  execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
+  execFileSync('git', ['-C', cwd, ...args], {
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Fixture',
+      GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+      GIT_COMMITTER_NAME: 'Fixture',
+      GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+    },
+  });
 }
 
 function repo(): { home: string; root: string } {

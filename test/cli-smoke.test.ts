@@ -91,6 +91,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   tempo: 'mutates .agents/state.json to change the watch tempo',
   unlock: 'mutates project lock state to release a named lock',
   watch: 'runs the long-lived watch loop daemon',
+  queues: "turns this team's at-least-once delivery on or off, places channel proof probes and flips the reader switch; its status reads live seat processes and its output has no registered --json schema",
 };
 
 type ReadOnlySmokeCase = {

@@ -213,12 +213,16 @@ async function setup(page: Page): Promise<void> {
     // transcript judges it against this record, as it does for a real launch — and the id and
     // process identity this version writes, so no page shows the doctor's "launched before team
     // recorded its process" or "its id" note unless it says so on purpose (`state:` dropping a
-    // seat's `launched` or `id`).
+    // seat's `launched` or `id`). A seat in a pane carries the shell anchors and its CLI's start
+    // time too, as a launch of this version records them, so no page shows the doctor's "shell
+    // anchors absent" or "launched before team recorded its CLI's start time" note either.
     page.team.seats.forEach((seat, index) => {
       const id = `seat_${(4000 + index).toString(16).padStart(12, '0')}`;
-      const launched = { shell: 4000 + index, cli: [4100 + index] };
+      const launched = { shell: 4000 + index, cli: [4100 + index], cli_start: [1_700_000_100 + index] };
       const pane = world.paneOf(seat.name);
-      seats[seat.name] = pane === undefined ? { stage: 'ready', id, launched } : { stage: 'ready', id, pane, launched };
+      seats[seat.name] = pane === undefined
+        ? { stage: 'ready', id, launched }
+        : { stage: 'ready', id, pane, pane_shell: 4000 + index, pane_shell_start: 1_700_000_000 + index, launched };
     });
     session.seats = seats;
   }
