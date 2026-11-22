@@ -99,3 +99,83 @@ test('a second listen on a live path throws EADDRINUSE', () => {
   }
   expect(code).toBe('EADDRINUSE');
 });
+
+// Latency bounds. A send's answer path ends with `end(answer)` (flush, then a half-close the
+// client's own close finishes) and its bus nudge writes a line and destroys at once. A close that
+// waits on a FIN nobody sends, a write parked on a drain that never fires, or a timer on either
+// path costs whole seconds, not milliseconds; each bound here is far above a healthy round trip
+// even on a loaded machine and far below such a wait.
+const ROUND_TRIP_BOUND_MS = 250;
+
+test('an answer ended by the server closes both sides promptly, every time', async () => {
+  const path = place();
+  let serverCloses = 0;
+  listeners.push(Bun.listen(serving(path, (conn) => ({
+    text: (chunk) => { if (chunk.endsWith('\n')) conn.end(`answer ${chunk}`); },
+    close: () => { serverCloses += 1; },
+  }))));
+  const slowest = { ms: 0 };
+  for (let i = 0; i < 40; i++) {
+    const started = performance.now();
+    const text = await new Promise<string>((done) => {
+      let got = '';
+      const { conn, options, refused } = dialing(path, { text: (chunk) => { got += chunk; }, close: () => done(got) });
+      conn.write(`request ${String(i)}\n`);
+      Bun.connect(options).catch(refused);
+    });
+    slowest.ms = Math.max(slowest.ms, performance.now() - started);
+    expect(text).toBe(`answer request ${String(i)}\n`);
+  }
+  await new Promise((settle) => setTimeout(settle, 20));
+  expect(serverCloses).toBe(40);
+  expect(slowest.ms).toBeLessThan(ROUND_TRIP_BOUND_MS);
+});
+
+test("a request sent with the client's FIN: the answer and both closes come promptly", async () => {
+  const path = place();
+  let serverCloses = 0;
+  listeners.push(Bun.listen(serving(path, (conn) => ({
+    // Answered while the request is read, as node's own default would need too: after the FIN
+    // is taken this side ends behind its queue.
+    text: () => { conn.end('answer\n'); },
+    close: () => { serverCloses += 1; },
+  }))));
+  const slowest = { ms: 0 };
+  for (let i = 0; i < 20; i++) {
+    const started = performance.now();
+    const text = await new Promise<string>((done) => {
+      let got = '';
+      const { options, refused } = dialing(path, { open: (conn) => conn.end('request\n'), text: (chunk) => { got += chunk; }, close: () => done(got) });
+      Bun.connect(options).catch(refused);
+    });
+    slowest.ms = Math.max(slowest.ms, performance.now() - started);
+    expect(text).toBe('answer\n');
+  }
+  await new Promise((settle) => setTimeout(settle, 20));
+  expect(serverCloses).toBe(20);
+  expect(slowest.ms).toBeLessThan(ROUND_TRIP_BOUND_MS);
+});
+
+test('a line written and destroyed at once (the nudge) reaches the server promptly, every time', async () => {
+  const path = place();
+  const arrived: number[] = [];
+  listeners.push(Bun.listen(serving(path, () => ({ text: (chunk) => { if (chunk.endsWith('\n')) arrived.push(performance.now()); } }))));
+  const sent: number[] = [];
+  for (let i = 0; i < 40; i++) {
+    await new Promise<void>((done) => {
+      const { conn, options, refused } = dialing(path, {
+        open: (opened) => {
+          sent.push(performance.now());
+          if (opened.write(`{"op":"nudge","n":${String(i)}}\n`)) { opened.destroy(); done(); } else opened.onDrain(() => { opened.destroy(); done(); });
+        },
+        close: () => done(),
+      });
+      void conn;
+      Bun.connect(options).catch(refused);
+    });
+  }
+  await new Promise((settle) => setTimeout(settle, 50));
+  expect(arrived.length).toBe(40);
+  const slowest = Math.max(...arrived.map((at, i) => at - sent[i]!));
+  expect(slowest).toBeLessThan(ROUND_TRIP_BOUND_MS);
+});
