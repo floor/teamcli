@@ -2,7 +2,7 @@
 // and only then does a shared seat name refuse. A team's places are its registered root,
 // each seat's configured cwd (resolved against that root), and its own lobby when no other team
 // records that path. The longest place that holds the cwd wins.
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { callerOf, standingOf } from '../caller.ts';
 import type { Io } from '../io.ts';
@@ -30,8 +30,11 @@ function realPath(path: string): string {
 /** Whether `cwd` is `root` or a descendant of it. A path separator keeps `/a/team` from
  *  matching `/a/team-other`. Both sides are real paths. */
 export function rootHolds(root: string, cwd: string): boolean {
-  const left = realPath(root);
-  const right = realPath(cwd);
+  return realHolds(realPath(root), realPath(cwd));
+}
+
+/** `rootHolds` for two paths already real. */
+function realHolds(left: string, right: string): boolean {
   return right === left || right.startsWith(left.endsWith(sep) ? left : `${left}${sep}`);
 }
 
@@ -50,31 +53,56 @@ function lobbyPaths(team: TeamRecord): string[] {
 
 /** A seat cwd that must not become a place: `/`, the home folder, the shared default lobby,
  *  or any ancestor of the team's own root. Each wide folder would claim every folder under
- *  it, and the shared lobby is a place for no team. `.` is already the root. */
-function addsNoPlace(home: string, root: string, cwd: string): boolean {
-  const path = realPath(cwd);
-  if (path === realPath('/')) return true;
-  if (path === realPath(home)) return true;
-  if (path === realPath(lobbyDir(home))) return true;
-  return path !== realPath(root) && rootHolds(path, root);
+ *  it, and the shared lobby is a place for no team. `.` is already the root. Every path is real:
+ *  `wide` holds `/`, the home folder and the shared lobby as they stand. */
+function addsNoPlace(wide: readonly string[], realRoot: string, path: string): boolean {
+  if (wide.includes(path)) return true;
+  return path !== realRoot && realHolds(path, realRoot);
+}
+
+/** Each team file's last parse, by path, with the stat stamp it was read under: the file's inode,
+ *  size, mtime and ctime (the fields `agentFolderStamp` keeps per agent file). Every send binds
+ *  against every registered team's file; one whose stamp stands is not read or parsed again. A
+ *  file that cannot be read or parsed is null, as before. The parse is shared read-only. */
+const parsedTeamFiles = new Map<string, { stamp: string; doc: YamlNode | null }>();
+const PARSED_TEAM_FILES = 64;
+
+function fileStamp(path: string): string | null {
+  try {
+    // Followed, not lstat: a team file that is a link is judged by the file it names.
+    const one = statSync(path);
+    return `${String(one.ino)}:${String(one.size)}:${String(one.mtimeMs)}:${String(one.ctimeMs)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** The team file at `root` as a parsed document, or null when it is missing or unreadable. */
+function teamFileDoc(root: string): YamlNode | null {
+  const path = join(root, TEAM_FILE);
+  const stamp = fileStamp(path);
+  const kept = parsedTeamFiles.get(path);
+  if (stamp !== null && kept !== undefined && kept.stamp === stamp) return kept.doc;
+  let doc: YamlNode | null;
+  try {
+    doc = parseYaml(readFileSync(path, 'utf8'));
+  } catch {
+    doc = null;
+  }
+  parsedTeamFiles.delete(path);
+  // Kept only when the file stood still across the read: a write during it is read again.
+  if (stamp !== null && fileStamp(path) === stamp) {
+    parsedTeamFiles.set(path, { stamp, doc });
+    while (parsedTeamFiles.size > PARSED_TEAM_FILES) parsedTeamFiles.delete(parsedTeamFiles.keys().next().value!);
+  }
+  return doc;
 }
 
 /** Seat `cwd` values from the team file at `root`, resolved against that root. A missing or
  *  unreadable file contributes none: the root itself is still a place. `.` is the root. */
 function configuredCwds(root: string): string[] {
-  let text: string;
-  try {
-    text = readFileSync(join(root, TEAM_FILE), 'utf8');
-  } catch {
-    return [];
-  }
-  let doc: YamlNode;
-  try {
-    doc = parseYaml(text);
-  } catch {
-    return [];
-  }
-  if (doc.kind !== 'map') return [];
+  const doc = teamFileDoc(root);
+  if (doc === null || doc.kind !== 'map') return [];
   const seats = doc.entries.find((entry) => entry.key === 'seats')?.value;
   if (seats === undefined || seats.kind !== 'seq') return [];
   const found: string[] = [];
@@ -88,7 +116,8 @@ function configuredCwds(root: string): string[] {
   return found;
 }
 
-type Place = { team: TeamRecord; path: string };
+/** A place, with its path as it really stands (resolved once per binding). */
+type Place = { team: TeamRecord; path: string; real: string };
 
 /** Every place a command can bind to. A lobby path recorded by more than one team binds none
  *  of them. The shared `~/.config/team/lobby` binds no one, even when a single team records it. */
@@ -105,34 +134,26 @@ function boundPlaces(home: string, teams: readonly TeamRecord[]): Place[] {
       else if (owner !== team) sharedLobbies.add(path);
     }
   }
+  const wide = [realPath('/'), realPath(home), shared];
   const places: Place[] = [];
   for (const team of teams) {
-    places.push({ team, path: team.root });
+    const realRoot = realPath(team.root);
+    places.push({ team, path: team.root, real: realRoot });
     for (const cwd of configuredCwds(team.root)) {
-      if (!addsNoPlace(home, team.root, cwd)) places.push({ team, path: cwd });
+      const real = realPath(cwd);
+      if (!addsNoPlace(wide, realRoot, real)) places.push({ team, path: cwd, real });
     }
   }
   for (const [path, team] of lobbyOwners) {
-    if (!sharedLobbies.has(path)) places.push({ team, path });
+    if (!sharedLobbies.has(path)) places.push({ team, path, real: path });
   }
   return places;
 }
 
 /** Seat names the team file at `root` declares. A missing or unreadable file declares none. */
 function declaredSeatNames(root: string): string[] {
-  let text: string;
-  try {
-    text = readFileSync(join(root, TEAM_FILE), 'utf8');
-  } catch {
-    return [];
-  }
-  let doc: YamlNode;
-  try {
-    doc = parseYaml(text);
-  } catch {
-    return [];
-  }
-  if (doc.kind !== 'map') return [];
+  const doc = teamFileDoc(root);
+  if (doc === null || doc.kind !== 'map') return [];
   const seats = doc.entries.find((entry) => entry.key === 'seats')?.value;
   if (seats === undefined || seats.kind !== 'seq') return [];
   const names: string[] = [];
@@ -290,10 +311,12 @@ export function teamBinding(home: string, cwd: string, seat?: string, io?: Bindi
     return { kind: 'unbound' };
   }
   const listed = Object.values(teams);
-  const holding = boundPlaces(home, listed).filter((place) => rootHolds(place.path, cwd));
+  // The caller's folder is resolved once, not once per place.
+  const realCwd = realPath(cwd);
+  const holding = boundPlaces(home, listed).filter((place) => realHolds(place.real, realCwd));
   if (holding.length > 0) {
-    const longest = Math.max(...holding.map((place) => realPath(place.path).length));
-    const top = holding.filter((place) => realPath(place.path).length === longest);
+    const longest = Math.max(...holding.map((place) => place.real.length));
+    const top = holding.filter((place) => place.real.length === longest);
     const ids = [...new Set(top.map((place) => place.team.id ?? teamIdOf(place.team.root)))].sort();
     if (ids.length > 1) {
       return {
