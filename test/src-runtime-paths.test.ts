@@ -139,6 +139,15 @@ function packed(target: string): boolean {
   if (first !== 'src') return false;
   // tsc emits every module under src/; the build copies the data files in src/profiles only.
   if (rel.endsWith('.ts')) return true;
+  // A `.js` path names the module tsc emits from its `.ts` source: `new URL('./main.js', ...)` in
+  // dist/host/main.js is dist/host/main.js. It ships only when that source exists.
+  if (rel.endsWith('.js')) {
+    try {
+      return statSync(`${target.slice(0, -3)}.ts`).isFile();
+    } catch {
+      return false;
+    }
+  }
   try {
     if (statSync(target).isDirectory()) return true;
   } catch {
@@ -217,4 +226,9 @@ test('the guard catches the trust-answer manifest read and passes a shipped sibl
   expect(problemsIn(file, sibling)).toEqual([]);
   const comment = "// readFileSync(new URL('../../test/fixtures/conformance.json', import.meta.url))\nconst x = 1;\n";
   expect(problemsIn(file, comment)).toEqual([]);
+  // A `.js` path is the module tsc emits from a `.ts` source beside it, and only then.
+  const emitted = "fileURLToPath(new URL('../cli.js', import.meta.url));";
+  expect(problemsIn(file, emitted)).toEqual([]);
+  const unsourced = "fileURLToPath(new URL('./no-such-module.js', import.meta.url));";
+  expect(problemsIn(file, unsourced).join('\n')).toContain('src/profiles/no-such-module.js');
 });

@@ -96,6 +96,14 @@ seats:
  *  the class the dispatcher spends no attempt on. */
 const PULL_CREW = CREW.replaceAll(PUSH_LAUNCH, 'claude');
 
+/** The plain crew whose workers' team file opts in to the cross-session socket (`inbound:
+ *  accept`): the socket is a route only when the team declares it, so these are the workers a
+ *  standing, carried and unheld socket makes push-class. */
+const SOCKET_CREW = PULL_CREW.replace(
+  /(name: (worker-[12])\n(?: {4}[a-z_]+: [^\n]*\n)*? {4}launch: claude)\n/g,
+  '$1\n    inbound: accept\n',
+);
+
 /** One worker wakeable, the other not: the mixed reading the skip must not apply to the whole. */
 const MIXED_CREW = CREW.replace(
   `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: ${PUSH_LAUNCH}`,
@@ -526,13 +534,13 @@ describe('a seat nothing can wake while it is idle', () => {
       });
       return socket;
     });
-    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    const result = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW) }));
     expect(calls).toEqual([]);
     expect(result.pushed).toEqual([]);
     expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
     // The same records with the sockets standing: both seats are push-class and pushed once.
     for (const socket of sockets) writeFileSync(socket, '');
-    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    const later = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW), now: new Date(NOW + MIN) }));
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
     expect(calls.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
@@ -582,7 +590,7 @@ describe('a seat nothing can wake while it is idle', () => {
     // but the walk through this read would not dial them, so the class is pull-on-turn and the
     // pass spends no attempt.
     const replaced = await dispatchIdleWork(input({
-      push, team: teamOf(PULL_CREW),
+      push, team: teamOf(SOCKET_CREW),
       live: { ...scene, processes: processesWith((seat) => [pidOf[seat]! + 9]) },
     }));
     expect(calls).toEqual([]);
@@ -593,7 +601,7 @@ describe('a seat nothing can wake while it is idle', () => {
     expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
     // The panes' own processes carry the recorded sockets: the same records are push-class again.
     const owned = await dispatchIdleWork(input({
-      push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN),
+      push, team: teamOf(SOCKET_CREW), now: new Date(NOW + MIN),
       live: { ...scene, processes: processesWith((seat) => [pidOf[seat]!]) },
     }));
     expect(owned.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
@@ -636,7 +644,7 @@ describe('a seat nothing can wake while it is idle', () => {
         new Date(NOW),
       );
     }
-    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    const result = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW) }));
     expect(calls).toEqual([]);
     expect(result.pushed).toEqual([]);
     expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
@@ -654,7 +662,7 @@ describe('a seat nothing can wake while it is idle', () => {
       const fresh = new Date(rewrote.getTime() + 1000);
       utimesSync(join(base, `${seat}.sock`), fresh, fresh);
     }
-    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    const later = await dispatchIdleWork(input({ push, team: teamOf(SOCKET_CREW), now: new Date(NOW + MIN) }));
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
 });

@@ -68,6 +68,7 @@ export const RAW_FS: Record<string, string> = {
   'src/host/main.ts: appendFileSync from node:fs': "the host's own log, outside the line's effects",
   'src/host/server.ts: chmodSync from node:fs': "the host's own socket mode, before any request",
   'src/host/server.ts: unlinkSync from node:fs': "the host's own stale socket, before any request or at close",
+  'src/queue/handover.ts: openSync from node:fs': 'readRegularNoFollow opens with O_RDONLY | O_NOFOLLOW | O_NONBLOCK only: a bounded read of a proof or history entry, never a create or a write',
   'packages/relay/index.js: chmodSync from node:fs': 'package internal; entered only through the guarded relayStage/relayDeliver/sendFrame',
   'packages/relay/index.js: linkSync from node:fs': 'package internal; entered only through the guarded relayStage/relayDeliver/sendFrame',
   'packages/relay/index.js: mkdirSync from node:fs': 'package internal; entered only through the guarded relayStage/relayDeliver/sendFrame',
@@ -90,6 +91,7 @@ export const DYNAMIC: Record<string, string> = {
 /** Closure modules that bind C functions through FFI, with what they bind and why it is safe. */
 export const FFI: Record<string, string> = {
   'src/process-kernel.ts': 'proc_pidinfo/sysctl/sandbox_check: kernel process reads',
+  'src/process-parent-adapter.ts': 'proc_pidinfo (macOS only; Linux reads /proc/<pid>/stat): a kernel read of a process parent and birth',
   'src/host/peer.ts': 'getsockopt/proc_pidinfo/sandbox_check: socket peer and process reads',
   'src/herdr-direct.ts': 'socket/connect/write/read to herdr for the read methods directRequestOf admits only (agent list, workspace list, pane process-info, pane get, pane list, the styled pane read)',
   'src/bus/relative-read.ts': 'openat with O_RDONLY only: a link-free read walk',
