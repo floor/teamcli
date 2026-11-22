@@ -1,7 +1,7 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { withSignedIdentity } from '../comms/identity.ts';
-import { claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
+import { channelFlagDropped, claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
 import { exposeBody, exposurePointer as pointerFor } from '../queue/exposure.ts';
@@ -614,6 +614,8 @@ function setLegState(report: Report, leg: WalkLeg, state: LegState, reason?: str
 type Report = {
   /** Recipient model drift is advisory unless the observed model violates an existing rule. */
   recipientDrift?: string;
+  /** Why the receiving seat's channel was not walked, when its process carries no channel flag. */
+  channelNote?: string;
   json: boolean;
   seat: string | null;
   sent: string | null;
@@ -806,6 +808,7 @@ function dropNotWoken(report: Report): boolean {
  *  left as it stands rather than naming it twice. */
 function withId(summary: string, report: Report): string {
   if (report.recipientDrift !== undefined) summary = `${summary}; model drift: ${report.recipientDrift}`;
+  if (report.channelNote !== undefined && !summary.includes(report.channelNote)) summary = `${summary}; ${report.channelNote}`;
   const id = report.sent;
   if (id === null || id === '' || summary.includes(id)) return summary;
   return `${summary} (id ${id})`;
@@ -1226,7 +1229,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // The word the channel leg is missing, for the report: the launch does not flag it, the seat's
   // inbox server is not serving, or it serves without declaring the channel. A walk that takes
   // the channel has no such word and reports the leg itself.
-  const channelSkip = channelSkipReason(input.declared?.launch, channelProbe);
+  const channelSkip0 = channelSkipReason(input.declared?.launch, channelProbe);
   // The fourth implied default: a receiving CLI whose profile declares its own session call
   // (`session_cli`) takes the send there first, while no level of its chain declares an order.
   // The call is the only route such a CLI has that reaches an agent at all — it has no inbox, no
@@ -1329,11 +1332,16 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   // copy with its offer), then the drop; the scheduler's pointer covers a seat whose channel is
   // not proven. No socket and no typed leg is walked from here.
   const adapterRoot = !human && claudeAdapterRoot(input.cli, input.root, input.home, input.declared?.webhook !== undefined);
+  // A seat whose process carries no channel flag (a terminal-host resume after a restart) is
+  // walked as one with no channel: its listener may declare one, but no push reaches the seat.
+  const listening = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+  const flagDropped = adapterRoot && listening && channelFlagDropped(input.root, input.session, input.seat);
   if (adapterRoot) {
-    const live = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+    const live = listening && !flagDropped;
     eventLegs.splice(0, eventLegs.length, ...(live ? ['channel', 'drop'] as WalkLeg[] : ['drop'] as WalkLeg[]));
     typingSetAside.splice(0, typingSetAside.length);
   }
+  const channelSkip = flagDropped ? CHANNEL_FLAG_DROPPED : channelSkip0;
   const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop' && leg !== 'webhook');
   const chosen: readonly WalkLeg[] = human ? (webhookWalked ? ['webhook', 'drop'] : ['drop']) : eventLegs;
   return {
@@ -2074,6 +2082,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
     staleChannel, channelSkip, human, typedWake, walkingTyped, webhookWalked, webhookReason,
     typingSetAside, chosen,
   } = plan;
+  if (channelSkip === CHANNEL_FLAG_DROPPED) report.channelNote = CHANNEL_FLAG_DROPPED;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
   // reaches a live receiver without a keystroke stays. The typed and native legs type, and the
   // drop leg is a stored copy rather than a wake, so none of the three is attempted. A
@@ -3519,6 +3528,10 @@ function nativeIneligibleReason(cli: string, handoffEligible: boolean): string |
   if (cli === 'claude-code') return handoffEligible ? null : NATIVE_LEG_UNAVAILABLE;
   return `${cli} sessions have no native route this build can walk`;
 }
+
+/** The channel's reason, and the ending's note, for a Claude seat whose process carries no channel
+ *  flag (`channelFlagDropped`): the push is not walked, and the watch's pointer reaches the seat. */
+export const CHANNEL_FLAG_DROPPED = 'its channel is not a working push: the process in its pane was not started from its launch line (a terminal-host resume drops the channel flag); the watch types a pointer when the seat is idle and its pane takes one';
 
 /** Why a receiving Claude seat's development channel is not the first leg its walk takes, or
  *  null when the walk carries it. The three words the walk reads in this order: the launch's own

@@ -721,6 +721,60 @@ describe('a proven seat belongs to its channel server', () => {
   });
 });
 
+/** The record a restart re-tie leaves: the terminal host resumed the seat's conversation without
+ *  its launch line, so the process carries no channel flag (`channel_launch: false`). */
+function resumedWithoutFlag(at: Place): void {
+  const state = readState(at.dir);
+  state.sessions[SESSION]!.seats[SEAT]!.channel_launch = false;
+  writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+}
+
+describe('a seat the terminal host resumed without its launch line has no working push', () => {
+  test('its channel is unproven by that reason, even with a proving ack from its listener', () => {
+    const at = place();
+    proven(at);
+    expect(unproven(at)).toBeNull();
+    resumedWithoutFlag(at);
+    expect(unproven(at)).toBe('not started from its launch line');
+  });
+
+  test('the watch types its pointer where a proven seat would be left to its channel server', async () => {
+    const at = place();
+    proven(at);
+    resumedWithoutFlag(at);
+    stamped(at, ID);
+    const lines: string[] = [];
+    await wakeUnreadDrops(pass(at, new Date(Date.now() + 61_000), lines), { unreadAfter: 600 });
+    expect(lines).toHaveLength(1);
+    expectPointer(lines[0]);
+  });
+
+  test('a send walks no channel leg and says why; the record waits for the pointer', async () => {
+    for (const dropped of [false, true]) {
+      const at = place();
+      proven(at);
+      const state = readState(at.dir);
+      state.sessions[SESSION]!.seats[SEAT]!.launch_line = 'claude --dangerously-load-development-channels server:team-inbox';
+      writeFileSync(join(at.dir, 'team.state.json'), JSON.stringify(state));
+      if (dropped) resumedWithoutFlag(at);
+      const io = testIo(at.root, { kind: 'owner' });
+      await send.runSend([SEAT, 'hello', '--json'], io, fake(at, { sendId: () => ID, channelGraceMs: 0 }));
+      const doc = JSON.parse(io.out.trim() === '' ? io.err : io.out) as { error: { message: string }; delivery: { leg: string; state: string; reason?: string }[] };
+      expect(existsSync(join(stampedOf(at), ID))).toBe(true);
+      const channel = doc.delivery.find((leg) => leg.leg === 'channel');
+      if (!dropped) {
+        // The proven seat's walk takes the channel (no server pushes in this scene).
+        expect(channel?.reason).toBe('no push receipt within 0 ms');
+        expect(doc.error.message).not.toContain('not a working push');
+        continue;
+      }
+      expect(channel).toEqual({ leg: 'channel', state: 'skipped', reason: send.CHANNEL_FLAG_DROPPED });
+      expect(doc.error.message).toContain('its channel is not a working push: the process in its pane was not started from its launch line');
+      expect(offeredCopies(stampedOf(at), ID)).toEqual([]);
+    }
+  });
+});
+
 describe('a declared order is ignored for a Claude receiver on an active root', () => {
   test('native, socket and typed words walk nothing: no handoff, no frame, no key; the record is stored for the pointer', async () => {
     const at = place();
