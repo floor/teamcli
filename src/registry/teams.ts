@@ -135,17 +135,30 @@ function cloneTeams(records: Record<string, TeamRecord>): Record<string, TeamRec
   return out;
 }
 
+/** Each registry file's last parse, by path and reader kind, with the exact text it was parsed
+ *  from: a long-lived process reads the file each time but parses it again only when its text
+ *  changed (as the agent files are, src/registry/agents.ts). A parse that throws is never kept,
+ *  and the kept records are never handed out: every reader gets its own copy. */
+const parsedTeamsFiles = new Map<string, { text: string; teams: Record<string, TeamRecord> }>();
+const PARSED_TEAMS_FILES = 8;
+
 /** Every registered team, by team ID. A missing file is no teams; a file that cannot be read —
  *  a corrupt one, or one under a folder this user cannot search — throws `TeamsError`, so no
  *  reader takes an unreadable registry as an empty one (the bridge would fall back to the team
  *  file's own declaration) and no writer replaces a file it could not read. */
 export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<string, TeamRecord> {
+  return cloneTeams(teamsHeld(home, options));
+}
+
+/** The registry's records as this run or the parse cache holds them: never handed to a caller
+ *  uncopied. */
+function teamsHeld(home: string, options: ReadTeamsOptions): Record<string, TeamRecord> {
   const memo = currentRunMemo();
   const strict = options.strictRoster === true;
   if (memo !== null) {
     const map = strict ? memo.teamsStrict : memo.teamsTolerant;
     const cached = map.get(home);
-    if (cached !== undefined) return cloneTeams(cached);
+    if (cached !== undefined) return cached;
   }
   const path = teamsFile(home);
   let text: string;
@@ -170,14 +183,24 @@ export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<
     }
     return {};
   }
-  let value: YamlValue;
-  try {
-    value = toValue(parseYaml(text));
-  } catch (error) {
-    if (error instanceof YamlError) throw new TeamsError(`${path}: line ${error.line}: ${error.message}`);
-    throw error;
+  const key = `${strict ? 'strict' : 'tolerant'}\u0000${path}`;
+  const kept = parsedTeamsFiles.get(key);
+  let parsed: Record<string, TeamRecord>;
+  if (kept !== undefined && kept.text === text) {
+    parsed = kept.teams;
+  } else {
+    let value: YamlValue;
+    try {
+      value = toValue(parseYaml(text));
+    } catch (error) {
+      if (error instanceof YamlError) throw new TeamsError(`${path}: line ${error.line}: ${error.message}`);
+      throw error;
+    }
+    parsed = teamsOf(value, path, options);
+    parsedTeamsFiles.delete(key);
+    parsedTeamsFiles.set(key, { text, teams: parsed });
+    while (parsedTeamsFiles.size > PARSED_TEAMS_FILES) parsedTeamsFiles.delete(parsedTeamsFiles.keys().next().value!);
   }
-  const parsed = teamsOf(value, path, options);
   if (memo !== null) {
     const map = strict ? memo.teamsStrict : memo.teamsTolerant;
     map.set(home, cloneTeams(parsed));
@@ -185,8 +208,10 @@ export function readTeams(home: string, options: ReadTeamsOptions = {}): Record<
   return parsed;
 }
 
+/** One team's record: only that record is copied out of what the run holds. */
 export function getTeam(home: string, id: string): TeamRecord | null {
-  return readTeams(home)[id] ?? null;
+  const held = teamsHeld(home, {});
+  return Object.hasOwn(held, id) ? cloneTeamRecord(held[id]!) : null;
 }
 
 /** All memberships; the home alone is the fallback for records from older builds. */
