@@ -1274,7 +1274,7 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const inboxFirst = input.cli === 'claude-code' && chainNamesInboxFirst(input.rawChain);
   if ((channelProbe !== null || inboxFirst) && !human) {
     const probe = channelProbe ?? inboxLive(dropDir, input.root, input.session, input.seat, input.build?.());
-    const connected = probe.live === true && probe.listener.channel === true;
+    const connected = probe.live === true && probe.listener.channel === true && !channelFlagDropped(input.root, input.session, input.seat);
     if (connected && !declaredWithWake.includes('channel')) declaredWithWake.unshift('channel');
     // A chain led by the retired inbox word resolves to the drop leg alone, which nothing reads
     // while the seat is idle. When its channel is not proven (a dark root, a listener that is not
@@ -1334,11 +1334,12 @@ function resolveWalkOrder(input: WalkOrderInput): WalkOrderPlan {
   const adapterRoot = !human && claudeAdapterRoot(input.cli, input.root, input.home, input.declared?.webhook !== undefined);
   // A seat whose process carries no channel flag (a terminal-host resume after a restart) is
   // walked as one with no channel: its listener may declare one, but no push reaches the seat.
+  // This holds on every root and for a seat with a webhook too: the channel leg leaves the walk.
   const listening = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
-  const flagDropped = adapterRoot && listening && channelFlagDropped(input.root, input.session, input.seat);
+  const flagDropped = !human && listening && channelFlagDropped(input.root, input.session, input.seat);
+  if (flagDropped && eventLegs.includes('channel')) eventLegs.splice(eventLegs.indexOf('channel'), 1);
   if (adapterRoot) {
-    const live = listening && !flagDropped;
-    eventLegs.splice(0, eventLegs.length, ...(live ? ['channel', 'drop'] as WalkLeg[] : ['drop'] as WalkLeg[]));
+    eventLegs.splice(0, eventLegs.length, ...(listening && !flagDropped ? ['channel', 'drop'] as WalkLeg[] : ['drop'] as WalkLeg[]));
     typingSetAside.splice(0, typingSetAside.length);
   }
   const channelSkip = flagDropped ? CHANNEL_FLAG_DROPPED : channelSkip0;
@@ -3473,7 +3474,28 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       }
       // A direct-only caller's authority is rechecked before the wake and before each key it
       // types: a refusal ends the walk with nothing more typed.
-      const typedGuard = guardRefusal(directGuard);
+      // A direct caller's recipient is re-proven the same way, as the watch's pointer is: still
+      // listed at the pane the pass bound, still that pass's exact target, still not a protected
+      // pane. Any move or replacement ends the walk with nothing more typed.
+      const recipientNow = bound === undefined ? undefined : (): { ok: false; why: string } | null => {
+        // A live read each time: the send's snapshot of the session list is not reused here.
+        (host as SnapshotSendHost).evictAgents?.(to.session);
+        const here = findAgent(host, to.session, to.seat);
+        if (!here.ok) return { ok: false, why: `${to.seat}: ${here.reason}` };
+        if (here.pane !== bound.pane || here.pane !== found.pane) return { ok: false, why: `${to.seat}: its pane is now ${here.pane}, not the ${bound.pane} the pass saw` };
+        const exact = host.watch === undefined ? null : exactWatchTarget(host, to, bound, dir);
+        if (exact !== null) return { ok: false, why: exact };
+        try {
+          const loaded = readTeamConfig(to.root, { home: host.home });
+          if (!loaded.ok || permittedEventLegs({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat, team: loaded.team, now: host.now }).pointer !== true) {
+            return { ok: false, why: `${to.seat}: its pane is protected now` };
+          }
+        } catch {
+          return { ok: false, why: `${to.seat}: its protection cannot be read` };
+        }
+        return null;
+      };
+      const typedGuard = guardRefusal(directGuard) ?? recipientNow?.() ?? null;
       if (typedGuard !== null) {
         failures.push(`typed: refused: ${typedGuard.why}`);
         markLeg('typed', 'refused', typedGuard.why);
@@ -3482,7 +3504,7 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
       }
       await ensureEpisode();
       const wake = await deliverTypedWakeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, trigger, host, report, startedAt, failures, to.sentAs, note, true, stagedWrittenOf(),
-        directGuard === undefined ? undefined : () => guardRefusal(directGuard) === null);
+        directGuard === undefined && recipientNow === undefined ? undefined : () => guardRefusal(directGuard) === null && (recipientNow?.() ?? null) === null);
       if (wake.delivered) {
         markLeg('typed', 'attempted');
         return delivered(io, to.seat, report, 'typed wake', 'typed');
