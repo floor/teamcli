@@ -121,6 +121,9 @@ export type ServeOptions = {
   /** The no-bus inbox pass interval. The command leaves it unset. A scene sets it longer than
    *  its own stretch, so only the folder watch can deliver inside that stretch. */
   fallbackMs?: number;
+  /** The names-only pass interval. The command leaves it unset (250 ms); a scene sets it longer
+   *  than its stretch, as it does `fallbackMs`. */
+  namesMs?: number;
   /** The re-send scheduler's pass interval (E7b). The command leaves it unset (30 s). */
   redeliverMs?: number;
 };
@@ -484,7 +487,7 @@ function watchChannel(
   serving: Serving,
   write: (line: string) => void,
   notice?: () => boolean,
-  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number; redeliverMs?: number } = {},
+  options: { follow?: typeof followBus; fallbackMs?: number; namesMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number; redeliverMs?: number } = {},
 ): () => void {
   const seen = new Set<string>();
   let primed = false;
@@ -496,6 +499,10 @@ function watchChannel(
   let redeliverTimer: ReturnType<typeof setInterval> | null = null;
   /** One watch per folder of the seat (src/queue/mail-tree.ts): the stamped one once it stands. */
   const folders = new Map<string, FSWatcher>();
+  /** A watch on the nearest existing folder above a seat folder that does not exist yet (the
+   *  stamped tree of a fresh root), keyed by the missing folder: its creation arms the folder at
+   *  once, so the first pushes do not wait for the names pass and the next tick to arm it. */
+  const awaiting = new Map<string, FSWatcher>();
   let subscription: BusFollow | null = null;
   /** Busy commits retried off the main wait. Five tries, then one logged give-up. The id stays
    *  unseen, so a later names pass tries it again once the lock is gone. */
@@ -518,6 +525,8 @@ function watchChannel(
     retryTimer.clear();
     for (const watcher of folders.values()) watcher.close();
     folders.clear();
+    for (const watcher of awaiting.values()) watcher.close();
+    awaiting.clear();
     subscription?.close();
     subscription = null;
   };
@@ -862,8 +871,45 @@ function watchChannel(
     if (stopped) return;
     for (const at of seatListingDirs(serving.dropDir)) {
       if (folders.has(at)) continue;
-      if (at !== serving.dropDir && heldAt(at).kind !== 'folder') continue;
+      if (at !== serving.dropDir && heldAt(at).kind !== 'folder') {
+        awaitFolder(at);
+        continue;
+      }
       armOne(at);
+      const waiter = awaiting.get(at);
+      if (waiter !== undefined) {
+        awaiting.delete(at);
+        waiter.close();
+      }
+    }
+  };
+  /** Watches the nearest existing folder above `at` (at most the tree's own folder, three levels
+   *  up). Any change there arms again and lists the names once, so a record that landed before the
+   *  new folder's watch opened is still read now. */
+  const awaitFolder = (at: string): void => {
+    if (stopped || awaiting.has(at)) return;
+    let parent = dirname(at);
+    for (let up = 0; up < 2 && heldAt(parent).kind !== 'folder'; up += 1) parent = dirname(parent);
+    if (heldAt(parent).kind !== 'folder') return;
+    try {
+      const watcher = watch(parent, () => {
+        if (stopped || awaiting.get(at) !== watcher) return;
+        awaiting.delete(at);
+        watcher.close();
+        armFolder();
+        namesPass();
+      });
+      watcher.on('error', () => {
+        if (awaiting.get(at) === watcher) awaiting.delete(at);
+        try {
+          watcher.close();
+        } catch {
+          // The watch is already closed.
+        }
+      });
+      awaiting.set(at, watcher);
+    } catch {
+      // No watch: the names pass and the next tick still arm the folder.
     }
   };
   const armOne = (at: string): void => {
@@ -903,7 +949,7 @@ function watchChannel(
   const namesEvery = (): void => {
     if (stopped) return;
     if (namesTimer !== null) clearInterval(namesTimer);
-    namesTimer = setInterval(namesPass, CHANNEL_TICK_MS);
+    namesTimer = setInterval(namesPass, options.namesMs ?? CHANNEL_TICK_MS);
   };
   // The watch is open before the prime, so a file that lands during the listing is queued and
   // parsed once the prime finishes. The prime itself pushes nothing that was already there.
@@ -2062,6 +2108,7 @@ export async function runMcpServe(
   const stopChannel = channel
     ? watchChannel(serving, streams.write, notice, {
       ...(options.fallbackMs === undefined ? {} : { fallbackMs: options.fallbackMs }),
+      ...(options.namesMs === undefined ? {} : { namesMs: options.namesMs }),
       ...(options.redeliverMs === undefined ? {} : { redeliverMs: options.redeliverMs }),
     })
     : null;
