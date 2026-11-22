@@ -514,6 +514,9 @@ function makeHarness(
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
+    // The fake panes' pids name no process of this scene: the machine's own table may hold a
+    // real one at that pid (low pids are system processes on Linux), so no birth reads here.
+    processStartOf: () => null,
     createWorkspace() {
       did.created += 1;
       if (opts.createFails) return null;

@@ -506,6 +506,9 @@ function restartHost(made: World, opts: { screen?: string; upProcess?: (pane: st
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
+    // The fake panes' pids name no process of this scene: the machine's own table may hold a
+    // real one at that pid (low pids are system processes on Linux), so no birth reads here.
+    processStartOf: () => null,
     createWorkspace() { did.created.push('pane-fresh'); return { pane: 'pane-fresh', workspace: 'ws-fresh' }; },
     paneRun(_session, pane, command) { did.runs.push(command); kelvinAlive = true; kelvinPaneNow = pane; return true; },
     renameAgent(_session, pane, name) { did.renamed.push({ pane, name }); return true; },
