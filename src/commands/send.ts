@@ -1,6 +1,9 @@
 import { deliveryHeader, EXPOSURES, takeCopyNumber, wrapCopy } from '../queue/handover.ts';
 import { SOCKET_OFF_ON_ACTIVE, socketSuppressed } from '../queue/floor.ts';
 import { withSignedIdentity } from '../comms/identity.ts';
+import { typedPaneProof, type TypedPaneSources } from '../launch/identity.ts';
+import { processStartOf } from '../launch/codex-endpoint.ts';
+import { readProcessParent } from '../process-parent-adapter.ts';
 import { channelFlagDropped, claudeAdapterRoot, TYPED_REQUESTED } from '../queue/resend.ts';
 import { ensureFolder } from '../queue/durable.ts';
 import { deferHosted, hostedCommit, hostedFallbackPoint } from '../host/request-scope.ts';
@@ -449,6 +452,10 @@ export type SendHost = {
    *  herdr binding is used; tests pass a fake. Every other binding in this host still refuses to
    *  type — this one is the single wake the profile gate allows (src/send/typed-wake.ts). */
   typedWake?: (session: string) => TypedWakeHost;
+  /** Fresh terminal-host and process readings for a direct typed wake's launch-identity proof
+   *  before each key (src/launch/identity.ts `typedPaneProof`). Absent, a direct typed wake types
+   *  nothing. */
+  keyOwner?: TypedPaneSources;
   now(): Date;
   /** The id a native handoff prints and records under; the real host mints a UUID, and a test or
    *  the docs runner pins one so the printed confirm line is exact. */
@@ -559,6 +566,19 @@ export const realHost: SendHost = {
     foregroundCwd: (session, pane) => paneForegroundCwd(pane, session),
   },
   typedWake: (session) => herdrTypedWakeHost(session),
+  // Fresh readings, never the send's snapshot: a direct typed wake's launch-identity proof.
+  keyOwner: {
+    agents: (session) => {
+      evictHerdrAgentList(session);
+      return agentList(session)?.map((agent) => ({ name: agent.name ?? '', pane: agent.pane, ...(agent.session === undefined ? {} : { session: agent.session }) })) ?? null;
+    },
+    processes: (pane, session) => {
+      evictHerdrPaneProcessInfo(pane, session);
+      return paneProcesses(pane, session);
+    },
+    processStart: (pid) => processStartOf(pid),
+    processParent: readProcessParent,
+  },
   now: () => new Date(),
   home: homedir(),
   projects: realProjectSources,
@@ -3487,9 +3507,21 @@ async function runSendWithSnapshot(argv: string[], io: Io, host: SendHost, repor
         if (exact !== null) return { ok: false, why: exact };
         try {
           const loaded = readTeamConfig(to.root, { home: host.home });
-          if (!loaded.ok || permittedEventLegs({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat, team: loaded.team, now: host.now }).pointer !== true) {
+          if (!loaded.ok) return { ok: false, why: `${to.seat}: its declaration cannot be read now` };
+          // The declaration as it stands now must still let this seat, on this CLI, take keys.
+          const declaredNow = loaded.team.seats.find((one) => one.name === to.seat);
+          if (declaredNow === undefined || declaredNow.stopped === true || declaredNow.human === true || declaredNow.cli !== to.cli) {
+            return { ok: false, why: `${to.seat}: its declaration no longer lets it take keys` };
+          }
+          if (permittedEventLegs({ dir: to.dir, root: to.root, home: host.home, session: to.session, seat: to.seat, team: loaded.team, now: host.now }).pointer !== true) {
             return { ok: false, why: `${to.seat}: its pane is protected now` };
           }
+          // The live launch identity, as the watch's unread wake proves it before each key: the
+          // recorded shell and CLI still in front of the pane, at their recorded births. A pane
+          // that kept the seat's name and id but holds a replacement takes no key.
+          if (host.keyOwner === undefined) return { ok: false, why: `${to.seat}: its pane's launch identity cannot be read` };
+          const proof = typedPaneProof(readState(to.dir).sessions[to.session]?.seats[to.seat], to.seat, here.pane, to.session, host.keyOwner);
+          if (!proof.ok) return { ok: false, why: `${to.seat}: ${proof.why}` };
         } catch {
           return { ok: false, why: `${to.seat}: its protection cannot be read` };
         }

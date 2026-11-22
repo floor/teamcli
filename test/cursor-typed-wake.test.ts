@@ -2,7 +2,7 @@
 // test/fixtures/cursor/2026.10.22/: the empty idle box, a draft in the box, and the `Working`
 // frame. No CLI runs and no key leaves the process.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend, sendDirect } from '../src/commands/send.ts';
 import { SUBMIT_ENTER } from '../src/herdr.ts';
@@ -219,12 +219,39 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
     return made;
   }
 
+  /** The record `team up` leaves for the cursor seat on its pane: the shell and the CLI it
+   *  launched, at their births; and the live readings a direct wake proves them by before each
+   *  key. `live` is read at every key: a scene changes it to move or replace the seat. */
+  type Live = { pane: string; foreground: number[] };
+  function launched(made: ReturnType<typeof cursorWorld>, live: Live) {
+    writeFileSync(join(made.dir, 'team.state.json'), JSON.stringify({ format: 1, sessions: { acme: { seats: {
+      cursor: { stage: 'ready', pane: 'pane-cursor', launched: { shell: 111, cli: [222] }, pane_shell: 111, pane_shell_start: 5 },
+    }, worktrees: {} } } }));
+    const agents = () => [{ name: 'cursor', pane: live.pane, cli: 'cursor-agent' }];
+    return {
+      agents,
+      keyOwner: {
+        agents: () => agents(),
+        processes: () => ({ shell: 111, foreground: live.foreground }),
+        processStart: (pid: number) => (pid === 111 ? 5 : null),
+      },
+    };
+  }
+  const drawn = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => text.split('\n').map((row, at) => (at === 0 ? `  → ${row}` : `    ${row}`)).join('\n'));
+  const drawingWake = () => wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '')));
+  /** The wake's host, with `after` run once the line is typed and before its Enter. */
+  function typedThen(pane: ReturnType<typeof wakeFake>, after: () => void): void {
+    const type = pane.host.type;
+    pane.host.type = (at, text) => {
+      after();
+      return type(at, text);
+    };
+  }
+
   test('the idle dispatch\'s direct-only send wakes an idle cursor seat with its typed wake', async () => {
     const made = cursorWorld();
-    // The box draws the typed wake's rows: the header row, then the body under it.
-    const drawn = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => text.split('\n').map((row, at) => (at === 0 ? `  → ${row}` : `    ${row}`)).join('\n'));
-    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '')));
-    const host = fake(made, { agents: () => [{ name: 'cursor', pane: 'pane-cursor', cli: 'cursor-agent' }], typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const pane = drawingWake();
+    const host = fake(made, { ...launched(made, { pane: 'pane-cursor', foreground: [222] }), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
     const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
     expect(run.result).toMatchObject({ route: 'typed', outcome: 'delivered' });
     expect(pane.typed).toHaveLength(1);
@@ -233,20 +260,37 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
 
   test('a direct-only send types no further key once the seat has moved off the pane the pass bound', async () => {
     const made = cursorWorld();
-    let moved = false;
-    // The line is typed and drawn, then the seat moves to another pane before its Enter.
-    const drawn = (text: string): string => IDLE_TASK.replace('  → Add a follow-up', () => text.split('\n').map((row, at) => (at === 0 ? `  → ${row}` : `    ${row}`)).join('\n'));
-    const pane = wakeFake((read, enters, typed) => (enters > 0 ? WORKING : read < 2 ? IDLE_TASK : drawn(typed[typed.length - 1] ?? '')));
-    const type = pane.host.type;
-    pane.host.type = (at, text) => {
-      moved = true;
-      return type(at, text);
-    };
-    const host = fake(made, {
-      agents: () => [{ name: 'cursor', pane: moved ? 'pane-other' : 'pane-cursor', cli: 'cursor-agent' }],
-      typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1,
-    });
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const pane = drawingWake();
+    typedThen(pane, () => { live.pane = 'pane-other'; });
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
     const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a direct-only send types no further key into a replacement that kept the seat name and pane', async () => {
+    const made = cursorWorld();
+    const live = { pane: 'pane-cursor', foreground: [222] };
+    const pane = drawingWake();
+    // Another process now runs in front of the recorded shell, on the same pane id and name.
+    typedThen(pane, () => { live.foreground = [333]; });
+    const host = fake(made, { ...launched(made, live), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(run.result?.outcome).not.toBe('delivered');
+    expect(pane.typed).toHaveLength(1);
+    expect(pane.enters).toBe(0);
+  });
+
+  test('a direct-only send types no further key once the declaration stops the seat', async () => {
+    const made = cursorWorld();
+    const pane = drawingWake();
+    const file = join(made.dir, 'team.yaml');
+    typedThen(pane, () => { writeFileSync(file, readFileSync(file, 'utf8').replace('    name: cursor\n', '    name: cursor\n    stopped: true\n')); });
+    const host = fake(made, { ...launched(made, { pane: 'pane-cursor', foreground: [222] }), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const run = await sendDirect(owner(made.root), host, { seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task' });
+    expect(readFileSync(file, 'utf8')).toContain('stopped: true');
     expect(run.result?.outcome).not.toBe('delivered');
     expect(pane.typed).toHaveLength(1);
     expect(pane.enters).toBe(0);
@@ -255,7 +299,7 @@ describe('team send: the cursor typed wake names the inbox tool', () => {
   test('a direct-only send whose recheck refuses types nothing into a cursor seat', async () => {
     const made = cursorWorld();
     const pane = wakeFake(() => IDLE_TASK);
-    const host = fake(made, { agents: () => [{ name: 'cursor', pane: 'pane-cursor', cli: 'cursor-agent' }], typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
+    const host = fake(made, { ...launched(made, { pane: 'pane-cursor', foreground: [222] }), typedWake: () => pane.host, wakeVerifyMs: 1, wakePollMs: 1 });
     const run = await sendDirect(owner(made.root), host, {
       seat: 'cursor', pane: 'pane-cursor', cli: 'cursor', body: 'take the next task',
       guard: () => ({ ok: false, why: 'the watch was replaced' }),
