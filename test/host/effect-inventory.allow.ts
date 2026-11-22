@@ -57,9 +57,9 @@ export const READS: Record<string, string> = {
   // The host's and the client's own bookkeeping, not a hosted line's effect.
   'src/host/client.ts#tryHost Bun.connect': 'runs in the client process, never in a hosted line',
   'src/host/run.ts#runHostedLine process.chdir': "the host sets the client's cwd for the line and restores its own",
-  'src/host/server.ts#liveListener node:net.connect': "the host's own stale-socket probe, before any request",
-  'src/host/server.ts#startSendHost node:net.createServer': "the host's own socket, before any request",
-  'src/host/supervise.ts#probeSendHost node:net.connect': 'daemon side: the watchdog probe',
+  'src/host/server.ts#liveListener Bun.connect': "the host's own stale-socket probe, before any request",
+  'src/host/server.ts#startSendHost Bun.listen': "the host's own socket, before any request",
+  'src/host/supervise.ts#probeSendHost Bun.connect': 'daemon side: the watchdog probe',
   'src/host/supervise.ts#start node:child_process.spawn': 'daemon side: starts the host',
 };
 

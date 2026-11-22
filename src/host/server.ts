@@ -9,12 +9,12 @@
 // disconnect while running does not cancel it.
 import { createHash } from 'node:crypto';
 import { chmodSync, lstatSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
-import { connect, createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { machineConfigDir } from '../daemon/paths.ts';
+import { dialing, serving, socketRuntime, type BunListener, type Conn } from '../runtime/bun-socket.ts';
 import { version } from '../version.ts';
 import { clientBuildStamp } from './client.ts';
-import { peerReader, socketFd, type PeerReader } from './peer.ts';
+import { peerReader, type PeerReader } from './peer.ts';
 import { HOST_PROTOCOL_VERSION, isHostRequest, runHostedLine, type HostAnswer, type HostPeer, type HostRequest, type HostRunDeps } from './run.ts';
 
 /** The largest request line, in bytes. */
@@ -41,7 +41,7 @@ export function buildStampOf(cliEntry: string): string | null {
 type Entry = {
   request: HostRequest;
   peer: HostPeer;
-  socket: Socket;
+  socket: Conn;
   state: 'queued' | 'running' | 'dead' | 'done';
   timer: ReturnType<typeof setTimeout> | null;
 };
@@ -61,9 +61,9 @@ export type SendHostOptions = {
   log?: (line: string) => void;
 };
 
-export type SendHost = { server: Server; path: string; close: (why: string) => Promise<void>; served: () => number };
+export type SendHost = { server: BunListener; path: string; close: (why: string) => Promise<void>; served: () => number };
 
-function answer(socket: Socket, value: HostAnswer): void {
+function answer(socket: Conn, value: HostAnswer): void {
   if (socket.destroyed) return;
   socket.end(`${JSON.stringify(value)}\n`);
 }
@@ -73,11 +73,18 @@ const fallbackOf = (why: string): HostAnswer => ({ v: HOST_PROTOCOL_VERSION, kin
 /** Whether another live host already answers on `path`. */
 async function liveListener(path: string): Promise<boolean> {
   return new Promise((settle) => {
-    const probe = connect(path);
-    const done = (live: boolean) => { probe.destroy(); settle(live); };
-    probe.once('connect', () => done(true));
-    probe.once('error', () => done(false));
-    setTimeout(() => done(false), 500);
+    let settled = false;
+    const done = (live: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      probe.destroy();
+      settle(live);
+    };
+    const Bun = socketRuntime();
+    const { conn: probe, options, refused } = dialing(path, { open: () => done(true), close: () => done(false) });
+    const timer = setTimeout(() => done(false), 500);
+    Bun.connect(options).catch(refused);
   });
 }
 
@@ -109,7 +116,8 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
     if (stopping !== null) return;
     stopping = why;
     log(`send host: stopping (${why})`);
-    server.close();
+    // Stops accepting; the connections it holds stay open for their answers.
+    server.stop();
     // Every queued request is removed first, then handed back: none of them can run.
     for (const entry of queue.splice(0)) {
       if (entry.timer !== null) clearTimeout(entry.timer);
@@ -162,8 +170,8 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
    *  byte is read (rfc-bus-send-server §2.3 item 7): its credentials and its process start. Null
    *  when either cannot be read; such a connection is never served. */
   type AtConnect = { cred: { uid: number; pid: number }; first: NonNullable<ReturnType<PeerReader['process']>> } | null;
-  const identityOf = (socket: Socket): AtConnect => {
-    const fd = socketFd(socket);
+  const identityOf = (socket: Conn): AtConnect => {
+    const fd = socket.fd;
     const cred = fd === null ? null : reader.credentials(fd);
     if (cred === null) return null;
     const first = reader.process(cred.pid);
@@ -171,7 +179,7 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
     return { cred, first };
   };
 
-  const accept = (socket: Socket, line: string, atConnect: AtConnect): void => {
+  const accept = (socket: Conn, line: string, atConnect: AtConnect): void => {
     if (stopping !== null) { answer(socket, fallbackOf('the send host is stopping')); return; }
     if (atConnect === null) { answer(socket, fallbackOf('the client could not be read from the kernel when it connected')); return; }
     const { cred, first } = atConnect;
@@ -219,7 +227,7 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
       entry.state = 'dead';
       answer(socket, fallbackOf('the send host was busy'));
     }, window);
-    socket.once('close', () => {
+    socket.onClose(() => {
       if (entry.state !== 'queued') return;
       const at = queue.indexOf(entry);
       if (at >= 0) queue.splice(at, 1);
@@ -230,27 +238,24 @@ export async function startSendHost(options: SendHostOptions): Promise<SendHost>
     void pump();
   };
 
-  const server = createServer((socket) => {
+  // A client that went away closes its connection; its entry is cleaned on close.
+  const Bun = socketRuntime();
+  const server = Bun.listen(serving(path, (socket) => {
     const atConnect = identityOf(socket);
     let buffer = '';
     let taken = false;
-    socket.setEncoding('utf8');
-    socket.on('data', (chunk: string) => {
-      if (taken) return;
-      buffer += chunk;
-      if (buffer.length > HOST_FRAME_LIMIT) { taken = true; answer(socket, fallbackOf('the request is too long')); return; }
-      const end = buffer.indexOf('\n');
-      if (end < 0) return;
-      taken = true;
-      accept(socket, buffer.slice(0, end), atConnect);
-    });
-    socket.on('error', () => { /* a client that went away; its entry is cleaned on close */ });
-  });
-
-  await new Promise<void>((settle, fail) => {
-    server.once('error', fail);
-    server.listen(path, () => { server.off('error', fail); settle(); });
-  });
+    return {
+      text: (chunk) => {
+        if (taken) return;
+        buffer += chunk;
+        if (buffer.length > HOST_FRAME_LIMIT) { taken = true; answer(socket, fallbackOf('the request is too long')); return; }
+        const end = buffer.indexOf('\n');
+        if (end < 0) return;
+        taken = true;
+        accept(socket, buffer.slice(0, end), atConnect);
+      },
+    };
+  }));
   chmodSync(path, 0o600);
   log(`send host: answering on ${path} (build ${build})`);
 

@@ -111,10 +111,3 @@ export function peerReader(): PeerReader | null {
 export function setPeerReaderForTests(reader: PeerReader | null | undefined): void {
   override = reader;
 }
-
-/** The file descriptor under one accepted `node:net` socket, or null when it cannot be read. */
-export function socketFd(socket: unknown): number | null {
-  const handle = (socket as { _handle?: { fd?: unknown } } | null)?._handle;
-  const fd = handle?.fd;
-  return typeof fd === 'number' && Number.isInteger(fd) && fd >= 0 ? fd : null;
-}
