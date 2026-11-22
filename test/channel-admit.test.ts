@@ -714,9 +714,11 @@ describe('one registry read per admission', () => {
 });
 
 describe('the registry scan kept across pushes', () => {
-  test('an unchanged registry is not read again; an edited, added, removed or corrupted agent file is seen on the next admission', () => {
+  test('an unchanged registry is not read again; an edited, added, removed or corrupted agent file is seen on the next admission', async () => {
     const { base, home } = createHome();
     const local = createTeam(base, home, 'alpha');
+    // Past the racy margin: a scan is kept only under a stamp no same-tick edit can hide behind.
+    await new Promise((resolve) => setTimeout(resolve, 150));
     const admit = () => admitChannelDelivery({
       payload: { from: 'worker', from_id: local.worker.id, to: 'lead', to_id: local.lead.id, rule: "a seat to its own team's orchestrator" },
       home,

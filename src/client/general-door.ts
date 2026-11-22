@@ -116,6 +116,7 @@ export const VALUED: Readonly<Record<string, readonly string[]>> = {
   proc: ['note', 'pid'],
   projects: [],
   queue: ['assignee', 'commit', 'id', 'priority', 'version'],
+  queues: [],
   raise: [],
   register: ['pane', 'session'],
   release: ['file'],
