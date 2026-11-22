@@ -2,7 +2,7 @@
 // ordinary `team restart --resume` only once the seat is idle at an empty prompt, once, and gives
 // a request up past its bound with a notice to the lead. The restart and the notice are stand-ins.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { UpSources } from '../../src/commands/up.ts';
@@ -101,7 +101,7 @@ describe('the daemon runs a queued self-restart', () => {
     const lines = await pass(w);
     expect(w.restarts).toEqual([['lead', '--resume', 'conv-lead', '--session', SESSION, '--json']]);
     // The request's own pane and launch ride into the restart, which enforces them under its lock.
-    expect(w.requests).toEqual([{ seat: 'lead', pane: 'w0:p1', launched: JSON.stringify(LAUNCHED) }]);
+    expect(w.requests).toEqual([{ seat: 'lead', pane: 'w0:p1', launched: JSON.stringify(LAUNCHED), conversation: 'conv-lead' }]);
     expect(lines).toEqual(['lead: restarted itself with its conversation conv-lead']);
     expect(queued()).toBe(false);
     expect(hasSelfRestartRequests(dir)).toBe(false);
@@ -152,12 +152,12 @@ describe('the daemon runs a queued self-restart', () => {
     expect(queued()).toBe(false);
   });
 
-  test('a restart that found the seat busy under its lock leaves the request queued', async () => {
+  test('a restart deferred under its lock, before any effect, leaves the request queued', async () => {
     queue();
     const w = world();
     w.status = 'idle';
     w.exit = 1;
-    w.refusal = 'restart.busy';
+    w.refusal = 'restart.deferred';
     await pass(w);
     expect(w.restarts).toHaveLength(1);
     expect(queued()).toBe(true);
@@ -173,7 +173,7 @@ describe('the daemon runs a queued self-restart', () => {
     const w = world();
     w.status = 'idle';
     w.exit = 1;
-    w.refusal = 'restart.busy';
+    w.refusal = 'restart.deferred';
     const deps = depsOf(w);
     const newer = new Date(T0.getTime() + 1_000);
     await runSelfRestarts({
@@ -182,5 +182,37 @@ describe('the daemon runs a queued self-restart', () => {
     });
     // The claimed request did not overwrite the newer one when it went back to the queue.
     expect(JSON.parse(readFileSync(selfRestartPath(dir, SESSION, 'lead'), 'utf8')).requested_at).toBe(newer.toISOString());
+  });
+
+  test('busy after the stop began is reported once and dropped, never queued again', async () => {
+    queue();
+    const w = world();
+    w.status = 'idle';
+    w.exit = 1;
+    w.refusal = 'restart.busy';
+    await pass(w);
+    await pass(w);
+    expect(w.restarts).toHaveLength(1);
+    expect(queued()).toBe(false);
+    expect(w.notices.map((one) => one.body)).toEqual(['lead: self-restart failed (the seat did not come back)']);
+  });
+
+  test('an interrupted claim is put back while the seat runs the same launch, and reported otherwise', async () => {
+    const folder = join(dir, 'self-restart', SESSION);
+    const strand = (): void => { queue(); renameSync(selfRestartPath(dir, SESSION, 'lead'), `${selfRestartPath(dir, SESSION, 'lead')}.claimed-00ff`); };
+    strand();
+    const w = world();
+    expect(await pass(w)).toEqual(['lead: an interrupted self-restart was put back in the queue; its seat still runs the same launch']);
+    expect(queued()).toBe(true);
+    expect(readdirSync(folder)).toEqual(['lead.json']);
+    // The seat was relaunched meanwhile: the claim may have acted, so it is said and dropped.
+    strand();
+    const state = JSON.parse(readFileSync(join(dir, 'team.state.json'), 'utf8'));
+    state.sessions[SESSION].seats.lead.launched = { shell: 701, cli: [801] };
+    writeFileSync(join(dir, 'team.state.json'), JSON.stringify(state));
+    await pass(w);
+    expect(w.notices.map((one) => one.body)).toEqual(['lead: an interrupted self-restart may have acted on its seat; dropped, check the seat']);
+    expect(readdirSync(folder)).toEqual([]);
+    expect(w.restarts).toEqual([]);
   });
 });

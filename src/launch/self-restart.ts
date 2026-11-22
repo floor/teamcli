@@ -155,6 +155,27 @@ export async function runSelfRestarts(input: {
     if (team.orchestrator !== '') deps.notify({ session: request.session, lead: team.orchestrator, body, id: noticeId(root, request) });
   };
   for (const session of sessions) {
+    // A claim left by an earlier pass that ended mid-run (the daemon's passes run one at a time,
+    // so any claim found here is not this pass's): put back in the queue when the seat still runs
+    // the request's launch on its pane, so nothing was stopped; otherwise said once and dropped.
+    let claims: string[];
+    try { claims = readdirSync(folderOf(dir, session)).filter((one) => /\.json\.claimed-[0-9a-f]+$/.test(one)); } catch { claims = []; }
+    for (const file of claims) {
+      const path = join(folderOf(dir, session), file);
+      const queuedAt = path.slice(0, path.lastIndexOf('.claimed-'));
+      const { request } = readRequest(home, path);
+      if (request === null || request.session !== session) { drop(path); continue; }
+      const held = readState(dir).sessions[session]?.seats[request.seat];
+      const live = sources.agents(session)?.some((one) => one.pane === request.pane) === true;
+      if (live && held?.pane === request.pane && identity(held.launched) === request.launched && held.agent_session === request.conversation) {
+        try { linkSync(path, queuedAt); } catch { /* a newer request stands */ }
+        drop(path);
+        lines.push(`${request.seat}: an interrupted self-restart was put back in the queue; its seat still runs the same launch`);
+      } else {
+        drop(path);
+        report(request, `${request.seat}: an interrupted self-restart may have acted on its seat; dropped, check the seat`);
+      }
+    }
     let files: string[];
     try { files = readdirSync(folderOf(dir, session)).filter((one) => one.endsWith('.json')); } catch { continue; }
     for (const file of files) {
@@ -197,16 +218,18 @@ export async function runSelfRestarts(input: {
         stdout: (one) => out.push(one), stderr: (one) => out.push(one),
       };
       const argv = [seat, '--resume', conversation, '--session', session, '--json', ...(input.launchFile === undefined ? [] : ['--file', input.launchFile])];
-      const exit = await deps.restart(argv, io, { seat, pane: request.pane, launched: request.launched });
+      const exit = await deps.restart(argv, io, { seat, pane: request.pane, launched: request.launched, conversation });
       if (exit === 0) {
         taken.done();
         lines.push(`${seat}: restarted itself with its conversation ${conversation}`);
         continue;
       }
       const refused = refusalOf(out.join(''));
-      if (refused?.id === 'restart.busy' || refused?.id === 'restart.run-lock') {
-        // Nothing was stopped: the seat came busy again, or another run held the session. The
-        // request stays queued for a later beat, unless a newer one replaced it.
+      if (refused?.id === 'restart.deferred' || refused?.id === 'restart.run-lock') {
+        // Proven before any effect: the seat was not idle at an empty prompt under the run lock,
+        // or another run held the session. The request stays queued for a later beat, unless a
+        // newer one replaced it. Every other outcome, `restart.busy` after a stop included, is
+        // reported once and the request dropped: an attempt that may have acted is never retried.
         taken.release();
         continue;
       }
@@ -217,12 +240,12 @@ export async function runSelfRestarts(input: {
   return lines;
 }
 
-/** Whether the route's state folder holds any queued request: one folder read per session, so
+/** Whether the route's state folder holds any queued or interrupted request: one folder read per session, so
  *  the daemon's beat starts a pass only when there is something to run. */
 export function hasSelfRestartRequests(dir: string): boolean {
   try {
     return readdirSync(join(dir, 'self-restart')).some((session) => {
-      try { return readdirSync(folderOf(dir, session)).some((one) => one.endsWith('.json')); } catch { return false; }
+      try { return readdirSync(folderOf(dir, session)).some((one) => one.endsWith('.json') || one.includes('.json.claimed-')); } catch { return false; }
     });
   } catch {
     return false;

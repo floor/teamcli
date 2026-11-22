@@ -303,7 +303,7 @@ export default restart;
 
 /** What the daemon carries into a restart it runs for a seat's own queued request
  *  (`../launch/self-restart.ts`): never a command-line word, so no caller can claim it. */
-export type SelfRequest = { seat: string; pane: string; launched: string };
+export type SelfRequest = { seat: string; pane: string; launched: string; conversation: string };
 
 export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources, internal: { selfRequest?: SelfRequest } = {}): Promise<number> {
   let out = cleanedIo(io);
@@ -874,6 +874,10 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       return abandonWorkingRefused(out, json, name);
     case 'busy':
       return busyRefused(out, json, performed.message);
+    case 'deferred':
+      refuse(out, json, 'restart', { id: 'restart.deferred', message: performed.message, repair: null });
+      // exit: restart.deferred
+      return 1;
     case 'not-ready':
       return notReadyRefused(out, json, performed.message);
     case 'herdr':
@@ -1023,6 +1027,8 @@ export type PerformResult =
   | { kind: 'replaced'; takeable: boolean }
   | { kind: 'abandon-working' }
   | { kind: 'busy'; message: string }
+  /** A self-restart found its seat not idle at an empty prompt before anything was stopped. */
+  | { kind: 'deferred'; message: string }
   | { kind: 'not-ready'; message: string }
   | { kind: 'herdr' }
   | { kind: 'run-lock'; held: number; startedAt: number | null }
@@ -1330,13 +1336,12 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
     if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
     if (input.selfRequest !== undefined) {
-      if (freshRecorded?.pane !== input.selfRequest.pane || JSON.stringify(freshRecorded.launched ?? null) !== input.selfRequest.launched) {
-        return { kind: 'not-ready', message: `${name}: its launch changed since its self-restart request; left as it is` };
+      if (freshRecorded?.pane !== input.selfRequest.pane || JSON.stringify(freshRecorded.launched ?? null) !== input.selfRequest.launched
+        || freshRecorded.agent_session !== input.selfRequest.conversation) {
+        return { kind: 'not-ready', message: `${name}: its launch or conversation changed since its self-restart request; left as it is` };
       }
-      if (rechecked.agent?.pane !== input.selfRequest.pane || rechecked.where !== 'free' || rechecked.draftScreen !== undefined
-        || rechecked.settingsDialog === true || rechecked.unrecognised !== undefined || rechecked.exitInBox || rechecked.atExitQuestion || rechecked.taken === true) {
-        return { kind: 'busy', message: `${name} is not idle at an empty prompt; its self-restart waits` };
-      }
+      const strict = selfStrictProblem(name, input.selfRequest, rechecked);
+      if (strict !== null) return strict;
     }
 
     // The unsent text, copied under the run lock before the pane is closed, so neither a failed
@@ -1448,6 +1453,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         if (seen.kind === 'replaced') return { kind: 'replaced', takeable: seen.takeable };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
         if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
+        // A self-restart's strict rule governs the last observation before the stop, too.
+        if (input.selfRequest !== undefined) {
+          const strict = selfStrictProblem(name, input.selfRequest, seen);
+          if (strict !== null) return strict;
+        }
         stopObs = seen;
       }
 
@@ -2893,6 +2903,15 @@ function abandonWorkingRefused(out: Io, json: boolean, name: string): number {
   });
   // exit: restart.abandon-working
   return 1;
+}
+
+/** A self-restart's rule for an observation before the stop: the request's own pane, free at a
+ *  recognised empty prompt — no draft, dialog, unread screen, exit text or taken pane. Null
+ *  when the stop may go on; the deferral (nothing stopped) otherwise. */
+function selfStrictProblem(name: string, request: SelfRequest, seen: InspectedSeat): { kind: 'deferred'; message: string } | null {
+  if (seen.kind === 'ok' && seen.agent?.pane === request.pane && seen.where === 'free' && seen.draftScreen === undefined
+    && seen.settingsDialog !== true && seen.unrecognised === undefined && !seen.exitInBox && !seen.atExitQuestion && seen.taken !== true) return null;
+  return { kind: 'deferred', message: `${name} is not idle at an empty prompt; its self-restart waits, nothing was stopped` };
 }
 
 function busyRefused(out: Io, json: boolean, message: string): number {

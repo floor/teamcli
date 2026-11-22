@@ -13,6 +13,7 @@ import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { selfRestartPath } from '../src/launch/self-restart.ts';
+import { handoverPath } from '../src/handover/paths.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
@@ -1370,24 +1371,47 @@ describe('team restart <seat>', () => {
     const scene = (workerScreen: 'idle' | 'unsent') => {
       const fixture = makeFixture(withoutChannel('worker'));
       updateState(fixture.dir, (state) => {
-        (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+        (state.sessions.acme ??= emptySession()).seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', agent_session: 'conv-worker' };
       });
       return { fixture, ...makeHarness(fixture, { workerScreen }) };
     };
-    const request = { seat: 'worker', pane: 'pane-old', launched: 'null' };
+    const request = { seat: 'worker', pane: 'pane-old', launched: 'null', conversation: 'conv-worker' };
     // Unsent text in the box: the ordinary restart would copy it; the self-restart waits.
     const drafted = scene('unsent');
     const draftIo = testIo(drafted.fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker', '--json'], draftIo, drafted.sources, { selfRequest: request })).toBe(1);
-    expect(draftIo.out).toContain('"id": "restart.busy"');
-    expect(draftIo.out).toContain('its self-restart waits');
+    expect(draftIo.out).toContain('"id": "restart.deferred"');
+    expect(draftIo.out).toContain('its self-restart waits, nothing was stopped');
     expect(drafted.did.closed).toEqual([]);
     // A launch other than the request's: nothing is stopped.
     const moved = scene('idle');
     const movedIo = testIo(moved.fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], movedIo, moved.sources, { selfRequest: { ...request, launched: '{"shell":1}' } })).toBe(1);
-    expect(movedIo.err).toContain('its launch changed since its self-restart request');
+    expect(movedIo.err).toContain('its launch or conversation changed since its self-restart request');
     expect(moved.did.closed).toEqual([]);
+    // The same launch now holds another conversation: nothing is stopped either.
+    const switched = testIo(moved.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], switched, moved.sources, { selfRequest: { ...request, conversation: 'conv-earlier' } })).toBe(1);
+    expect(switched.err).toContain('its launch or conversation changed since its self-restart request');
+    expect(moved.did.closed).toEqual([]);
+    // A checkpoint ask makes the run read the pane once more before the stop: an unread screen that
+    // appears by then (closed without typing by an ordinary restart) defers it under the strict rule.
+    const late = scene('idle');
+    updateState(late.fixture.dir, (state) => {
+      state.checkpoints = { worker: { by: 'owner', path: handoverPath(late.fixture.dir, 'worker', NOW), session: 'acme', at: NOW.toISOString(), deadline: NOW.toISOString() } };
+    });
+    const screen = late.sources.screen;
+    let reads = 0;
+    late.sources.screen = (...args) => {
+      const pane = args[1];
+      if (pane === 'pane-old' && ++reads > 2) return { kind: 'unknown' } as ReturnType<typeof screen>;
+      return screen(...args);
+    };
+    const lateIo = testIo(late.fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker', '--json'], lateIo, late.sources, { selfRequest: request })).toBe(1);
+    expect(lateIo.out).toContain('"id": "restart.deferred"');
+    expect(late.did.closed).toEqual([]);
+    expect(reads).toBeGreaterThan(2);
     // A request for another seat restarts nothing.
     const other = testIo(moved.fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], other, moved.sources, { selfRequest: { ...request, seat: 'ops' } })).toBe(1);

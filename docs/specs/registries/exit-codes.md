@@ -401,6 +401,7 @@ The Since column records presence at a pinned revision, not an audited first-int
 | `restart.ready` | the seat was restarted in a new pane | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `0` |
 | `restart.self-queued` | `--self` queued the seat's restart for the daemon | added in this release | `contract/exit-codes.json` | command `restart`; exit `0` |
 | `restart.abandon-working` | a seat caller passed --abandon on a working seat | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
+| `restart.deferred` | a self-restart found its seat not idle at an empty prompt under the run lock; nothing was stopped | added in this release | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.busy` | the seat is busy and --abandon was not given, or graceful stop did not close the pane | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.caller` | the caller may not restart a seat, or passed an owner-only flag | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |
 | `restart.detached` | a run with no terminal | present at 0.5.0 | `contract/exit-codes.json` | command `restart`; exit `1` |

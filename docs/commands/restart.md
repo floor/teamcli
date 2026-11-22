@@ -126,12 +126,17 @@ process, so its own heartbeat never waits on the run. A request is run only when
 
 The daemon claims the request it verified before it acts on it; a newer request written meanwhile
 is kept. The run is the ordinary `team restart <seat> --resume <conversation>` in the request's
-session, carrying the request. Under its run lock, before anything is stopped, it checks again
-that the seat is on the request's pane with the request's launch, at an empty, recognised idle
+session, carrying the request. Under its run lock it checks again that the seat is on the
+request's pane with the request's launch and conversation; a different one drops the request. Every
+reading of the pane up to the stop, the last one included, must show an empty, recognised idle
 prompt. This is stricter than an ordinary restart: unsent text, a dialog or a screen it cannot read
-is never copied, closed or taken, and the request goes back to the queue unless a newer one
-replaced it. A different launch drops it. Any other failure is said to the team's lead, in the
-request's session, with the refusal's words. A request that has waited 30 minutes without the seat
+is never copied, closed or taken. Such a run stops nothing and ends `restart.deferred`, and only
+then does the request go back to the queue, unless a newer one replaced it. Any other outcome,
+including a refusal after the stop began, is said once to the team's lead, in the request's
+session, with the refusal's words, and the request is dropped: an attempt that may have acted is
+never run again. A request left claimed by a pass that ended mid-run is put back on the next pass
+when its seat still runs the same launch on its pane, and is otherwise said to the lead and
+dropped. A request that has waited 30 minutes without the seat
 coming idle is given up and said to the lead the same way; the seat queues it again with
 `--self`. The daemon log says what each pass did.
 
