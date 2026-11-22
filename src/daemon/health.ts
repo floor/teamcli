@@ -7,7 +7,6 @@
 // unreadable socket is `unknown` — cannot tell — never `not-running`.
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { DAEMON_HEARTBEAT_SECONDS } from '../policy/index.ts';
 import { daemonSocketPath } from './paths.ts';
@@ -23,6 +22,7 @@ import {
   type DaemonStuckRequest,
 } from './state.ts';
 import { PRESENCE_ID, isPresenceBinding } from './presence/contract.ts';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 
 export type DaemonProbe =
   | { state: 'answered'; at: string }
@@ -350,7 +350,6 @@ export function probeDaemonHealth(
 
 function requestHealth(socketPath: string, timeoutMs: number, id: string): Promise<HealthAnswer> {
   return new Promise((resolve) => {
-    const socket = connect({ path: socketPath });
     let buffer = '';
     let settled = false;
     const finish = (answer: HealthAnswer): void => {
@@ -360,13 +359,8 @@ function requestHealth(socketPath: string, timeoutMs: number, id: string): Promi
       socket.destroy();
       resolve(answer);
     };
-    const timer = setTimeout(() => finish({ kind: 'unanswered', reason: 'timeout' }), timeoutMs);
-    socket.on('error', () => finish({ kind: 'unanswered', reason: 'closed' }));
-    socket.on('connect', () => {
-      socket.write(`${JSON.stringify({ v: DAEMON_PROTOCOL_VERSION, id, op: 'health' })}\n`);
-    });
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
+    const read = (chunk: string): void => {
+      buffer += chunk;
       const nl = buffer.indexOf('\n');
       if (nl === -1) return;
       let parsed: unknown;
@@ -403,7 +397,14 @@ function requestHealth(socketPath: string, timeoutMs: number, id: string): Promi
         }
       }
       finish({ kind: 'unanswered', reason: 'closed' });
+    };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, {
+      open: (conn) => conn.write(`${JSON.stringify({ v: DAEMON_PROTOCOL_VERSION, id, op: 'health' })}\n`),
+      text: read,
+      close: () => finish({ kind: 'unanswered', reason: 'closed' }),
     });
-    socket.on('close', () => finish({ kind: 'unanswered', reason: 'closed' }));
+    const timer = setTimeout(() => finish({ kind: 'unanswered', reason: 'timeout' }), timeoutMs);
+    Bun.connect(options).catch(refused);
   });
 }

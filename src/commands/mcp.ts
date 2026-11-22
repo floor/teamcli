@@ -14,7 +14,7 @@ import { spawnProcessToolSync } from '../process-tools-adapter.ts';
 import { createPublicKey } from 'node:crypto';
 import { closeSync, constants as fs, fstatSync, lstatSync, readSync, readdirSync, readFileSync } from 'node:fs';
 import { openSync } from '../host/guarded-fs.ts';
-import { connect } from 'node:net';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { connect as tlsConnect } from 'node:tls';
@@ -251,17 +251,19 @@ export const realSources: McpSources = {
   probeSocket(path) {
     return new Promise((resolve) => {
       let settled = false;
-      const socket = connect({ path });
       const done = (state: 'ok' | 'refused' | 'missing'): void => {
         if (settled) return;
         settled = true;
         socket.destroy();
         resolve(state);
       };
-      socket.setTimeout(2_000);
-      socket.once('connect', () => done('ok'));
-      socket.once('timeout', () => done('refused'));
-      socket.once('error', (error) => done((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'refused'));
+      const Bun = socketRuntime();
+      const { conn: socket, options, refused } = dialing(path, {
+        open: () => done('ok'),
+        close: (error) => done(error?.code === 'ENOENT' ? 'missing' : 'refused'),
+      });
+      socket.setTimeout(2_000, () => done('refused'));
+      Bun.connect(options).catch(refused);
     });
   },
   probeHttp(url, upgrade) {
