@@ -1147,6 +1147,88 @@ idle workers with empty queues, and the unclaimed items left in that backlog, af
 `watch.team_idle`. See [queue reports](commands/watch.md#queue-reports) for the task format and
 unknown readings.
 
+## Headless Claude sign-in
+
+A Claude Code seat signs in with the CLI's own session login (`claude auth login`), which needs
+a browser once per machine. A machine no one logs in at, such as a team server, can keep a
+long-lived subscription token in its secret store instead, and every Claude Code seat on Anthropic
+signs in with it at launch. This is opt-in, and meant only for a **personal subscription that
+receives no organization-managed settings**: settings an organization delivers from its servers
+stand above every settings file TeamCLI writes, can route Claude Code to another endpoint, and
+leave nothing on the machine to detect.
+
+1. Set `claude-auth` to `store` for the team, project or entity (see below).
+2. On any machine where you are signed in, run `claude setup-token` and copy the token it prints.
+3. Keep it in the machine's secret store under the entry `CLAUDE_CODE_OAUTH_TOKEN`: on Linux, a
+   line `CLAUDE_CODE_OAUTH_TOKEN=<token>` in the entity's encrypted file
+   (`~/.config/sops/<entity>.env.sops`, edited with `sops`); on macOS, a Keychain item with that
+   service name (`security add-generic-password -s CLAUDE_CODE_OAUTH_TOKEN -a "$USER" -w`, which
+   asks for the token).
+4. Launch as usual. Each Claude Code seat on Anthropic starts with
+   `CLAUDE_CODE_OAUTH_TOKEN="$(<the store's lookup>)"` in front of its line, the same filled
+   `{secret:<entry>}` word a provider seat's key takes, so the pane's shell reads the value when
+   the seat starts. The token is in that seat's process environment only: TeamCLI never reads it,
+   and the seat's record, `team status`, the logs and the plan carry the entry's name and the
+   store's lookup command, never the value.
+
+The route to Anthropic is enforced, not assumed. A seat that takes the token:
+
+- has its own generated settings file (the one its launch passes with `--settings`) set
+  `env.ANTHROPIC_BASE_URL` to `https://api.anthropic.com` and every provider switch
+  (`CLAUDE_CODE_USE_BEDROCK`, `…_VERTEX`, `…_FOUNDRY`, `…_MANTLE`, `…_ANTHROPIC_AWS`,
+  `…_ANTHROPIC_GOOGLE_CLOUD`) to empty, which Claude Code reads as unset. That level stands above
+  the user's, the project's and the project-local settings files, and a settings `env` value
+  replaces one the shell exported, so neither a settings file nor a shell profile can send the CLI
+  to a gateway. The token is handed only when that file is in place.
+- starts with the same endpoint and switches, and `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`
+  emptied, in front of its line.
+
+Only the machine's managed Claude settings stand above the seat's file, and nothing a seat writes
+overrides them. So on a machine that has any, the token is withheld from every seat: the managed
+settings file or its `managed-settings.d` folder (`/Library/Application Support/ClaudeCode/` on
+macOS, `/etc/claude-code/` on Linux), or on macOS the `com.anthropic.claudecode` managed
+preferences a configuration profile installs. Only their existence is checked. On another
+platform the token is always withheld. Settings an organization delivers from its servers leave
+no file to check, which is why `store` is opt-in and for a personal subscription only.
+
+A seat's record, which a repair or a restore may launch again, keeps its recipe from before the
+token and the profile's generated words (its rules and its `--settings` file): no lookup and no
+route. Every launch from it passes through the planner, which decides the token afresh.
+
+Which seats take it:
+
+- Only a seat whose `cli` is `claude-code` and whose `vendor` is `anthropic`, on a line proved to
+  run Claude Code on Anthropic: the shipped `claude-code` launcher, or a plain line of leading
+  variable assignments followed by the `claude` binary itself. The rule fails closed: a line
+  through `env`, a shell (`bash -c '…'`), a wrapper or a launcher script gets nothing, whatever it
+  sets inside; so does a line with a separator, a pipe, a redirection or a word computed at run
+  time, one that names an `ANTHROPIC_…` or `CLAUDE_CODE_USE_…` variable anywhere, and one that
+  brings a `--settings` file of its own. A seat on another provider's endpoint never takes it.
+- Only when the store holds the entry. Presence is asked by name, without the value: the Keychain
+  lookup without `-w`, or the entry names the encrypted file keeps in the clear (nothing is
+  decrypted). A store without the entry launches the seat exactly as before.
+- The record of a seat on a plain launch line keeps the file's recipe, without the word.
+
+The setting `claude-auth` turns it on. It is an owner-signed advised policy at entity, project or
+team level, `login` (the default) or `store`; a lower level chooses freely:
+
+    team policy set team claude-auth store --file .agents/team.yaml
+    team policy set entity claude-auth store --entity <entity>
+    team policy unset team claude-auth --file .agents/team.yaml
+
+`login`, and a team that declares nothing, keeps every Claude Code seat on the CLI's session login
+even where the store holds a token. A chain that cannot be read or verified is read as `login`:
+the token is handed to a seat only on a `store` word that reads.
+
+[`team doctor`](commands/doctor.md) makes no token claim under `login`. Under `store`, on a machine
+where `claude auth status` finds no session login, it says `ok` when the store holds the entry
+(and repeats the personal-subscription condition), naming only the seats the launch would hand it
+(a Claude seat that takes none still needs the login, and says so), and otherwise names
+both fixes: `claude auth login`, or `claude setup-token` with the token kept as
+`CLAUDE_CODE_OAUTH_TOKEN`. The token expires, and the store keeps no date doctor could read
+without the value: when seats stop signing in, run `claude setup-token` again and replace the
+entry.
+
 ## Grok command deny settings
 
 The signed team policy `grok-command-deny` accepts `off`, `git`, and `git-and-tests`; it is off

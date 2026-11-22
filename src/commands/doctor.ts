@@ -52,6 +52,9 @@ import { holdText, liveHold, readState, type SeatState } from '../state.ts';
 import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, otherMatchingStores, otherStoreNote, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
+import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, claudeTokenSeat, claudeTokenSeats, managedClaudeSettings } from '../settings/claude-auth-policy.ts';
+import { CLAUDE_TOKEN_ENTRY } from '../settings/claude-auth.ts';
 import { lobbyPath as derivedLobby } from '../worktree/place.ts';
 
 // What `doctor` reads from the machine, so tests can stand in for it.
@@ -96,6 +99,12 @@ export type DoctorSources = {
   daemonTempDir?(home: string): DaemonTempDir;
   /** The temporary folder this process answers (`os.tmpdir()`). Absent: the system's. */
   ownTempDir?(): string;
+  /** The entity's secret store, asked only whether it holds an entry by name (never for a value).
+   *  Absent: not asked, as a store that holds nothing. */
+  secretStore?(entity: string | null): SecretStore | null;
+  /** The managed Claude settings found on this machine (`managedClaudeSettings`), or null. Absent:
+   *  not looked for, as a machine with none. */
+  managedClaudeSettings?(): string | null;
 };
 
 /** The running daemon's recorded temp folder, read from its state record. */
@@ -203,6 +212,8 @@ export const realSources: DoctorSources = {
   },
   daemonHealth,
   daemonTempDir: readDaemonTempDir,
+  managedClaudeSettings: () => managedClaudeSettings(),
+  secretStore: (entity) => systemSecretStore({ home: homedir(), ...(entity === null || entity === '' ? {} : { entity }) }),
 };
 
 export const USAGE =
@@ -349,7 +360,48 @@ function approvalFindings(standing: Standing): Finding[] {
   return [];
 }
 
-function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Finding[] {
+/**
+ * What doctor says of a Claude Code CLI with no session login, when the team runs Claude Code seats
+ * the launch would hand the store's subscription token (`claudeTokenSeat`: on Anthropic, on a line
+ * proved to run Claude Code there) and `claude-auth` is `store`. The store holds the entry: an
+ * `ok` naming those seats, with a `MISS` for the login still beside it when other Claude seats
+ * need one. It holds none: the `MISS` names both fixes, the login and the token a machine with no
+ * browser keeps in its store. Null: the plain login line stands alone.
+ */
+export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, seats: Seat[], sources: DoctorSources, hint: string): Finding[] | null {
+  if (root === undefined) return null;
+  const eligible = seats.filter((seat) => claudeTokenSeat(seat));
+  if (eligible.length === 0) return null;
+  if (claudeAuthInForce({ home: sources.home, root, team }) !== 'store') return null;
+  // Managed settings stand above a seat's own file and may route it anywhere: the launch withholds
+  // the token on such a machine, and this line says why.
+  const managed = sources.managedClaudeSettings?.() ?? null;
+  if (managed !== null) {
+    return [{
+      level: 'miss',
+      text: `log in to claude-code: \`${hint}\`; the secret store's ${CLAUDE_TOKEN_ENTRY} is withheld on this machine, because its managed Claude settings (${managed}) stand above a seat's own and may route it to another endpoint`,
+    }];
+  }
+  // The launch's own determination: the same seats, the same setting, the same store asked by name.
+  const given = claudeTokenSeats({ home: sources.home, root, team, store: sources.secretStore?.(team.entity) ?? null, managed });
+  if (!eligible.some((seat) => given.has(seat.name))) {
+    return [{
+      level: 'miss',
+      text: `log in to claude-code: \`${hint}\`; on a machine with no browser, run \`claude setup-token\` and keep the token in the system's secret store as ${CLAUDE_TOKEN_ENTRY}`,
+    }];
+  }
+  const findings: Finding[] = [{
+    level: 'ok',
+    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY} (claude-auth store), held to Anthropic's endpoint by their own settings, with no managed Claude settings file on this machine; store is only for a personal subscription that receives no organization-managed settings (delivered from the servers, they stand above these and cannot be detected here)`,
+  }];
+  const others = seats.filter((seat) => !eligible.includes(seat) && anthropicClaudeSeat(seat));
+  if (others.length > 0) {
+    findings.push({ level: 'miss', text: `log in to claude-code: \`${hint}\` (${others.map((seat) => seat.name).join(', ')} take no stored token)` });
+  }
+  return findings;
+}
+
+function cliFindings(cli: string, seats: Seat[], sources: DoctorSources, team?: TeamFile, root?: string): Finding[] {
   const names = seats.map((seat) => seat.name).join(', ');
   const profile = profileFor(cli);
   if (!profile) {
@@ -365,7 +417,9 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources): Findin
   }
   const findings = [versionFinding(profile.binary, printed, profile.tested, true)];
   const loggedIn = sources.loggedIn(profile);
-  if (loggedIn === false) findings.push({ level: 'miss', text: `log in to ${cli}: \`${profile.loginHint}\`` });
+  const noLogin = loggedIn === false && cli === 'claude-code' && team !== undefined ? claudeNoLoginFindings(team, root, seats, sources, profile.loginHint) : null;
+  if (noLogin !== null) findings.push(...noLogin);
+  else if (loggedIn === false) findings.push({ level: 'miss', text: `log in to ${cli}: \`${profile.loginHint}\`` });
   else if (loggedIn === null)
     findings.push({ level: 'note', text: `${cli}: the login is not checked in this version` });
   else findings.push({ level: 'ok', text: `${cli}: logged in` });
@@ -905,6 +959,8 @@ export function doctorFindings(
         cli,
         launched.filter((seat) => seat.cli === cli),
         sources,
+        team,
+        root,
       ),
     );
   }
@@ -1108,7 +1164,7 @@ export function doctorJulesFindings(root: string, sources: DoctorSources): Findi
   return findings;
 }
 
-export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Finding[] {
+export function doctorLoginFindings(team: TeamFile, sources: DoctorSources, root?: string): Finding[] {
   const clis: string[] = [];
   for (const seat of team.seats) {
     if (!clis.includes(seat.cli)) clis.push(seat.cli);
@@ -1121,7 +1177,12 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources): Fin
       continue;
     }
     const loggedIn = sources.loggedIn(profile);
-    if (loggedIn === false) {
+    const noLogin = loggedIn === false && cli === 'claude-code'
+      ? claudeNoLoginFindings(team, root, team.seats.filter((seat) => seat.cli === cli), sources, profile.loginHint)
+      : null;
+    if (noLogin !== null) {
+      findings.push(...noLogin.map((finding) => ({ ...finding, text: plainLine(finding.text) })));
+    } else if (loggedIn === false) {
       findings.push({ level: 'miss', text: plainLine(`log in to ${cli}: \`${profile.loginHint}\``) });
     } else if (loggedIn === null) {
       findings.push({ level: 'note', text: plainLine(`${cli}: the login is not checked in this version`) });
@@ -1243,7 +1304,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   // measures a seat's own folder when it runs in one of the terminal host's panes.
   const caller = focused ? null : callerOf(io);
   const findings = loginOnly
-    ? doctorLoginFindings(team, sources)
+    ? doctorLoginFindings(team, sources, root)
     : args.flags.has('jules')
     ? doctorJulesFindings(root, sources)
     : [

@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { claudeTokenSeats } from '../settings/claude-auth-policy.ts';
 import { dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -741,7 +742,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, desktopControl: seatDesktopControl({ team, seat: planned.name, home: home ?? null, root }), ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, ...(home !== undefined && claudeTokenSeats({ home, root, team, ...(sources.launch.secretStore === undefined ? {} : { store: sources.launch.secretStore }) }).has(planned.name) ? { claudeRoute: true as const } : {}), desktopControl: seatDesktopControl({ team, seat: planned.name, home: home ?? null, root }), ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', who, `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());

@@ -37,6 +37,7 @@ import { WEBHOOK_SENDER_DEADLINE_MAX_MS, WEBHOOK_SENDER_DEADLINE_MIN_MS, WEBHOOK
 import { EVENT_SEGMENT_MB, EVENT_SEGMENT_MB_MAX, EVENT_THRESHOLDS } from './events.ts';
 import { formatModelRule, modelRuleProblem, parseModelRule } from './model-rule.ts';
 import { parseGrokCommandDeny, type GrokCommandDeny } from '../settings/grok-command-deny.ts';
+import { CLAUDE_AUTH_DEFAULT, parseClaudeAuth } from '../settings/claude-auth.ts';
 
 /** The four inheritance levels of Kernel amendment 02 §2.2, outermost first. */
 export type PolicyLevel = 'entity' | 'project' | 'team' | 'seat';
@@ -176,6 +177,7 @@ export const ADVISED_POLICY_NAMES = [
   'shared-checkout-hygiene',
   'pane-conduct',
   'seat-numbering',
+  'claude-auth',
   'board',
   'review-terms',
   'workspace-mode',
@@ -283,6 +285,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   development_mode: 'development-mode',
   shared_checkout_hygiene: 'shared-checkout-hygiene',
   seat_numbering: 'seat-numbering',
+  claude_auth: 'claude-auth',
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
   workspace_mode: 'workspace-mode',
@@ -2263,6 +2266,20 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     lowerLevelChooses: true,
     parseValue: parseSeatNumberingValue,
+    isWithin: () => true,
+  },
+  // How a Claude Code seat on Anthropic signs in: `login` (the default) keeps the CLI's own session
+  // login; `store`, set explicitly, hands it the subscription token the machine's secret store
+  // holds as CLAUDE_CODE_OAUTH_TOKEN. A choice, not a limit, so a lower level chooses freely.
+  'claude-auth': {
+    name: 'claude-auth',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: CLAUDE_AUTH_DEFAULT,
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: parseClaudeAuth,
+    valueProblem: () => 'claude-auth must be store or login',
     isWithin: () => true,
   },
   'pane-conduct': {

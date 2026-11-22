@@ -181,6 +181,7 @@
     "test/ci-shard-tests.test.ts": 0,
     "test/ci-up-warning-independent.test.ts": 4,
     "test/claude-adapter.test.ts": 3,
+    "test/claude-auth-token.test.ts": 5,
     "test/claude-descendant-pointer-independent.test.ts": 0,
     "test/claude-hook-active-root.test.ts": 4,
     "test/claude-seat-folder.test.ts": 5,

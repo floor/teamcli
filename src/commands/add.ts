@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { claudeTokenSeats } from '../settings/claude-auth-policy.ts';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
@@ -1427,7 +1428,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // launch only if the plan runs the seat's line, and a refusal before that puts this back.
     const priorBinding = readState(dir).sessions[session]?.seats[planSeat.name]?.presence_binding;
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, desktopControl: seatDesktopControl({ team: prepared.team, seat: planSeat.name, home: sources.home ?? null, root }), ...(prepared.team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: prepared.team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: prepared.team.project, root, home: sources.home });
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, ...(sources.home !== undefined && claudeTokenSeats({ home: sources.home, root, team: prepared.team, ...(sources.launch.secretStore === undefined ? {} : { store: sources.launch.secretStore }) }).has(planSeat.name) ? { claudeRoute: true as const } : {}), desktopControl: seatDesktopControl({ team: prepared.team, seat: planSeat.name, home: sources.home ?? null, root }), ...(prepared.team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: prepared.team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: prepared.team.project, root, home: sources.home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }

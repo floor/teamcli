@@ -48,6 +48,12 @@ export type SecretStore = {
    * TeamCLI's own line reader alike. Nothing is read here: the command names the entry only.
    */
   lookupCommand(name: SecretName): SecretLookup;
+  /**
+   * Whether the store holds an entry by this name, read without its value: true, false, or null
+   * when the store cannot say. Optional, so a store that cannot tell (a test's fake among them)
+   * answers as one that holds nothing. A launch line still names the entry only.
+   */
+  holds?(name: SecretName): boolean | null;
 };
 
 export type SecretStoreOptions = {
@@ -66,7 +72,19 @@ export type SecretStoreOptions = {
   isFile?: (path: string) => boolean;
   /** Whether a path is a file this user may execute. Injected likewise. */
   isExecutable?: (path: string) => boolean;
+  /** The presence probe `holds` runs: the store's own command with the arguments that name an
+   *  entry without printing its value, answering its exit status (null: it could not be run).
+   *  Injected by a test; absent, the system's own, never run while `TEAM_NO_SYSTEM_SECRETS=1`. */
+  probe?: (command: string, args: string[]) => number | null;
+  /** The text of a file, or null when it cannot be read. Injected by a test likewise. */
+  readText?: (path: string) => string | null;
 };
+
+/** Whether this process may probe the system's store for presence: the test suite sets
+ *  `TEAM_NO_SYSTEM_SECRETS=1`, so no scene that builds no store of its own touches the machine's. */
+export function systemProbeAllowed(env: Record<string, string | undefined>): boolean {
+  return env.TEAM_NO_SYSTEM_SECRETS !== '1';
+}
 
 /** The reason a store gives when it holds no entry by the name asked: a caller may tell an absent
  *  entry from a store that could not answer by this sentence alone. */

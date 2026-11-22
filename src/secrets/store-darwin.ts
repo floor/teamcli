@@ -6,8 +6,10 @@
 // neutral. The service name is the only argument the system tool ever sees; the key is taken from
 // its standard output, is never echoed, and is never an argument, an environment variable or
 // input to any process.
+import { spawnSync } from 'node:child_process';
+import { hostedCommit } from '../host/request-scope.ts';
 import { realSecretRun, SECRET_NAME, type SecretRunner } from './run.ts';
-import type { SecretLookup, SecretName, SecretRead, SecretStore, SecretStoreOptions } from './store.ts';
+import { systemProbeAllowed, type SecretLookup, type SecretName, type SecretRead, type SecretStore, type SecretStoreOptions } from './store.ts';
 
 export type KeyResult = { ok: true; key: string } | { ok: false; reason: string };
 
@@ -61,9 +63,27 @@ function serviceOf(name: SecretName): string {
   return typeof name === 'string' ? name : name.keychain;
 }
 
+/** The system tool's exit status when it holds no item by that name. */
+const NOT_FOUND = 44;
+
+/** The presence probe: the same lookup without `-w`, so the tool prints the item's attributes and
+ *  never its password, and every stream is discarded; only the exit status is read. */
+function realProbe(command: string, args: string[]): number | null {
+  hostedCommit('node:child_process.spawnSync');
+  const result = spawnSync(command, args, { stdio: 'ignore', timeout: KEYCHAIN_TIMEOUT_MS });
+  return result.error ? null : result.status;
+}
+
 export function darwinSecretStore(options: SecretStoreOptions = {}): SecretStore {
   const lookup = securityRunWith(options.runner ?? realSecretRun);
+  const probe = options.probe ?? (systemProbeAllowed(options.env ?? process.env) ? realProbe : null);
   return {
+    holds(asked: SecretName): boolean | null {
+      const name = serviceOf(asked);
+      if (!SECRET_NAME.test(name) || probe === null) return null;
+      const status = probe(SECURITY, ['find-generic-password', '-s', name]);
+      return status === 0 ? true : status === NOT_FOUND ? false : null;
+    },
     async read(asked: SecretName): Promise<SecretRead> {
       const name = serviceOf(asked);
       const out = await lookup(name);

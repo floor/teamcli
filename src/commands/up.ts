@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from 'node:fs';
+import { claudeTokenSeats } from '../settings/claude-auth-policy.ts';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -3899,8 +3900,11 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
   const inboundOf = (name: string) => team.seats.find((item) => item.name === name)?.inbound;
+  // The seats handed the store's subscription token get the direct route in their file.
+  const tokenSeats = sources.home === undefined ? new Set<string>() : claudeTokenSeats({ home: sources.home, root, team, ...(sources.launch?.secretStore === undefined ? {} : { store: sources.launch.secretStore }) });
   const hookSeats = (fresh: readonly string[] = []) => seats.map(({ name, cli, launch, human }) => ({
     name, cli, launch,
+    ...(tokenSeats.has(name) ? { claudeRoute: true as const } : {}),
     desktopControl: seatDesktopControl({ team, seat: name, home: sources.home ?? null, root }),
     ...(inboundOf(name) === undefined ? {} : { inbound: inboundOf(name) }),
     ...(human ? { human: true as const } : {}),

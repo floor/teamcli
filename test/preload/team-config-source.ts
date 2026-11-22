@@ -5,6 +5,9 @@ import { afterEach } from 'bun:test';
 
 process.env.TEAM_CONFIG_SOURCE ??= 'file';
 process.env.TEAM_NO_SYSTEM_TRASH ??= '1';
+// No scene asks the machine's own secret store whether it holds an entry (a Claude seat's
+// subscription token, src/settings/claude-auth-policy.ts): a scene that needs one injects a store.
+process.env.TEAM_NO_SYSTEM_SECRETS ??= '1';
 // The seats' generated settings files live under TeamCLI's machine folder in real use. The older
 // scenes build their path by hand in the project state folder, so the suite keeps that layout
 // (`project`); test/cli-hook-home.test.ts covers the machine folder itself. No scene writes
