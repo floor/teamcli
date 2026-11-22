@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -418,5 +418,21 @@ describe('the long-lived reader', () => {
     registerAgent(home, init({ reach: { team: 'teamcli', seat: 'builder-2', session: 'teamcli', pane: 'w37:p1', address: null } }));
     expect(agentFolderStamp(dir, names())).not.toBe(edited);
     expect(agentFolderStamp(join(home, 'nowhere'), [])).toBeNull();
+  });
+
+  test('a linked agent file is stamped by the file the parser reads: an edit of its target moves the stamp', () => {
+    const first = registerAgent(home, init());
+    const dir = agentsDir(home);
+    const names = () => readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
+    const path = join(dir, `${first.id}.yaml`);
+    const target = join(home, 'linked-agent.yaml');
+    writeFileSync(target, readFileSync(path, 'utf8'));
+    unlinkSync(path);
+    symlinkSync(target, path);
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w36:p1']);
+    const stamp = agentFolderStamp(dir, names());
+    writeFileSync(target, readFileSync(target, 'utf8').replace('w36:p1', 'w35:p1'));
+    expect(agentFolderStamp(dir, names())).not.toBe(stamp);
+    expect(readAgents(home).map((agent) => agent.reach.pane)).toEqual(['w35:p1']);
   });
 });
