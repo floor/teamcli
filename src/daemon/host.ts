@@ -15,7 +15,6 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { flockBound, flockExclusive } from '../lock/flock.ts';
-import { connect } from 'node:net';
 import { cpus, homedir, loadavg } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
@@ -39,6 +38,7 @@ import { restoreLifecycleProblem } from '../launch/restore-lifecycle.ts';
 import { spawnWakeChild } from './wake/spawn.ts';
 import { pidAlive, readState, type State } from '../state.ts';
 import { processStartOf } from '../launch/codex-endpoint.ts';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { probeDaemonSocket, probeDaemonSocketReading, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
@@ -659,7 +659,6 @@ export const SEND_ABSENT_MS = 60_000;
 function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
-    const socket = connect({ path: socketPath });
     const finish = (ok: boolean): void => {
       if (settled) return;
       settled = true;
@@ -667,10 +666,10 @@ function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
       socket.destroy();
       resolve(ok);
     };
+    const Bun = socketRuntime();
+    const { conn: socket, options, refused } = dialing(socketPath, { open: () => finish(true), close: () => finish(false) });
     const timer = setTimeout(() => finish(false), timeoutMs);
-    socket.on('error', () => finish(false));
-    socket.on('connect', () => finish(true));
-    socket.on('close', () => finish(false));
+    Bun.connect(options).catch(refused);
   });
 }
 
