@@ -100,7 +100,12 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       // Runs a confined seat's send and reply as that seat, from its outbox.
       'src/send/confined-outbox.ts',
       'src/process-tools-adapter.ts',
+      // The process kernel and the parent adapter start and read child processes for the CLI.
+      'src/process-kernel.ts',
+      'src/process-parent-adapter.ts',
       'src/herdr.ts',
+      // Reads and types into panes through the terminal host directly.
+      'src/herdr-direct.ts',
       // Ends processes a closed pane left behind (the service manager's reaper).
       'src/orphan-reaper.ts',
       'src/temp-folders.ts',
@@ -129,6 +134,8 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/conformance',
       'src/daemon',
       'src/file',
+      // The send host: its effect guard, request scope, peer check and supervisor.
+      'src/host',
       'src/launch',
       'src/launchers',
       'src/lobby',
@@ -139,9 +146,13 @@ export const CAREFUL_RULES: readonly LaneRule[] = [
       'src/profiles',
       // Quota exhaustion and fallback can change admission to a wake.
       'src/quota',
+      // The mail queue a send writes and a seat reads.
+      'src/queue',
       'src/reach',
       'src/registry',
       'src/release',
+      // The socket adapter the broker and the send host dial and serve on.
+      'src/runtime',
       'src/security',
       // Reads the machine's secrets (Keychain, the encrypted entity file).
       'src/secrets',

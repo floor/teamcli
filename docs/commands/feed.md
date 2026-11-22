@@ -12,9 +12,12 @@ Each completed `team send` run (`delivered`, `delivered (read)`, `delivered (lat
 `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per line to
 `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|drop|mcp-inbox|native|headless-resume|channel|session|webhook>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>","wake_keys_sent":<true|false>}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","stamped":true,"body_sha256":"<sha256 hex>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|drop|mcp-inbox|native|headless-resume|channel|session|webhook>","session":"<session-id>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>","rule":"<admission rule>","wake_keys_sent":<true|false>}
 
-The fields after `outcome` are optional. `wake_keys_sent` is written when the send ran a typed
+The fields after `outcome` are optional. `stamped` and `body_sha256` are written together on a
+stamped send's line: the line then carries no body (`body` is empty) but the body's sha256, and
+the body lives only in the stamped record. `rule` is the rule that admitted the pair, written on a first-leg delivery's line: `team trace`
+reads that walk's staging from it. `wake_keys_sent` is written when the send ran a typed
 wake that did not deliver: it says whether any key reached the pane, so the watch can tell a wake
 refused before any key from one submitted and not taken. `from_team` is the sending team's registry id, written by
 the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a

@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import { listUnackedMessages, type UnackedMessage } from '../commands/messages.ts';
 import { listUnread, type InboxMessage } from '../mcp/inbox.ts';
-import { verifiedRecordAt, type RecordPayload, type RecordReader } from '../send/record.ts';
+import { isStampedPayload, recordFile, recordStampAt, verifiedRecordAt, type RecordPayload, type RecordReader } from '../send/record.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { seatMailDirIn } from '../queue/mail-tree.ts';
 
@@ -58,6 +58,15 @@ export class MailPass {
     const payload = this.key === null ? null : verifiedRecordAt(path, id, this.key);
     this.records.set(at, payload);
     return payload;
+  };
+
+  /** Whether the record at `dropDir/id` is stamped (`recordStampAt`), answered from the verified
+   *  payload this pass already holds when it read the record, so one pass opens a record once. A
+   *  record the pass has not read, or could not verify, is read for its stamp as before. */
+  readonly stampAt = (dropDir: string, id: string): boolean | 'unknown' => {
+    const held = this.records.get(`${recordFile(dropDir, id)}\u0000${id}`);
+    if (held !== undefined && held !== null && held.id === id) return isStampedPayload(held);
+    return recordStampAt(dropDir, id);
   };
 
   /** One seat's drop folder. */

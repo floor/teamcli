@@ -19,6 +19,7 @@ import { listUnread, MESSAGE_ID, receiptPath } from '../src/mcp/inbox.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { readerLine } from '../src/send/frame.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { readHistory } from '../src/send/history.ts';
@@ -421,12 +422,14 @@ seats:
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');
 
-    // The hook takes the sender from the verified record: one line naming the claimed sender,
-    // `owner`, and the record's own time. The body's own opening line names "the owner", which
-    // is not that verified name, so it is content and is served verbatim under the header.
+    // The hook takes the sender from the verified record: one line naming the owner and the
+    // record's own time. The body's own opening line (`from the owner — admitted by: …`) names
+    // that same verified sender, so it is folded into the header, and the rest is served under
+    // it, ending with the reader line that names the record's id for `team reply`/`team ack`.
     const held = readRecord(join(dir, id), id);
     if (!held.ok || held.record === null) throw new Error('the drop record does not read');
-    expect(landing(run(command))).toBe(`owner · 2026-10-17 12:00Z · admitted: owner\n\n${held.record.payload.body}`);
+    expect(held.record.payload.body).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(landing(run(command))).toBe(`${MARK}hello\n\n${readerLine(id)}`);
     expectReadReceipt(dir, id);
     expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
     // The receipt is what says it was handed over: the next turn prints nothing.
@@ -538,7 +541,7 @@ seats:
     const dir = dropsAt();
     plant(ID1, 'hello');
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}hello`);
+    expect(landing(run(command))).toBe(`${MARK}hello\n\n${readerLine(ID1)}`);
     expectReadReceipt(dir, ID1);
     expect(run(command)).toBe('');
   }, 30_000);
@@ -591,7 +594,7 @@ seats:
     const body = `from the owner\n\n$(touch ${join(base, 'surprise')}) \`whoami\` "quoted"`;
     plant(ID1, body);
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}${body}`);
+    expect(landing(run(command))).toBe(`${MARK}${body}\n\n${readerLine(ID1)}`);
     expect(existsSync(join(base, 'surprise'))).toBe(false);
   }, 30_000);
 
@@ -599,7 +602,7 @@ seats:
     const body = 'a "quoted" line \\ with a backslash\tand a tab\x01 and \x1f\x08\x0c';
     plant(ID1, `${body}\nsecond line`);
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}${body}\nsecond line`);
+    expect(landing(run(command))).toBe(`${MARK}${body}\nsecond line\n\n${readerLine(ID1)}`);
   }, 30_000);
 
   test('two messages land as two paragraphs, newest first', () => {
@@ -608,7 +611,8 @@ seats:
     utimesSync(one, new Date(NOW.getTime() - 2_000), new Date(NOW.getTime() - 2_000));
     utimesSync(join(dropsAt(), ID2), new Date(NOW.getTime() - 1_000), new Date(NOW.getTime() - 1_000));
     const command = dropCommand(install());
-    expect(landing(run(command))).toBe(`${MARK}second\n\n${MARK}first`);
+    // Each served body ends with its own reader line, the shortest id prefix the mailbox keeps unique.
+    expect(landing(run(command))).toBe(`${MARK}second\n\n${readerLine(ID2, [ID1])}\n\n${MARK}first\n\n${readerLine(ID1, [ID2])}`);
   }, 30_000);
 
   test('one turn reads five messages at most, counts the rest, and they wait for the next', () => {

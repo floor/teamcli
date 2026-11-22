@@ -267,6 +267,10 @@ describe('team owner-seat install', () => {
       '// src/client/owner-spend-main.ts',
       '// src/client/owner-spend.ts',
       '// src/client/owner-state-roots.ts',
+      // The send host's effect guard: every file-changing `node:fs` call goes through it, and it
+      // is a leaf itself (`node:fs` and the request scope, which imports nothing).
+      '// src/host/guarded-fs.ts',
+      '// src/host/request-scope.ts',
     ]);
     const folder = realpathSync(mkdtempSync(join(tmpdir(), 'owner-helper-')));
     try {

@@ -2,7 +2,7 @@
 // check` must not name its skipped socket as a difference to fix. A plain seat with the same
 // held frame is named, so the scene pins the exemption rather than a check that stays silent.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
@@ -66,6 +66,12 @@ function fixture(): { made: World; names: string[] } {
   ];
   const made = world(null, extras);
   restored.push(made.cleanup);
+  // The socket is an opt-in the team file declares: both seats carry `inbound: accept`, so the
+  // held frame, not a missing opt-in, is what keeps each one off its socket.
+  const file = join(made.dir, 'team.yaml');
+  let text = readFileSync(file, 'utf8');
+  for (const seat of ['chan', 'plain']) text = text.replace(`    name: ${seat}\n`, `    name: ${seat}\n    inbound: accept\n`);
+  writeFileSync(file, text);
   const names = ['lead', 'helper', 'native', 'chan', 'plain'];
   const sockets = socketsDir(made);
   mkdirSync(sockets, { recursive: true });
