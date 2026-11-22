@@ -28,6 +28,8 @@ import { currentRunMemo } from '../run-memo.ts';
 import { writeAtomic } from '../state.ts';
 import { NAME_POOL_DEFAULT, NAME_POOLS } from './name-pools.ts';
 import { readStoredTeamConfig } from './team-config-store.ts';
+import { TEAM_FILE } from '../file/load.ts';
+import { teamTextTarget } from '../file/team-text.ts';
 import { readTeams, teamIdOf, TeamsError, withTeamsLock, type TeamRecord } from './teams.ts';
 
 /** The comparison the setting names: case-insensitive, so `Cicero` and `cicero` are one name. */
@@ -111,9 +113,10 @@ export function nicknameHolders(home: string, exceptTeamId: string): NicknameHol
 type TeamView = { team: TeamFile | null; seats: Set<string>; named: Array<{ seat: string; nickname: string }> };
 
 /**
- * A team as the registry's stored record, the team file at its root and its roster show it — the
- * union, never one copy preferred over another: a file-backed team's stored copy can lag its team
- * file and roster, and a name any copy shows is held. A copy that cannot be read adds nothing.
+ * A team as the registry's stored record, its team file (when that is its active source) and its
+ * roster show it — the union, never one copy preferred over another: a file-backed team's stored
+ * copy can lag its team file and roster, and a name any copy shows is held. A copy that cannot be
+ * read adds nothing.
  */
 function teamView(home: string, id: string, root: string, record: TeamRecord | null): TeamView {
   const view: TeamView = { team: null, seats: new Set(), named: [] };
@@ -138,9 +141,18 @@ function teamView(home: string, id: string, root: string, record: TeamRecord | n
     const stored = readStoredTeamConfig(home, id);
     if (stored !== null) add(stored.text, stored.root);
   } catch {}
+  // The team file counts only where it is the team's active source, as every configuration read
+  // decides (src/file/team-text.ts:teamTextTarget): a registry-backed team's leftover file from
+  // its import is not the team, and a name it still carries is free.
+  let fileActive = false;
   try {
-    add(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'), root);
+    fileActive = teamTextTarget(join(root, TEAM_FILE), { home }).kind === 'file';
   } catch {}
+  if (fileActive) {
+    try {
+      add(readFileSync(join(root, TEAM_FILE), 'utf8'), root);
+    } catch {}
+  }
   for (const line of record?.roster ?? []) {
     view.seats.add(line.seat);
     if (line.nickname !== undefined && !sameNickname(line.nickname, line.seat)) hold(line.seat, line.nickname);

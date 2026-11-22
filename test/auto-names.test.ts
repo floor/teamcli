@@ -332,6 +332,29 @@ describe('name claims', () => {
   });
 });
 
+describe('a registry-backed team\'s leftover team file', () => {
+  test('holds no name: a seat renamed in the registry frees the old name the stale file still carries', () => {
+    const world = place({
+      a: teamText('alpha', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
+      c: teamText('gamma', 'acme', [NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
+    });
+    // The import's leftover file still names the seat; the registry's record (the team) does not.
+    const leftover = stored(world, 'a').replace('    name: checker\n', `    name: checker\n    nickname: ${POOL[0]!}\n`);
+    writeFileSync(join(world.roots.a!, '.agents', 'team.yaml'), leftover);
+    const was = process.env.TEAM_CONFIG_SOURCE;
+    try {
+      process.env.TEAM_CONFIG_SOURCE = 'registry';
+      expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
+      // The same file, where it is the team's source, holds the name.
+      process.env.TEAM_CONFIG_SOURCE = 'file';
+      expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
+    } finally {
+      if (was === undefined) delete process.env.TEAM_CONFIG_SOURCE;
+      else process.env.TEAM_CONFIG_SOURCE = was;
+    }
+  });
+});
+
 describe('the approval lock', () => {
   test('is keyed by the checkout root, as the generation is, whichever store a signing writes', () => {
     const world = place({ a: teamText('alpha', 'acme', [LEAD]) });

@@ -667,7 +667,8 @@ acme:
   name. The name is published in that same transaction: a team the registry already holds shows
   it through its record, and a first run, which registers its row only later, through a claim in
   `~/.config/team/name-claims.json` that every pick reads. A name any copy of a registered team shows —
-  its stored registry record, its team file or its roster — is held, so a copy that lags never
+  its stored registry record, its team file (only where the file is the team's active source; a
+  registry-backed team's leftover file from its import holds nothing) or its roster — is held, so a copy that lags never
   frees a name another copy carries. A claim counts until one of those copies shows that name for
   that seat, and for a day at most; a claim whose team is archived, or whose seat no copy declares
   any more, is released. Every naming lock retires the claims no longer in force from the file. An add whose name was
