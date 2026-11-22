@@ -23,6 +23,7 @@ import {
 } from '../src/state.ts';
 
 const realReadFileSync = fs.readFileSync;
+const realExistsSync = fs.existsSync;
 
 let dir: string;
 beforeEach(() => {
@@ -322,6 +323,24 @@ describe('the shared read', () => {
     // The editing door still hands out its own copy.
     readState(dir).sessions.one!.seats.a!.stage = 'ready';
     expect(readStateShared(dir)).toBe(second);
+  });
+
+  test('an absent file is kept as the empty state it was observed as, not a file seen by a later look', () => {
+    const path = join(dir, STATE_FILE);
+    const populated = JSON.stringify({ format: 1, sessions: { one: { ...emptySession(), seats: { a: { stage: 'ready' } } } } });
+    // A file is created right after the first look finds none, and removed before the next poll.
+    const exists = spyOn(fs, 'existsSync').mockImplementation(((file: unknown) => file === path || realExistsSync(file as string)) as typeof fs.existsSync);
+    const read = spyOn(fs, 'readFileSync').mockImplementation(((file: unknown, ...rest: unknown[]) => {
+      if (file === path) return populated;
+      return (realReadFileSync as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.readFileSync);
+    try {
+      readStateShared(dir);
+    } finally {
+      exists.mockRestore();
+      read.mockRestore();
+    }
+    expect(readStateShared(dir)).toEqual({ format: 1, sessions: {} });
   });
 
   test('the state kept is parsed from the bytes it is compared by (A, then B, then A again)', () => {
