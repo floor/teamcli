@@ -7,6 +7,7 @@ import {
   approvalStanding,
   LEGACY_LINE,
   storePath,
+  withApprovalLock,
   writeApproval,
   type Approval,
   type ApprovalRecord,
@@ -219,42 +220,50 @@ export function recordSeatDigestOf(standing: Standing, team: TeamFile, root: str
  */
 export function recordNamedSeatDigestsOf(standing: Standing, before: TeamFile, after: TeamFile, root: string, names: readonly string[], home: string = homedir()): string[] {
   if (standing.kind !== 'verified' || names.length === 0) return [];
-  const record = standing.record;
-  if (!validateTeamFile(record.file, { home, root, ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}) }).ok) return [];
-  const approved = approvedFingerprints(record, home).seats;
-  const current = fingerprints(after).seats;
-  const updates: Record<string, string> = {};
-  for (const name of names) {
-    const was = before.seats.find((seat) => seat.name === name);
-    const now = after.seats.find((seat) => seat.name === name);
-    const held = approved[name];
-    if (was === undefined || now === undefined || held === undefined || current[name] === undefined) continue;
-    const reverted = (stopped: boolean) => fingerprints({
-      ...after,
-      seats: after.seats.map((seat) => {
-        if (seat.name !== name) return seat;
-        const { nickname: _nickname, labelWritten: _written, ...rest } = seat;
-        return {
-          ...rest,
-          label: was.label,
-          stopped,
-          ...(was.nickname !== undefined ? { nickname: was.nickname } : {}),
-          ...(was.labelWritten === true ? { labelWritten: true as const } : {}),
-        };
-      }),
-    }).seats[name];
-    if (reverted(true) !== held && reverted(false) !== held) continue;
-    if (record.approval.fingerprints.seats[name] !== current[name]) updates[name] = current[name]!;
-  }
-  if (Object.keys(updates).length === 0) return [];
-  writeApproval(storePath(after.project, root, home), {
-    approval: {
-      ...record.approval,
-      fingerprints: { ...record.approval.fingerprints, seats: { ...record.approval.fingerprints.seats, ...updates } },
-    },
-    file: record.file,
-  }, [], home);
-  return Object.keys(updates);
+  const store = storePath(after.project, root, home);
+  // Read again at commit time, under the approval's own lock: the amendment applies only to the
+  // approval the naming run judged. One the owner changed or revoked since is left as it is, and
+  // the name reads as drift there, as a name set by hand does.
+  return withApprovalLock(store, () => {
+    const fresh = approvalStanding(root, home);
+    if (fresh.kind !== 'verified' || fresh.generation !== standing.generation) return [];
+    const record = fresh.record;
+    if (!validateTeamFile(record.file, { home, root, ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}) }).ok) return [];
+    const approved = approvedFingerprints(record, home).seats;
+    const current = fingerprints(after).seats;
+    const updates: Record<string, string> = {};
+    for (const name of names) {
+      const was = before.seats.find((seat) => seat.name === name);
+      const now = after.seats.find((seat) => seat.name === name);
+      const held = approved[name];
+      if (was === undefined || now === undefined || held === undefined || current[name] === undefined) continue;
+      const reverted = (stopped: boolean) => fingerprints({
+        ...after,
+        seats: after.seats.map((seat) => {
+          if (seat.name !== name) return seat;
+          const { nickname: _nickname, labelWritten: _written, ...rest } = seat;
+          return {
+            ...rest,
+            label: was.label,
+            stopped,
+            ...(was.nickname !== undefined ? { nickname: was.nickname } : {}),
+            ...(was.labelWritten === true ? { labelWritten: true as const } : {}),
+          };
+        }),
+      }).seats[name];
+      if (reverted(true) !== held && reverted(false) !== held) continue;
+      if (record.approval.fingerprints.seats[name] !== current[name]) updates[name] = current[name]!;
+    }
+    if (Object.keys(updates).length === 0) return [];
+    writeApproval(store, {
+      approval: {
+        ...record.approval,
+        fingerprints: { ...record.approval.fingerprints, seats: { ...record.approval.fingerprints.seats, ...updates } },
+      },
+      file: record.file,
+    }, [], home);
+    return Object.keys(updates);
+  });
 }
 
 /** `recordSeatDigest` as a command uses it: the caller's own standing, read once. */

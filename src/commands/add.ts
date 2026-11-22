@@ -83,7 +83,7 @@ import { registerInbox } from '../mcp/register.ts';
 import { channelLaunchFallback, channelLobbyFolder } from '../mcp/launch-config.ts';
 import { withoutChannel } from '../mcp/channel.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
-import { autoNamedText, nicknameChangeGate, withNamingLock } from '../registry/names.ts';
+import { autoNamedText, claimNames, namesAutoOf, nicknameChangeGate, withNamingLock } from '../registry/names.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
@@ -953,7 +953,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // never stops the add.
   // The name is said once the record carries it, below.
   let namedLine: string | null = null;
-  if (delegatePane === null) {
+  // Read only for a team whose entity hands out names: no other team pays a parse for it.
+  if (delegatePane === null && namesAutoOf(sources.home, team.entity).auto) {
     const named = autoNamedText({ home: sources.home, root, text: built.edited, only: [built.name] });
     const assignment = named.assignments[0];
     if (assignment !== undefined) {
@@ -1370,6 +1371,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             if (!gate.ok) return { kind: 'name-taken' as const, message: gate.message };
           }
           const wrote = writeTeamText(path, built.edited, where);
+          // The name is claimed before the lock is released (src/registry/names.ts:claimNames).
+          if (wrote.ok && namedLine !== null) claimNames({ home: sources.home ?? homedir(), root, before: team, after: prepared.team, now: sources.now() });
           return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };
         });
       });

@@ -22,6 +22,10 @@ import { DAEMON_NAME, LEAD_NAME, labelPersona, SEAT_NAME, seatNickname } from '.
 import type { Seat, TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { parseYaml, toValue } from '../yaml.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { currentRunMemo } from '../run-memo.ts';
+import { writeAtomic } from '../state.ts';
 import { NAME_POOL_DEFAULT, NAME_POOLS } from './name-pools.ts';
 import { readStoredTeamConfig, type StoredTeamConfig } from './team-config-store.ts';
 import { readTeams, teamIdOf, TeamsError, withTeamsLock, type TeamRecord } from './teams.ts';
@@ -123,6 +127,11 @@ export function nicknameHolders(home: string, exceptTeamId: string): NicknameHol
     throw error;
   }
   const out: NicknameHolder[] = [];
+  // A name claimed under the naming lock by a team the registry holds no row for yet — a first
+  // run, between its record write and its registration — is held as well (nameClaims).
+  for (const claim of liveClaims(home, teams)) {
+    if (claim.teamId !== exceptTeamId) out.push(claim);
+  }
   for (const [id, record] of Object.entries(teams)) {
     if (id === exceptTeamId || record.lifecycle === 'archived') continue;
     const stored = storedSeats(home, id);
@@ -267,10 +276,82 @@ export function nicknameTakenNotes(team: TeamFile, root: string, home: string | 
 // — the record's `nickname:` and the persona part of its `label:`, through the same validated
 // writer — so the next header, launch and roster read it like any other name.
 
+// The name claims: a small ledger beside the registry, `name-claims.json`, written only under the
+// naming lock in the same transaction as the record write that brings a nickname. It closes the
+// one gap the registry leaves: a team's nicknames reach other allocators through its registry
+// row, and a first run writes its record well before `up` registers the row. A claim counts only
+// while its team has no row (the row is the authority once it exists) and for a day at most, and
+// each claiming write prunes the rest, so a forgotten team or a removed seat leaves nothing behind.
+const CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
+
+type NameClaim = NicknameHolder & { at: string };
+
+function claimsPath(home: string): string {
+  return join(home, '.config', 'team', 'name-claims.json');
+}
+
+function readClaims(home: string): NameClaim[] {
+  try {
+    const value = JSON.parse(readFileSync(claimsPath(home), 'utf8')) as { claims?: unknown };
+    if (!Array.isArray(value.claims)) return [];
+    return value.claims.filter((claim): claim is NameClaim => typeof claim === 'object' && claim !== null
+      && typeof (claim as NameClaim).nickname === 'string' && typeof (claim as NameClaim).teamId === 'string'
+      && typeof (claim as NameClaim).seat === 'string' && typeof (claim as NameClaim).at === 'string');
+  } catch {
+    return [];
+  }
+}
+
+/** The claims still in force: young enough, and of a team the registry holds no row for. */
+function liveClaims(home: string, teams: Record<string, TeamRecord>, now: number = Date.now()): NameClaim[] {
+  return readClaims(home).filter((claim) => !Object.hasOwn(teams, claim.teamId) && now - Date.parse(claim.at) < CLAIM_TTL_MS);
+}
+
+/**
+ * Publishes the nicknames `after` brings that `before` did not carry, as claims of this team, and
+ * prunes every claim no longer in force. Called inside the naming lock, right after the record
+ * write, so the next allocator — in this checkout or another — sees the name before the lock is
+ * released.
+ */
+export function claimNames(input: { home: string | undefined; root: string; before: TeamFile | null; after: TeamFile; now?: Date }): void {
+  const { home, after } = input;
+  if (home === undefined) return;
+  const held = new Set((input.before?.seats ?? []).flatMap((seat) => {
+    const name = heldNickname(input.before!.seats, seat);
+    return name === null ? [] : [`${seat.name}\u0000${name.toLowerCase()}`];
+  }));
+  const teamId = teamIdOf(input.root);
+  const project = projectOf(home, null, after, input.root);
+  const at = (input.now ?? new Date()).toISOString();
+  const fresh: NameClaim[] = after.seats.flatMap((seat) => {
+    const nickname = heldNickname(after.seats, seat);
+    if (nickname === null || held.has(`${seat.name}\u0000${nickname.toLowerCase()}`)) return [];
+    return [{ nickname, teamId, team: after.project, root: input.root, entity: after.entity, projectId: project.id, seat: seat.name, at }];
+  });
+  let teams: Record<string, TeamRecord> = {};
+  try {
+    teams = readTeams(home);
+  } catch {}
+  const kept = liveClaims(home, teams).filter((claim) => !(claim.teamId === teamId && fresh.some((one) => one.seat === claim.seat)));
+  if (fresh.length === 0 && kept.length === readClaims(home).length) return;
+  writeAtomic(claimsPath(home), `${JSON.stringify({ format: 1, claims: [...kept, ...fresh] }, null, 2)}\n`);
+}
+
 /** The one lock every naming write takes — the registry's teams lock, machine-wide, so it covers
  *  every `names.unique` scope: a pick and its write inside it are one transaction. */
 export function withNamingLock<T>(home: string | undefined, work: () => T): T {
-  return home === undefined ? work() : withTeamsLock(home, work);
+  if (home === undefined) return work();
+  return withTeamsLock(home, () => {
+    // A fresh view inside the lock: a registry row another process wrote after this run first
+    // read the registry must not be hidden by the run's memo.
+    const memo = currentRunMemo();
+    if (memo !== null) {
+      memo.teamsStrict.clear();
+      memo.teamsTolerant.clear();
+      memo.teamLoads.clear();
+    }
+    return work();
+  });
 }
 
 /** One seat's handed-out name: the nickname, and the label it now carries (`<Nickname> · <role>`). */

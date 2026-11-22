@@ -21,7 +21,8 @@ import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamText, writeTeamText } from '../file/team-text.ts';
-import { autoNamedText, withNamingLock } from '../registry/names.ts';
+import { validateTeamFile } from '../file/validate.ts';
+import { autoNamedText, claimNames, withNamingLock } from '../registry/names.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -4273,13 +4274,15 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
       } catch {}
       const planned = current === null ? null : autoNamedText({ home: sources.home, root, text: current, ...(scoped ? { only: [...scopedSeats] } : {}) });
       if (planned === null || planned.assignments.length === 0) return { named: planned, wrote: null };
-      return {
-        named: planned,
-        wrote: writeTeamText(file, planned.text, {
-          home: sources.home, command: 'up', ...(sources.now !== undefined ? { now: sources.now } : {}),
-          audit: { caller, rule: ownerToken || ownerSeat ? 'owner-seat' : 'owner-or-leads' },
-        }),
-      };
+      const wrote = writeTeamText(file, planned.text, {
+        home: sources.home, command: 'up', ...(sources.now !== undefined ? { now: sources.now } : {}),
+        audit: { caller, rule: ownerToken || ownerSeat ? 'owner-seat' : 'owner-or-leads' },
+      });
+      // The names are claimed before the lock is released (src/registry/names.ts:claimNames).
+      const was = validateTeamFile(current as string, { home: sources.home, root });
+      const now = validateTeamFile(planned.text, { home: sources.home, root });
+      if (wrote.ok && now.ok) claimNames({ home: sources.home, root, before: was.ok ? was.team : null, after: now.team, ...(sources.now !== undefined ? { now: sources.now() } : {}) });
+      return { named: planned, wrote };
     });
     if (named !== null && wrote !== null) {
       if (wrote.ok) {

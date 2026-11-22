@@ -8,6 +8,7 @@ import { canonicalRecord, teamRecordOf } from '../file/canonical-record.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { withLock } from '../state.ts';
 import { parseYaml } from '../yaml.ts';
 import { bumpGeneration, generationPath, generationPresence, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
@@ -612,6 +613,38 @@ export function writeApproval(
   seats: readonly LedgerEntry[],
   home: string = homedir(),
   now: Date = new Date(),
+): number {
+  return withApprovalLock(store, () => writeApprovalLocked(store, record, seats, home, now));
+}
+
+/** The stores this process holds the approval lock of: a signer inside a locked amendment takes
+ *  it again without waiting on itself. */
+const approvalLocksHeld = new Set<string>();
+
+/**
+ * The approval's own lock: one lock file in the store's folder, so every signing of one project's
+ * approval — `writeApproval` and an amendment that reads the record it amends — is one at a time.
+ * Re-entrant inside one synchronous call.
+ */
+export function withApprovalLock<T>(store: string, work: () => T): T {
+  if (approvalLocksHeld.has(store)) return work();
+  mkdirSync(store, { recursive: true, mode: 0o700 });
+  return withLock(store, () => {
+    approvalLocksHeld.add(store);
+    try {
+      return work();
+    } finally {
+      approvalLocksHeld.delete(store);
+    }
+  });
+}
+
+function writeApprovalLocked(
+  store: string,
+  record: ApprovalRecord,
+  seats: readonly LedgerEntry[],
+  home: string,
+  now: Date,
 ): number {
   const key = keyOf(home);
   // Signed over the canonical team record, never the text: a file whose keys are reordered

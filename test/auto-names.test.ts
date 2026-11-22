@@ -7,13 +7,14 @@
 // a scratch root: no live registry is read.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runConfig, type ConfigSources } from '../src/commands/config.ts';
 import { runNames } from '../src/commands/names.ts';
 import { seatNickname, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { autoNamedText, autoNamePlan, unnamedSeatNotes, withNamingLock } from '../src/registry/names.ts';
+import { autoNamedText, autoNamePlan, claimNames, unnamedSeatNotes, withNamingLock } from '../src/registry/names.ts';
+import { writeTeamText } from '../src/file/team-text.ts';
 import { NAME_POOLS } from '../src/registry/name-pools.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -235,6 +236,53 @@ describe('the naming lock', () => {
   });
 });
 
+describe('name claims', () => {
+  test('a name claimed by a team the registry holds no row for yet is passed over by the next pick', () => {
+    const world = place({ c: teamText('gamma', 'acme', [NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]) });
+    // A first run in another checkout: its record names a seat, and no registry row exists yet.
+    const first = validateTeamFile(teamText('delta', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), NAMED('tester', 'checker', POOL[0]!)]));
+    if (!first.ok) throw new Error(JSON.stringify(first.errors));
+    const elsewhere = join(world.roots.c!, '..', 'delta');
+    claimNames({ home: world.home, root: elsewhere, before: null, after: first.team, now: new Date() });
+    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
+  });
+
+  test('a claim older than a day, or of a team the registry now holds, no longer counts', () => {
+    const world = place({ c: teamText('gamma', 'acme', [NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]) });
+    const first = validateTeamFile(teamText('delta', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), NAMED('tester', 'checker', POOL[0]!)]));
+    if (!first.ok) throw new Error(JSON.stringify(first.errors));
+    claimNames({ home: world.home, root: join(world.roots.c!, '..', 'delta'), before: null, after: first.team, now: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
+    // A claim by a team that has its row: the row (and its stored record) is the authority.
+    const own = validateTeamFile(stored(world, 'c'));
+    if (!own.ok) throw new Error(JSON.stringify(own.errors));
+    claimNames({ home: world.home, root: world.roots.c!, before: null, after: { ...own.team, seats: own.team.seats.map((seat) => seat.name === 'checker' ? { ...seat, nickname: POOL[2]! } : seat) }, now: new Date() });
+    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
+  });
+});
+
+describe('team config edit under the naming lock', () => {
+  test('a record that changed while the editor was open is not overwritten, and the draft is kept', async () => {
+    const world = place({ a: teamText('alpha', 'acme', [LEAD, SEAT('implementer', 'builder')]) });
+    const root = world.roots.a!;
+    const other = stored(world, 'a').replace('    name: builder\n', '    name: builder\n    nickname: Wren\n');
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runConfig(['edit'], io, {
+      ...sourcesOf(world),
+      editor: (draft) => {
+        // Another writer lands first, then the draft is saved.
+        const wrote = writeTeamText(join(root, '.agents', 'team.yaml'), other, { home: world.home, env: { TEAM_CONFIG_SOURCE: 'registry' } });
+        if (!wrote.ok) throw new Error(JSON.stringify(wrote.errors));
+        writeFileSync(draft, readFileSync(draft, 'utf8').replace('    name: builder\n', '    name: builder\n    effort: high\n'));
+        return 0;
+      },
+    });
+    expect(code).toBe(1);
+    expect(io.err).toContain('changed while this edit was open, and nothing was written; your edit is kept at ');
+    expect(stored(world, 'a')).toBe(other);
+  });
+});
+
 describe('team names fill', () => {
   test('--dry-run prints the plan and writes nothing; the real run writes it; a second run has nothing to do', async () => {
     const world = place({ a: teamText('alpha', 'acme', [LEAD, SEAT('implementer', 'builder')]) }, '    auto: off\n');
@@ -282,7 +330,8 @@ describe('team names fill', () => {
     const before = stored(world, 'a');
     const io = testIo(world.roots.a!);
     expect(await runNames(['fill'], io, sourcesOf(world))).toBe(1);
-    expect(io.err).toContain('team names: alpha: only the owner edits the team\'s record');
+    // The refusal is the owner door's: from a seat, or from a run with no terminal (as in CI).
+    expect(io.err).toMatch(/^team names: alpha: only the owner (edits the team's record|runs this, from a terminal outside herdr)/);
     expect(stored(world, 'a')).toBe(before);
   });
 
