@@ -186,7 +186,7 @@ describe('the line rule', () => {
 
 describe('the launch plan', () => {
   test('only the Anthropic Claude seat gets the lookup; no value is read, recorded or printed', () => {
-    const w = world();
+    const w = world('store');
     expect(claudeAuthInForce({ home: w.home, root: w.root, team: w.team })).toBe('store');
     const store = fakeStore([CLAUDE_TOKEN_ENTRY, 'DEEPSEEK_API_KEY']);
     const { launches, steps, text } = plan(w, store);
@@ -215,7 +215,7 @@ describe('the launch plan', () => {
   });
 
   test('a seat on the shipped claude-code launcher, on Anthropic, takes it on its resolved line', () => {
-    const w = world();
+    const w = world('store');
     const steps = upPlan({
       root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
       cliHooks: { lead: settingsFile(join(w.root, 'lead.json')) }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]),
@@ -227,14 +227,15 @@ describe('the launch plan', () => {
     // The resolved launch's record is reusable (a repair, a restore): it keeps no lookup, no token
     // word and no route, so a reuse goes through the planner again.
     const record = op?.do === 'launch' ? op.recordLine ?? '' : '';
-    expect(record).toContain(' claude --model claude-opus-5-5');
+    expect(record).toContain('claude --model claude-opus-5-5');
+    expect(record).not.toContain('--settings');
     for (const word of [CLAUDE_TOKEN_ENTRY, 'fake-store-lookup', '{secret:', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_']) expect(record).not.toContain(word);
     expect(command).toContain(`${WORD} GH_TOKEN=`);
     expect(command).toContain(' claude --model claude-opus-5-5');
   });
 
   test('a seat whose settings file holds no direct route, or that has none, gets nothing (fail closed)', () => {
-    const w = world();
+    const w = world('store');
     expect(plan(w, fakeStore([CLAUDE_TOKEN_ENTRY, 'DEEPSEEK_API_KEY']), false).launches.get('lead')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
     const steps = upPlan({
       root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
@@ -245,7 +246,7 @@ describe('the launch plan', () => {
   });
 
   test('managed Claude settings on the machine withhold the token from every seat', () => {
-    const w = world();
+    const w = world('store');
     const steps = upPlan({
       root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
       managedClaudeSettings: '/etc/claude-code/managed-settings.json',
@@ -269,7 +270,7 @@ describe('the launch plan', () => {
   });
 
   test('a store that holds no entry launches the seat as before', () => {
-    const w = world();
+    const w = world('store');
     const { launches } = plan(w, fakeStore(['DEEPSEEK_API_KEY']));
     expect(launches.get('lead')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
   });
@@ -283,16 +284,47 @@ describe('the launch plan', () => {
     expect(store.asked).toEqual([]);
   });
 
-  test('claude-auth store, declared, is the default\'s behaviour', () => {
+  test('the default is login: with nothing declared, no seat is handed the token and the store is not asked', () => {
+    const w = world();
+    expect(claudeAuthInForce({ home: w.home, root: w.root, team: w.team })).toBe('login');
+    const store = fakeStore([CLAUDE_TOKEN_ENTRY, 'DEEPSEEK_API_KEY']);
+    const { launches } = plan(w, store);
+    expect(launches.get('lead')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
+    expect(store.asked).toEqual([]);
+    expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store, managed: null })).toEqual(new Set());
+  });
+
+  test('round trip: a fresh launch records a tokenless recipe, and a relaunch from that record is decided afresh', () => {
     const w = world('store');
-    const { launches } = plan(w, fakeStore([CLAUDE_TOKEN_ENTRY, 'DEEPSEEK_API_KEY']));
-    expect(launches.get('lead')?.command).toContain(`${WORD} claude --model claude-opus-5-5`);
+    const run = (launchSeat: UpSeat) => upPlan({
+      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
+      cliHooks: { lead: settingsFile(join(w.root, 'lead.json')) }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]), seats: [launchSeat],
+    }).map((step) => step.do).find((one) => one?.do === 'launch' || one?.do === 'refuse');
+    const fresh = run({ ...seat('lead', 'claude-code', 'claude'), launcher: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5' });
+    if (fresh?.do !== 'launch') throw new Error('the fresh launch was refused');
+    const recorded = fresh.recordLine ?? '';
+    // The recipe from before the token and the profile's generated words: no lookup, no route, no --settings.
+    for (const word of [CLAUDE_TOKEN_ENTRY, 'fake-store-lookup', 'ANTHROPIC_BASE_URL', '--settings', '--append-system-prompt']) expect(recorded).not.toContain(word);
+    expect(claudeTokenLine(recorded)).toBe(true);
+    // A channel repair or restore launches the recorded line itself (src/commands/up.ts): the planner
+    // takes it as the seat's line and hands the token again, with the route in front.
+    const again = run(seat('lead', 'claude-code', recorded));
+    if (again?.do !== 'launch') throw new Error('the relaunch was refused');
+    expect(again.command.startsWith(`${ROUTE} `)).toBe(true);
+    expect(again.command).toContain(WORD);
+    // The same record under claude-auth login: the relaunch carries no token at all.
+    const v = world('login');
+    const plain = upPlan({
+      root: v.root, home: v.home, team: v.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch', managedClaudeSettings: null,
+      cliHooks: { lead: settingsFile(join(v.root, 'lead.json')) }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]), seats: [seat('lead', 'claude-code', recorded)],
+    });
+    expect(JSON.stringify(plain)).not.toContain(CLAUDE_TOKEN_ENTRY);
   });
 });
 
 describe('the seat\'s own settings file holds the route', () => {
   test('the install writes the direct route only for a seat handed the token, and a refresh keeps it', () => {
-    const w = world();
+    const w = world('store');
     const dir = join(w.root, '.agents');
     expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([CLAUDE_TOKEN_ENTRY]), managed: null })).toEqual(new Set(['lead']));
     expect(claudeTokenSeats({ home: w.home, root: w.root, team: w.team, store: fakeStore([]), managed: null })).toEqual(new Set());
@@ -357,7 +389,7 @@ describe('team doctor', () => {
   const only = (w: ReturnType<typeof world>, names: string[]) => w.team.seats.filter((one) => names.includes(one.name));
 
   test('no session login and no entry: the miss names claude setup-token and the entry', () => {
-    const w = world();
+    const w = world('store');
     const findings = claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([])), HINT);
     expect(findings?.map((one) => one.level)).toEqual(['miss']);
     expect(findings?.[0]?.text).toContain('claude setup-token');
@@ -366,28 +398,35 @@ describe('team doctor', () => {
   });
 
   test('the entry held: ok names only the seats the launch hands it, and a seat that takes none still needs the login', () => {
-    const w = world();
+    const w = world('store');
     const findings = claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT) ?? [];
     expect(findings[0]?.level).toBe('ok');
-    expect(findings[0]?.text).toStartWith(`claude-code: no session login; lead sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}, held to Anthropic's endpoint`);
-    expect(findings[0]?.text).toContain('managed Claude settings');
+    expect(findings[0]?.text).toStartWith(`claude-code: no session login; lead sign in with the secret store's ${CLAUDE_TOKEN_ENTRY} (claude-auth store), held to Anthropic's endpoint`);
+    expect(findings[0]?.text).toContain('claude-auth store');
+    expect(findings[0]?.text).toContain('only for a personal subscription that receives no organization-managed settings');
     expect(findings[1]?.level).toBe('miss');
     expect(findings[1]?.text).toContain('wrapped, scripted take no stored token');
     expect(claudeNoLoginFindings(w.team, w.root, only(w, ['lead']), sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)?.map((one) => one.level)).toEqual(['ok']);
   });
 
   test('a team whose Claude seats would take no token gets no ok from the store: the plain login line stands', () => {
-    const w = world();
+    const w = world('store');
     expect(claudeNoLoginFindings(w.team, w.root, only(w, ['wrapped', 'scripted', 'provider']), sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)).toBeNull();
   });
 
   test('managed Claude settings on the machine: a miss that names the managed file as the reason', () => {
-    const w = world();
+    const w = world('store');
     const managed = '/Library/Application Support/ClaudeCode/managed-settings.json';
     const findings = claudeNoLoginFindings(w.team, w.root, w.team.seats, { ...sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), managedClaudeSettings: () => managed }, HINT);
     expect(findings?.map((one) => one.level)).toEqual(['miss']);
     expect(findings?.[0]?.text).toContain(`managed Claude settings (${managed})`);
     expect(findings?.[0]?.text).toContain('withheld');
+  });
+
+  test('with the default (login), doctor makes no token claim at all', () => {
+    const w = world();
+    expect(claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)).toBeNull();
+    expect(claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([])), HINT)).toBeNull();
   });
 
   test('claude-auth login keeps the plain login line', () => {

@@ -392,7 +392,7 @@ export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, 
   }
   const findings: Finding[] = [{
     level: 'ok',
-    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}, held to Anthropic's endpoint by their own settings (no managed Claude settings on this machine)`,
+    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY} (claude-auth store), held to Anthropic's endpoint by their own settings, with no managed Claude settings file on this machine; store is only for a personal subscription that receives no organization-managed settings (delivered from the servers, they stand above these and cannot be detected here)`,
   }];
   const others = seats.filter((seat) => !eligible.includes(seat) && anthropicClaudeSeat(seat));
   if (others.length > 0) {

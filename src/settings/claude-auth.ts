@@ -1,15 +1,16 @@
-// The `claude-auth` setting's vocabulary: how a Claude Code seat on Anthropic signs in. `store`
-// (the default) gives the seat the subscription token the machine's secret store holds as
-// `CLAUDE_CODE_OAUTH_TOKEN`, when it holds one; `login` leaves the seat on the CLI's own session
-// login, as before the setting. A machine whose store holds no such entry launches as before
-// under either word.
+// The `claude-auth` setting's vocabulary: how a Claude Code seat on Anthropic signs in. `login`
+// (the default) leaves the seat on the CLI's own session login; `store`, set explicitly, gives the
+// seat the subscription token the machine's secret store holds as `CLAUDE_CODE_OAUTH_TOKEN`, when
+// it holds one. It is opt-in because settings an organization delivers from its servers stand
+// above every settings file TeamCLI writes and leave nothing on the machine to detect: `store`
+// is for a personal subscription that receives no organization-managed settings.
 //
 // This module holds only the vocabulary: the catalogue reads its parser without importing the
 // reader back into itself (src/settings/claude-auth-policy.ts reads the chain and the line rule).
 
 export const CLAUDE_AUTH_VALUES = ['store', 'login'] as const;
 export type ClaudeAuth = (typeof CLAUDE_AUTH_VALUES)[number];
-export const CLAUDE_AUTH_DEFAULT: ClaudeAuth = 'store';
+export const CLAUDE_AUTH_DEFAULT: ClaudeAuth = 'login';
 
 /** The entry the store keeps the token under, and the variable Claude Code reads it from. */
 export const CLAUDE_TOKEN_ENTRY = 'CLAUDE_CODE_OAUTH_TOKEN';

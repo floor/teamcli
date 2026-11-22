@@ -26,7 +26,7 @@ import { accountKeyCommand, shippedEnv, shippedLauncher } from '../launchers/shi
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { fillSecretWords, hasSecretWord } from './secret-words.ts';
-import { anthropicClaudeSeat, claudeAuthInForce, managedClaudeSettings, routedSettingsFile, withClaudeToken, withoutClaudeToken } from '../settings/claude-auth-policy.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, managedClaudeSettings, routedSettingsFile, withClaudeToken } from '../settings/claude-auth-policy.ts';
 import { CLAUDE_TOKEN_ENTRY, claudeRouteWords } from '../settings/claude-auth.ts';
 import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
@@ -1793,6 +1793,10 @@ export function upPlan(input: UpInput): Step[] {
     // launch clears the routing and credential variables in front of the CLI (below).
     const vendor = seat.vendor ?? input.team?.seats.find((one) => one.name === seat.name)?.vendor;
     let claudeToken = false;
+    // The resolved recipe before the token and the profile's own words (its rules, its generated
+    // --settings file): what a seat handed the token records, so any reuse of the record passes
+    // through this planner again, which decides the token afresh.
+    const tokenlessRecipe = baseLine;
     if (wouldLaunch && input.home !== undefined && input.team !== undefined && anthropicClaudeSeat({ cli: profile.cli, vendor })
       && routedSettingsFile(input.cliHooks?.[seat.name])
       && (input.managedClaudeSettings !== undefined ? input.managedClaudeSettings : managedClaudeSettings()) === null) {
@@ -1975,10 +1979,9 @@ export function upPlan(input: UpInput): Step[] {
     const pinned = denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, pins.features, pins.config);
     const addedResume = namedResumeTarget(profile.cli, command) !== null
       && namedResumeTarget(profile.cli, seat.launch) === null;
-    // A resolved launch records the command it built, without the token's lookup: a record is
-    // reusable (a repair, a restore), and a reuse must go through this planner again, which
-    // decides the token afresh.
-    const recordLine = addedResume ? pinned : (fromResolver ? (claudeToken ? withoutClaudeToken(command) ?? pinned : command) : pinned);
+    // A resolved launch records the command it built; one handed the token records its resolved
+    // recipe from before the token and the generated settings were added (`tokenlessRecipe`).
+    const recordLine = addedResume ? pinned : (fromResolver ? (claudeToken ? tokenlessRecipe : command) : pinned);
     // A seat handed the token starts on Anthropic's own endpoint with no other provider switch or
     // Anthropic credential its pane's shell exported: those words stand in front of the whole
     // line, after the record is taken, so the record keeps the recipe it always kept.

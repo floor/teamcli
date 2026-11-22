@@ -2268,9 +2268,9 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseSeatNumberingValue,
     isWithin: () => true,
   },
-  // How a Claude Code seat on Anthropic signs in: `store` hands it the subscription token the
-  // machine's secret store holds as CLAUDE_CODE_OAUTH_TOKEN, when it holds one; `login` keeps the
-  // CLI's own session login. A choice, not a limit, so a lower level chooses freely.
+  // How a Claude Code seat on Anthropic signs in: `login` (the default) keeps the CLI's own session
+  // login; `store`, set explicitly, hands it the subscription token the machine's secret store
+  // holds as CLAUDE_CODE_OAUTH_TOKEN. A choice, not a limit, so a lower level chooses freely.
   'claude-auth': {
     name: 'claude-auth',
     kind: 'advised',

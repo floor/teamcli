@@ -7,7 +7,7 @@ import type { TeamFile } from '../file/types.ts';
 import { secretWord } from '../launch/secret-words.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { shellWords } from '../launch/shell-words.ts';
-import { assignmentWordName, leadingAssignments } from '../profiles/profile.ts';
+import { assignmentWordName } from '../profiles/profile.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -23,7 +23,7 @@ export type ClaudeAuthContext = {
   team: TeamFile;
 };
 
-/** The word in force for the team's Claude Code seats: `store` when no level declares one. */
+/** The word in force for the team's Claude Code seats: `login` when no level declares one. */
 export function claudeAuthInForce(context: ClaudeAuthContext): ClaudeAuth {
   const chain = loadAndResolvePolicyChain(
     {
@@ -169,11 +169,3 @@ function currentUser(): string {
   }
 }
 
-/** The line without the token's leading assignment (and the space after it): what a record keeps.
- *  Null when the line's words cannot be read or set no such assignment, so a caller records the
- *  plain recipe instead, never a line that may still hold the lookup. */
-export function withoutClaudeToken(line: string): string | null {
-  const word = leadingAssignments(line)?.find((one) => one.name === CLAUDE_TOKEN_ENTRY);
-  if (word === undefined) return null;
-  return `${line.slice(0, word.start)}${line.slice(word.end).replace(/^\s+/, '')}`;
-}
