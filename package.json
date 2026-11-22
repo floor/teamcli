@@ -57,6 +57,7 @@
     "schema:check": "bun scripts/schema.ts",
     "contract": "bun scripts/contract.ts",
     "contract:check": "bun scripts/contract.ts --check",
+    "exit-codes:check": "bun scripts/contract.ts --check",
     "readme:check": "bun scripts/check-readmes.ts",
     "brief": "bun scripts/brief.ts",
     "brief:check": "bun scripts/brief.ts --check",
