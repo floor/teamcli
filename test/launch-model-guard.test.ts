@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approvalOf } from '../src/approve/approval.ts';
+import { approvalDifferencesOf, approvalOf } from '../src/approve/approval.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { DownLaunch } from '../src/commands/down.ts';
@@ -22,7 +22,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { parseModelRule } from '../src/policy/model-rule.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, testIo, recordRenames } from './helpers.ts';
 
@@ -323,6 +323,12 @@ describe('up and add under the entity model rule', () => {
     const text = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
     expect(text).toContain('    nickname: Jason\n');
     expect(text).toContain('    label: "Jason · implementer"\n');
+    // The approval followed the names and nothing else: the named file still matches it.
+    const standing = approvalStanding(root, home);
+    expect(standing.kind).toBe('verified');
+    const loaded = loadTeamFile(root, { home });
+    if (!loaded.ok || standing.kind !== 'verified') throw new Error('the named file does not load');
+    expect(approvalDifferencesOf(standing, loaded.team, home)).toEqual([]);
   });
 
   test('up judges the line a restored seat will run, not the file\'s own', async () => {

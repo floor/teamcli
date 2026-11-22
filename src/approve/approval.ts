@@ -207,6 +207,56 @@ export function recordSeatDigestOf(standing: Standing, team: TeamFile, root: str
   }, [], home);
 }
 
+/**
+ * A handed-out name (src/registry/names.ts:autoNamePlan) writes a seat's `nickname` and `label`
+ * and nothing else, and both are in the seat's digest. The approval follows that one change the
+ * way it follows `stopped` above: a seat's new digest is recorded only when putting its
+ * `nickname`, `label` (and `stopped`, which `add` clears in the same write) back to what `before`
+ * held makes it match the approval exactly. Every other field of the stanza stays bound: a seat
+ * edited beside its name stays drift, and a seat the approval does not hold records nothing. The
+ * name is the entity's own standing word (`names.auto`, `names.pool`) applied, not a new choice,
+ * so the approval is not widened — the seat can do nothing it could not do before.
+ */
+export function recordNamedSeatDigestsOf(standing: Standing, before: TeamFile, after: TeamFile, root: string, names: readonly string[], home: string = homedir()): string[] {
+  if (standing.kind !== 'verified' || names.length === 0) return [];
+  const record = standing.record;
+  if (!validateTeamFile(record.file, { home, root, ...(record.approval.lead !== undefined ? { lead: record.approval.lead } : {}) }).ok) return [];
+  const approved = approvedFingerprints(record, home).seats;
+  const current = fingerprints(after).seats;
+  const updates: Record<string, string> = {};
+  for (const name of names) {
+    const was = before.seats.find((seat) => seat.name === name);
+    const now = after.seats.find((seat) => seat.name === name);
+    const held = approved[name];
+    if (was === undefined || now === undefined || held === undefined || current[name] === undefined) continue;
+    const reverted = (stopped: boolean) => fingerprints({
+      ...after,
+      seats: after.seats.map((seat) => {
+        if (seat.name !== name) return seat;
+        const { nickname: _nickname, labelWritten: _written, ...rest } = seat;
+        return {
+          ...rest,
+          label: was.label,
+          stopped,
+          ...(was.nickname !== undefined ? { nickname: was.nickname } : {}),
+          ...(was.labelWritten === true ? { labelWritten: true as const } : {}),
+        };
+      }),
+    }).seats[name];
+    if (reverted(true) !== held && reverted(false) !== held) continue;
+    if (record.approval.fingerprints.seats[name] !== current[name]) updates[name] = current[name]!;
+  }
+  if (Object.keys(updates).length === 0) return [];
+  writeApproval(storePath(after.project, root, home), {
+    approval: {
+      ...record.approval,
+      fingerprints: { ...record.approval.fingerprints, seats: { ...record.approval.fingerprints.seats, ...updates } },
+    },
+    file: record.file,
+  }, [], home);
+  return Object.keys(updates);
+}
+
 /** `recordSeatDigest` as a command uses it: the caller's own standing, read once. */
 export function recordSeatDigest(team: TeamFile, root: string, name: string, home: string = homedir()): void {
   recordSeatDigestOf(approvalStanding(root, home), team, root, name, home);

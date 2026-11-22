@@ -653,6 +653,17 @@ acme:
   checked against `unique` like any new nickname. A seat that has a nickname, or a label
   `<Name> · <role>` whose name part is not its own seat name, is never renamed. A `human` seat and a counted entry are not named. The lead is named
   like any seat: "never lead" is the word `lead`, which no nickname takes.
+- `nickname` and `label` are part of the seat's approval digest. A handed-out name moves the
+  approval with it only when the seat's stanza is otherwise exactly what was approved (a `stopped`
+  mark an add clears aside): the seat's digest is re-recorded, so a delegated `team add` of that
+  seat, or a copy from it, still matches. A seat edited beside its name stays drift, as any edit
+  does. A nickname set by hand with `team config set` still needs a new approval.
+- The pick and the write are one transaction under the registry's teams lock, the lock every
+  naming write (including `team config`'s) takes: two runs in two checkouts cannot both take one
+  name. An add whose name was taken while it checked is refused (`add.name-taken`), and the next
+  add picks the next free name.
+- A pool word that names no built-in pool — `constructor` included — hands out nothing and says
+  so; it never stops a launch.
 - A run that cannot hand out a name says why on stderr and goes on: a launch never waits for a
   name. A delegated add, a client or restore run, `team up --retie` and a run aimed with
   `--file` write no record, so they name nobody.

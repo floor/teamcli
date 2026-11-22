@@ -668,10 +668,10 @@ describe('team add --request validates the whole add before recording a request 
 
 describe('a seat of an entity team is named at its add', () => {
   /** The team as an entity's: the owner's entities file declares it, with the scene's names words. */
-  function asEntityTeam(names: string): void {
+  function asEntityTeam(names: string, extra = ''): void {
     mkdirSync(join(home, '.config', 'team'), { recursive: true });
     writeFileSync(join(home, '.config', 'team', 'entities.yaml'), `acme:\n  roots:\n    - ${home}\n${names}`);
-    approve(teamText().replace('project: acme\n', 'project: acme\nentity: acme\n').replace('  - ~/.config/team/lobby\n', '  - ~/.config/team/lobbies/acme\n'));
+    approve(teamText().replace('project: acme\n', 'project: acme\nentity: acme\n').replace('  - ~/.config/team/lobby\n', '  - ~/.config/team/lobbies/acme\n') + extra);
   }
 
   test('the copy takes the first free pool name, written as nickname and label, and launches under it', async () => {
@@ -685,6 +685,33 @@ describe('a seat of an entity team is named at its add', () => {
     expect(text).toContain('    name: apprentice\n    label: "Ada · implementer"\n');
     expect(text).toContain('    nickname: Ada\n');
     expect(made.creates).toEqual(['Ada · implementer']);
+  });
+
+  test('a name handed to an approved seat keeps the approval bound to it, so a delegate may still copy it', async () => {
+    asEntityTeam('  names:\n    pool: [Ada, Zed]\n', DELEGATES);
+    const named = testIo(project, owner);
+    expect(await runAdd(['spare'], named, sources(world())), named.out + named.err).toBe(0);
+    expect(named.err).toContain('team add: spare is named Ada\n');
+    // The approval followed the name: the delegated copy of the approved source is admitted.
+    const made = world();
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'spare'], io, sources(made, { delegateGate: () => passed })), io.out + io.err).toBe(0);
+    expect(made.creates).toEqual(['apprentice']);
+  });
+
+  test('a seat edited beside its name stays drift: the approval does not follow it', async () => {
+    asEntityTeam('  names:\n    pool: [Ada, Zed]\n', DELEGATES);
+    // The live file gives spare a word the approval does not hold.
+    writeFileSync(teamPath(), readFileSync(teamPath(), 'utf8').replace(
+      '    name: spare\n    label: spare\n',
+      '    name: spare\n    label: spare\n    desktop_control: false\n',
+    ));
+    const named = testIo(project, owner);
+    expect(await runAdd(['spare'], named, sources(world())), named.out + named.err).toBe(0);
+    expect(named.err).toContain('team add: spare is named Ada\n');
+    const io = testIo(project, pilot);
+    expect(await runAdd(['apprentice', '--like', 'spare'], io, sources(world(), { delegateGate: () => passed }))).toBe(1);
+    expect(io.err).toBe(DELEGATE_REFUSAL);
   });
 
   test('names.auto: off hands out no name, and a seat that has one keeps it', async () => {

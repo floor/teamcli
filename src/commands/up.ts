@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf, ceilingsOf, notInForce, recordNamedSeatDigestsOf, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
 import { admitGeneral } from '../client/general-grant.ts';
@@ -21,7 +21,7 @@ import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { readTeamText, writeTeamText } from '../file/team-text.ts';
-import { autoNamedText } from '../registry/names.ts';
+import { autoNamedText, withNamingLock } from '../registry/names.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -4264,17 +4264,26 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   // record, and a name that cannot be handed out never stops the launch.
   if (delegated === null && clientUp === null && !retie && internal?.restore !== true && args.values.file === undefined) {
     const file = join(root, TEAM_FILE);
-    let current: string | null = null;
-    try {
-      current = readTeamText(file, { home: sources.home });
-    } catch {}
-    const named = current === null ? null : autoNamedText({ home: sources.home, root, text: current, ...(scoped ? { only: [...scopedSeats] } : {}) });
-    if (named !== null && current !== null && named.assignments.length > 0) {
-      const wrote = writeTeamText(file, named.text, {
-        home: sources.home, command: 'up', ...(sources.now !== undefined ? { now: sources.now } : {}),
-        audit: { caller, rule: ownerToken || ownerSeat ? 'owner-seat' : 'owner-or-leads' },
-      });
+    // The pick and the write are one transaction under the registry's teams lock, which every
+    // naming write takes: no other checkout can take the same name between the two.
+    const { named, wrote } = withNamingLock(sources.home, () => {
+      let current: string | null = null;
+      try {
+        current = readTeamText(file, { home: sources.home });
+      } catch {}
+      const planned = current === null ? null : autoNamedText({ home: sources.home, root, text: current, ...(scoped ? { only: [...scopedSeats] } : {}) });
+      if (planned === null || planned.assignments.length === 0) return { named: planned, wrote: null };
+      return {
+        named: planned,
+        wrote: writeTeamText(file, planned.text, {
+          home: sources.home, command: 'up', ...(sources.now !== undefined ? { now: sources.now } : {}),
+          audit: { caller, rule: ownerToken || ownerSeat ? 'owner-seat' : 'owner-or-leads' },
+        }),
+      };
+    });
+    if (named !== null && wrote !== null) {
       if (wrote.ok) {
+        const before = team;
         const byName = new Map(named.assignments.map((assignment) => [assignment.seat, assignment]));
         team = {
           ...team,
@@ -4294,6 +4303,8 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
             seats: team.seats,
           });
         }
+        // The approval follows the name and nothing else (src/approve/approval.ts).
+        recordNamedSeatDigestsOf(standing, before, team, root, named.assignments.map((assignment) => assignment.seat), sources.home);
         for (const assignment of named.assignments) stderrLine(`team up: ${plainText(assignment.seat)} is named ${plainText(assignment.nickname)}\n`);
       } else {
         stderrLine(`team up: no name handed out: ${plainText(wrote.errors.map((problem) => problem.message).join('; '))}\n`);

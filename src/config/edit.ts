@@ -34,7 +34,7 @@ import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.t
 import { validateTeamFile } from '../file/validate.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { nicknameChangeGate } from '../registry/names.ts';
+import { nicknameChangeGate, withNamingLock } from '../registry/names.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { refreshRoster } from '../registry/sync.ts';
@@ -364,10 +364,26 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     return 0; // exit: config.planned
   }
   const now = sources.now;
-  const wrote = writeTeamText(file, next, {
-    home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}),
-    audit: { caller: callerOf(rawIo), rule: auditRule, ...(auditClient === undefined ? {} : { client: auditClient }) },
+  // A nickname this write brings is checked again and written in one transaction under the
+  // naming lock (src/registry/names.ts:withNamingLock): a name another checkout took between the
+  // check above and this write is refused, never published twice.
+  const locked = withNamingLock(namesAfter.ok ? home : undefined, () => {
+    if (namesAfter.ok) {
+      const again = validateTeamFile(text, { home, root });
+      const names = nicknameChangeGate({ home, teamId: teamIdOf(root), root, before: again.ok ? again.team : null, after: namesAfter.team });
+      if (!names.ok) return { taken: names.message };
+    }
+    return writeTeamText(file, next, {
+      home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}),
+      audit: { caller: callerOf(rawIo), rule: auditRule, ...(auditClient === undefined ? {} : { client: auditClient }) },
+    });
   });
+  if ('taken' in locked) {
+    refuse(io, json, 'config', { id: 'config.name-taken', message: locked.taken, repair: null });
+    // exit: config.name-taken
+    return 1;
+  }
+  const wrote = locked;
   if (!wrote.ok) {
     const said = wrote.errors.map((p) => (p.line ? `line ${p.line}: ` : '') + p.message).join('; ');
     refuse(io, json, 'config', {

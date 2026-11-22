@@ -13,6 +13,8 @@ import { writeFileSync } from '../host/guarded-fs.ts';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
+import { recordNamedSeatDigestsOf } from '../approve/approval.ts';
+import { approvalStanding } from '../store/store.ts';
 import { runTeamRecordEdit } from '../config/edit.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
 import { readTeamText } from '../file/team-text.ts';
@@ -185,6 +187,7 @@ async function writeFill(root: string, rawIo: Io, io: Io, sources: ConfigSources
   if (read.problem !== null && read.assignments.length === 0 && read.team === root) return read;
   let fill: TeamFill = { ...read, assignments: [], problem: null };
   const said: string[] = [];
+  let edited: { before: string; after: string } | null = null;
   const code = await runTeamRecordEdit(['edit'], {
     ...rawIo,
     cwd: root,
@@ -197,13 +200,23 @@ async function writeFill(root: string, rawIo: Io, io: Io, sources: ConfigSources
     editor: (draft) => {
       const text = readFileSync(draft, 'utf8');
       fill = planOf(text, root, home, taken);
-      if (fill.assignments.length > 0) writeFileSync(draft, withAutoNames(text, fill.assignments), { mode: 0o600 });
+      if (fill.assignments.length > 0) {
+        edited = { before: text, after: withAutoNames(text, fill.assignments) };
+        writeFileSync(draft, edited.after, { mode: 0o600 });
+      }
       return 0;
     },
   });
   if (code !== 0) {
     const reason = said.join('').trim().replace(/^team config: /, '').split('\n')[0] ?? '';
     return { ...fill, assignments: [], written: false, problem: reason === '' ? 'the write was refused' : reason };
+  }
+  // The approval follows the names and nothing else (src/approve/approval.ts).
+  const pair = edited as { before: string; after: string } | null;
+  if (pair !== null) {
+    const before = validateTeamFile(pair.before, { home, root });
+    const after = validateTeamFile(pair.after, { home, root });
+    if (before.ok && after.ok) recordNamedSeatDigestsOf(approvalStanding(root, home), before.team, after.team, root, fill.assignments.map((one) => one.seat), home);
   }
   // Warnings the edit printed (a dev-mode admission, comments rewritten) are said as they came.
   for (const text of said) io.stderr(text);

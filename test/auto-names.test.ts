@@ -7,13 +7,13 @@
 // a scratch root: no live registry is read.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runConfig, type ConfigSources } from '../src/commands/config.ts';
 import { runNames } from '../src/commands/names.ts';
 import { seatNickname, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { autoNamedText, autoNamePlan, unnamedSeatNotes } from '../src/registry/names.ts';
+import { autoNamedText, autoNamePlan, unnamedSeatNotes, withNamingLock } from '../src/registry/names.ts';
 import { NAME_POOLS } from '../src/registry/name-pools.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
@@ -179,6 +179,13 @@ describe('autoNamePlan', () => {
     expect(planFor(relaxed, 'c').assignments.map((one) => one.nickname)).toEqual(['Ada']);
     const unknown = place(teams, '    pool: roman\n');
     expect(planFor(unknown, 'c').problem).toContain('names.pool "roman" is no built-in pool (greek-myth)');
+    // A word an object inherits names no pool either: a warning, never a throw.
+    for (const word of ['constructor', 'toString', '__proto__']) {
+      const inherited = place(teams, `    pool: ${word}\n`);
+      expect(planFor(inherited, 'c')).toEqual({ assignments: [], problem: expect.stringContaining(`names.pool "${word}" is no built-in pool`) });
+      const text = stored(inherited, 'c');
+      expect(autoNamedText({ home: inherited.home, root: inherited.roots.c!, text })).toEqual({ text, assignments: [], problem: expect.stringContaining('is no built-in pool') });
+    }
   });
 });
 
@@ -214,6 +221,17 @@ describe('the launch step and the doctor note', () => {
     const world = place({ a: text });
     const bare = text.replace('entity: acme\n', '');
     expect(autoNamedText({ home: world.home, root: world.roots.a!, text: bare }).assignments).toEqual([]);
+  });
+});
+
+describe('the naming lock', () => {
+  test('a pick and its write run under the registry\'s teams lock, which another run waits on', () => {
+    const world = place({ a: teamText('alpha', 'acme', [LEAD]) });
+    const lock = join(world.home, '.config', 'team', 'teams.yaml.lock');
+    expect(existsSync(lock)).toBe(false);
+    const inside = withNamingLock(world.home, () => existsSync(lock));
+    expect(inside).toBe(true);
+    expect(existsSync(lock)).toBe(false);
   });
 });
 

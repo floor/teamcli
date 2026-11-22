@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, clientRosterText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
-import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
+import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordNamedSeatDigestsOf, recordSeatDigestOf } from '../approve/approval.ts';
 import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -83,7 +83,7 @@ import { registerInbox } from '../mcp/register.ts';
 import { channelLaunchFallback, channelLobbyFolder } from '../mcp/launch-config.ts';
 import { withoutChannel } from '../mcp/channel.ts';
 import { readLaunchedTeam, readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
-import { autoNamedText } from '../registry/names.ts';
+import { autoNamedText, nicknameChangeGate, withNamingLock } from '../registry/names.ts';
 
 export type AddSources = {
   /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
@@ -1361,10 +1361,27 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(clientRun !== null ? { client: clientRun.grant.clientId } : io.general !== undefined ? { client: io.general.clientId } : {}),
           },
         };
-        if (readTeamText(path, where) !== original) return { kind: 'changed' as const };
-        const wrote = writeTeamText(path, built.edited, where);
-        return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };
+        // A handed-out name is checked again and written in one transaction under the naming
+        // lock: another checkout that took it meanwhile refuses this write, and nothing lands.
+        return withNamingLock(namedLine === null ? undefined : sources.home ?? homedir(), () => {
+          if (readTeamText(path, where) !== original) return { kind: 'changed' as const };
+          if (namedLine !== null) {
+            const gate = nicknameChangeGate({ home: sources.home ?? homedir(), teamId: teamIdOf(root), root, before: team, after: prepared.team });
+            if (!gate.ok) return { kind: 'name-taken' as const, message: gate.message };
+          }
+          const wrote = writeTeamText(path, built.edited, where);
+          return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };
+        });
       });
+      if (written.kind === 'name-taken') {
+        refuse(io, json, 'add', {
+          id: 'add.name-taken',
+          message: `the name handed out was taken while add was checking (${written.message}); nothing was written, and a new add picks the next free name`,
+          repair: null,
+        });
+        // exit: add.name-taken
+        return 1;
+      }
       if (written.kind === 'changed') {
         refuse(io, json, 'add', {
           id: 'add.changed',
@@ -1387,6 +1404,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       }
       if (namedLine !== null) out.stderr(namedLine);
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
+      // The approval follows a handed-out name and nothing else (src/approve/approval.ts).
+      if (namedLine !== null && parsed.ok && clientRun === null) recordNamedSeatDigestsOf(standing, team, parsed.team, root, [built.name], sources.home);
       // The amendment re-signs from the command's own one snapshot, read at its gate.
       // A client's roster change is the owner's to approve: the approval record is left as it was.
       if (parsed.ok && standing.kind === 'verified' && clientRun === null) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);

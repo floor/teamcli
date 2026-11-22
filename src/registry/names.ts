@@ -24,7 +24,7 @@ import { validateTeamFile } from '../file/validate.ts';
 import { parseYaml, toValue } from '../yaml.ts';
 import { NAME_POOL_DEFAULT, NAME_POOLS } from './name-pools.ts';
 import { readStoredTeamConfig, type StoredTeamConfig } from './team-config-store.ts';
-import { readTeams, teamIdOf, TeamsError, type TeamRecord } from './teams.ts';
+import { readTeams, teamIdOf, TeamsError, withTeamsLock, type TeamRecord } from './teams.ts';
 
 /** The comparison the setting names: case-insensitive, so `Cicero` and `cicero` are one name. */
 export function sameNickname(a: string, b: string): boolean {
@@ -267,6 +267,12 @@ export function nicknameTakenNotes(team: TeamFile, root: string, home: string | 
 // — the record's `nickname:` and the persona part of its `label:`, through the same validated
 // writer — so the next header, launch and roster read it like any other name.
 
+/** The one lock every naming write takes — the registry's teams lock, machine-wide, so it covers
+ *  every `names.unique` scope: a pick and its write inside it are one transaction. */
+export function withNamingLock<T>(home: string | undefined, work: () => T): T {
+  return home === undefined ? work() : withTeamsLock(home, work);
+}
+
 /** One seat's handed-out name: the nickname, and the label it now carries (`<Nickname> · <role>`). */
 export type NameAssignment = { seat: string; nickname: string; label: string };
 
@@ -317,7 +323,10 @@ export function autoNamePlan(input: {
 }): { assignments: NameAssignment[]; problem: string | null } {
   const { home, team } = input;
   const config = namesAutoOf(home, team.entity);
-  const pool = config.pool.kind === 'list' ? config.pool.names : NAME_POOLS[config.pool.name];
+  // An own key only: a hand-written word like `constructor` names no pool, never an inherited one.
+  const pool = config.pool.kind === 'list'
+    ? config.pool.names
+    : Object.hasOwn(NAME_POOLS, config.pool.name) ? NAME_POOLS[config.pool.name] : undefined;
   if (pool === undefined) {
     const known = Object.keys(NAME_POOLS).join(', ');
     return { assignments: [], problem: `names.pool "${config.pool.kind === 'builtin' ? config.pool.name : ''}" is no built-in pool (${known}) and no list` };
