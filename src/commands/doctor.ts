@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { permittedEventLegs } from './send.ts';
 import { channelUnproven } from '../queue/resend.ts';
+import { unreachableAfterRestore } from '../launch/restore-relaunch.ts';
 import { socketSuppressed } from '../queue/floor.ts';
 import { seatMailDirIn } from '../queue/mail-tree.ts';
 import { channelPairNamesRuntimeCopy, channelPairPinsEpoch, channelPairPresent, samePlace } from '../mcp/launch-config.ts';
@@ -221,7 +222,9 @@ export function blocksLaunch(finding: Finding): boolean {
   return !finding.text.startsWith('no watch has run')
     && !finding.text.startsWith("the watch's heartbeat")
     && !finding.text.startsWith("the watch's pane is gone")
-    && !finding.text.startsWith('the watch ended with its pane');
+    && !finding.text.startsWith('the watch ended with its pane')
+    // A restored seat's missing reach is repaired by its own restart: it never blocks one.
+    && !finding.text.includes(': unreachable after restore: ');
 }
 
 export const doctor: Command = (argv, io) => runDoctor(argv, io, realSources);
@@ -676,6 +679,13 @@ function claudeChannelFindings(team: TeamFile, dir: string, root: string, sessio
     // registry-held team file carries the line the last launch ran, so a `--resume` naming the
     // seat's own recorded conversation is TeamCLI's, not the owner's pin.
     if (/(^|\s)--resume(\s|=|$)/.test(seat.launch) && !resumesRecordedConversation(seat.launch, dir, session, seat.name)) reasons.push('a pinned --resume on the launch line');
+    // A seat the restore brought back and that is still not reachable past the relaunch's bound
+    // (src/launch/restore-relaunch.ts) fails, whatever its pane: it has no working push.
+    const unreachable = unreachableAfterRestore(dir, session, seat.name, unproven, now);
+    if (unreachable !== null) {
+      findings.push({ level: 'miss', text: plainLine(unreachable) });
+      continue;
+    }
     if (reasons.length === 0) continue;
     // A protected pane takes no pointer: a person's pane, or one whose declared order leaves the
     // `typed` word out (the same answer the watch asks, src/commands/send.ts permittedEventLegs).

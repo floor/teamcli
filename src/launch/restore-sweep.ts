@@ -18,6 +18,15 @@ import { restoreSummaryOf, type Report, type RestoreSweepSummary } from './execu
 import { acquireRunLock } from './run-lock.ts';
 import { restoreLifecycleProblem } from './restore-lifecycle.ts';
 import { channelRepairLine, restoreLeadChannels, type RestoreChannelDeps } from './restore-channel.ts';
+import { relaunchRestoredSeats, type RestoreRelaunchDeps } from './restore-relaunch.ts';
+import { realSources as restartRealSources, runRestart } from '../commands/restart.ts';
+import { channelUnproven } from '../queue/resend.ts';
+import { pendingProbe, placeChannelProbe } from '../queue/channel-probe.ts';
+import { seatDropDir } from '../queue/mail-tree.ts';
+import { messageKeyState } from '../store/keys.ts';
+import { inboxLive } from '../mcp/inbox.ts';
+import { listenerKeyOf } from '../comms/offer.ts';
+import { writeRuntimeNotice } from '../send/endpoint-notice.ts';
 
 /** The ownership the sweep judged the route as, as the owner of the machine's daemon. The
  *  sweep's caller is the daemon's own, never a seat's: it launches no seat under a seat name. */
@@ -61,6 +70,9 @@ export type RestoreSweepInput = {
   /** A test's stand-ins for the channel repair (`restore-channel.ts`); with injected sources and
    *  none of these, no repair runs. */
   channelDeps?: RestoreChannelDeps;
+  /** A test's stand-ins for the relaunch and reach check (`restore-relaunch.ts`); with injected
+   *  sources and none of these, nothing is relaunched. */
+  relaunchDeps?: RestoreRelaunchDeps;
 };
 
 /** Whether the route records at least one seat for its session. A session entry with no seat
@@ -141,6 +153,8 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
   }
   const lock = acquireRunLock(dir, session);
   if ('held' in lock) return { kind: 'lock-held', holder: lock.held };
+  let ran: Extract<RestoreSweepResult, { kind: 'ran' }>;
+  let relaunchFile: string | undefined;
   try {
     // Under the lock: a team downed while the sweep waited stays down, and a session the host
     // stopped or lost is never cold-started from here.
@@ -210,9 +224,50 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
     if (note !== undefined && note !== '') summary.line = `${summary.line}; ${note}`;
     if (channelLine !== null) summary.line = `${summary.line}; ${channelLine}`;
     const loadOnly = summary.refused_seats.length > 0 && summary.refused_seats.every((seat) => loadSeats.has(seat.seat));
-    return { kind: 'ran', summary, failed: exit !== 0,
+    ran = { kind: 'ran', summary, failed: exit !== 0,
       ...(loadOnly ? { retry: 'load' as const, detail: loadSeats.get(summary.refused_seats[0]!.seat)! } : {}) };
+    relaunchFile = launchFile;
   } finally {
     lock.release();
   }
+  // The pass's restored Claude seats come back through their launch lines, after the run lock is
+  // released (the restart takes it itself), and each restored seat's reach is checked. A seat
+  // still working, the load, or a proof still awaited keeps the route on the load guard's retry.
+  // A test world (injected sources) relaunches nothing unless it hands its stand-ins in.
+  const deps = input.sources === undefined ? realRelaunchDeps(sources.home, loaded.root, session, team.orchestrator) : input.relaunchDeps;
+  if (deps === undefined || input.isClosing?.() === true) return ran;
+  const pass = await relaunchRestoredSeats({
+    root: loaded.root, dir, session, team, sources, caller: OWNER, deps,
+    ...(relaunchFile === undefined ? {} : { launchFile: relaunchFile }),
+  });
+  if (pass.lines.length > 0) ran.summary.line = `${ran.summary.line}; ${pass.lines.join('; ')}`;
+  if (pass.pending !== null && ran.retry === undefined) return { ...ran, retry: 'load', detail: `restore relaunch pending: ${pass.pending}` };
+  return ran;
+}
+
+/** The relaunch's real world: the restart command, the channel proof, the probe and the lead
+ *  notice, each through its existing writer. */
+function realRelaunchDeps(home: string, root: string, session: string, lead: string): RestoreRelaunchDeps {
+  const restartSources = { ...restartRealSources, home };
+  return {
+    restart: (argv, io) => runRestart(argv, io, restartSources),
+    unproven: (seat) => {
+      const key = messageKeyState(home);
+      if (key.kind !== 'key') return 'no message key';
+      return channelUnproven({
+        dropDir: seatDropDir(root, session, seat), root, session, seat,
+        context: { to: seat, root, session, ...(lead === '' ? {} : { lead }) }, key: key.key, nowMs: Date.now(),
+      });
+    },
+    probe: (seat) => {
+      const key = messageKeyState(home);
+      if (key.kind !== 'key') return;
+      const live = inboxLive(seatDropDir(root, session, seat), root, session, seat);
+      if (!live.live || live.listener.channel !== true) return;
+      const listenerKey = listenerKeyOf(live.listener);
+      if (pendingProbe({ root, session, seat, key: key.key, listenerKey, nowMs: Date.now(), ...(lead === '' ? {} : { lead }) }) !== null) return;
+      placeChannelProbe({ home, root, session, seat, listenerKey, now: new Date() });
+    },
+    notify: (one) => writeRuntimeNotice({ home, root, session, lead: one.lead, id: one.id, body: one.body, at: new Date().toISOString() }).ok,
+  };
 }
