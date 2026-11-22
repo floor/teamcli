@@ -284,6 +284,8 @@ describe('independent probe: reminder-chore (entity boundary, corrupt registry, 
       routes: [],
       machine: { reminders: { hosted: ['/work/alpha'] } },
       log: (line) => fleetLogs.push(line),
+      // The fixture child's pid names no process of the scene: no CPU reads here.
+      cpuTimeOf: () => null,
       factory: ({ config: cfg }) => {
         spawnedConfigs.push(cfg);
         const fakeChild: ChoresChild = {

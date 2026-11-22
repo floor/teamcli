@@ -11,6 +11,7 @@ import { createBeatWork, observeBeatWork, traceBeatWork } from '../diagnostics/b
 // the daemon refreshes a heartbeat and records any request it has held too long; a probe that
 // gets no answer is reported as running with an unanswered probe, never as healthy.
 import { ACTOR_LEVEL } from '../queue/floor.ts';
+import type { ProcessCpuTimeProbe } from '../watch/process-adapter.ts';
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { appendFileSync, chmodSync, fchmodSync, ftruncateSync, openSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
@@ -381,6 +382,10 @@ export type StartMachineDaemonInput = {
   /** Starts one chores child. The default writes a one-use token and spawns this program's hidden
    *  child verb; a test injects a fixture child to observe the protocol and the supervision. */
   choresFactory?: (input: SpawnChoresInput) => ChoresChild;
+  /** How the fleet reads a late child's CPU before it ends it on silence. The default asks the
+   *  process table; a harness whose fixture children carry made-up pids answers for them, so a
+   *  real process that happens to hold such a pid is never read as the child. */
+  choresCpuTimeOf?: ProcessCpuTimeProbe;
   /**
    * Whether this daemon starts the one mailbox router. Off unless a start asks for it, so a
    * harness that never opted in does not spawn the child. The beat only nudges it.
@@ -1729,6 +1734,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         : {}),
       log: (text) => logLine(text),
       ...(input.choresFactory === undefined ? {} : { factory: input.choresFactory }),
+      ...(input.choresCpuTimeOf === undefined ? {} : { cpuTimeOf: input.choresCpuTimeOf }),
       // A hosted pass that yields between seats asks for the daemon's cross-route beat. The
       // child's frame names the root; this daemon's own beat machinery decides which other
       // routes the beat renews, exactly as it does for a pass on its own loop.

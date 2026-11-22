@@ -36,7 +36,7 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Live } from '../src/status/compare.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T09:15:00Z');
 const SESSION = 'acme';
@@ -155,6 +155,7 @@ function sources(
   const trace: Trace = { created: [], closed: [], typed: [], runs: [] };
   const agents = (): HerdrAgent[] => [{ ...agentEntry(live), ...(opts.agent === undefined ? {} : { agent: opts.agent }) }];
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,

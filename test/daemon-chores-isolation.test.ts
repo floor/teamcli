@@ -3173,6 +3173,8 @@ describe('the machine reminders under the fleet', () => {
       routes: [routeInput(made.root, policy())],
       machine: { reminders: { hosted: [made.root] } },
       log: (line) => log.push(line),
+      // The fixture children's pids name no process of the scene: no CPU reads here.
+      cpuTimeOf: () => null,
       factory: (input) => {
         configs.push(input);
         const fake = fakeChild(pid);

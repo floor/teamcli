@@ -20,7 +20,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { seatIsStopped, takeOut } from '../../src/file/lines.ts';
 import { currentBriefClaim } from '../../src/launch/general-brief.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
-import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo, recordRenames } from '../helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo, recordRenames, noProcessBirth } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
@@ -158,6 +158,7 @@ function world(): { launch: Launch; creates: string[]; renames: string[]; sessio
   let clock = NOW.getTime();
   const made = { launch: {} as Launch, creates: [] as string[], renames: [] as string[], session: 'absent' as 'absent' | 'running' };
   made.launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => made.session,
     startServer() {
       made.session = 'running';

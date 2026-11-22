@@ -382,7 +382,8 @@ export type ChannelCommitHooks = {
   beforeLockRename?: () => void;
   /** Pid of the external hold used when flock cannot be bound. */
   helperPid?: (pid: number) => void;
-  /** How long to wait for the external hold to publish. Production waits two seconds. */
+  /** How long to wait for the external hold to take the claim and to publish. Production waits
+   *  two seconds for each. */
   helperWaitMs?: number;
   /** Force the plain-filesystem recovery used when flock cannot be bound. */
   skipFlock?: boolean;
@@ -715,7 +716,7 @@ function reclaimHeldByHelper(dropDir: string, id: string, hooks?: ChannelCommitH
   let accepted = false;
   let marked: { dev: number; ino: number } | null = null;
   try {
-    const answer = readHelperStatus(status, ['held', 'busy']);
+    const answer = readHelperStatus(status, ['held', 'busy'], hooks?.helperWaitMs);
     if (answer !== 'held') {
       if (created) discard(claim);
       return 'busy';

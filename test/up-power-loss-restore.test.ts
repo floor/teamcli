@@ -18,7 +18,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { gitEnv, recordRenames, testIo } from './helpers.ts';
+import { gitEnv, recordRenames, testIo, noProcessBirth } from './helpers.ts';
 
 const NOW = new Date('2026-11-05T00:10:00Z');
 const SESSION = 'acme';
@@ -157,6 +157,7 @@ function sources(scene: Scene = {}): { sources: UpSources; trace: Trace } {
         ...(scene.session === null ? {} : { session: scene.session ?? SESSION_ID }),
       }]);
   const launch: Launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,

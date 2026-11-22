@@ -29,7 +29,7 @@ import { seatStart } from '../../src/worktree/place.ts';
 import { emptySession, readState, SEAT_ID_PATTERN, updateState } from '../../src/state.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
 import { approvalStanding, LEGACY_LINE, storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, testIo, noProcessBirth } from '../helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const IDLE = CLAUDE_IDLE;
@@ -164,6 +164,7 @@ function world(): {
     paneIds: () => [...panes.keys()],
   };
   made.launch = {
+    processStartOf: noProcessBirth,
     sessionState: () => made.session,
     startServer() {
       made.session = 'running';

@@ -260,6 +260,12 @@ async function open(initial: Phase): Promise<Scene> {
     watchHosting: true,
     sendStart: async () => ({ kind: 'already-running', socketPath: join(home, 'send.sock'), pid: null }),
     initialBusStart: async () => ({ kind: 'busy' }),
+    // The fixture children's pids (40000 and up) name no process of the scene. The fleet's own
+    // silence judgement reads a late child's CPU through the process table, and on a machine where
+    // a real process holds such a pid it read that process: flat, so the fleet ended the child on
+    // its own backoff before the stuck check could decide. No CPU reads here, as where no process
+    // holds the pid.
+    choresCpuTimeOf: () => null,
     choresFactory: (spawn) => {
       const root = spawn.config.routes[0]?.root;
       if (root === undefined) throw new Error('a child was started with no root');
