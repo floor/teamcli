@@ -33,7 +33,6 @@ import { readRecordedCodexEndpoint } from './endpoint-record.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from '../../host/guarded-fs.ts';
-import { createConnection } from 'node:net';
 import { basename, join } from 'node:path';
 import { resolveCodexDaemonPolicy, type CodexDaemonResolution } from '../../policy/codex-daemon.ts';
 import { findAgent } from '../../registry/agents.ts';
@@ -51,6 +50,7 @@ import {
 } from './codex-app-server.ts';
 import { presencePaths, stagePresenceRecord } from './spool.ts';
 import { hostedCommit } from '../../host/request-scope.ts';
+import { dialing, socketRuntime } from '../../runtime/bun-socket.ts';
 
 export const CODEX_CONNECT_TIMEOUT_MS = 2_000;
 export const CODEX_RETRY_MS = 5_000;
@@ -212,8 +212,7 @@ type WireHandlers = {
 /** The measured upgrade and frame codec, shared with the repo's thread/read probe. It answers
  *  pings and reports a close or a protocol error once; the source owns every JSON-RPC word. */
 function connectWire(socketPath: string, handlers: WireHandlers): Wire {
-  hostedCommit('node:net.createConnection');
-  const socket = createConnection({ path: socketPath });
+  hostedCommit('Bun.connect');
   const secKey = randomBytes(16).toString('base64');
   const expectedAccept = createHash('sha1')
     .update(`${secKey}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
@@ -229,7 +228,7 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
     handlers.onLoss(reason);
   };
 
-  socket.on('connect', () => {
+  const opened = (): void => {
     socket.write(
       [
         'GET /rpc HTTP/1.1',
@@ -242,10 +241,8 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
         '',
       ].join('\r\n'),
     );
-  });
-  socket.on('error', () => lose('transport-error'));
-  socket.on('close', () => lose('transport-disconnected'));
-  socket.on('data', (chunk: Buffer) => {
+  };
+  const read = (chunk: Uint8Array): void => {
     buffer = Buffer.concat([buffer, chunk]);
     if (!upgraded) {
       const headerEnd = buffer.indexOf('\r\n\r\n');
@@ -305,7 +302,14 @@ function connectWire(socketPath: string, handlers: WireHandlers): Wire {
       }
     }
     buffer = buffer.subarray(offset);
+  };
+  const Bun = socketRuntime();
+  const { conn: socket, options, refused } = dialing(socketPath, {
+    open: opened,
+    bytes: read,
+    close: (error) => lose(error === undefined ? 'transport-disconnected' : 'transport-error'),
   });
+  Bun.connect(options).catch(refused);
 
   return {
     write(text: string): void {

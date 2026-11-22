@@ -208,7 +208,8 @@ function leaveStaleSocket(at: string = brokerSocket(root)): void {
 
 /** The fixture child the start-serialization pin runs: the real start path in a real process,
  *  with its listen call deliberately held back a fixed number of milliseconds. The hold sits
- *  inside a patched `net.Server.prototype.listen`, a busy-wait before the real call — measured
+ *  inside a patched `Bun.listen` (once `net.Server.prototype.listen`, before the broker moved to
+ *  Bun's socket), a busy-wait before the real call — measured
  *  before it was written into a pin (mine: node v26.8.1 and bun 1.4.2, one observer process
  *  polling the path every 100ms while the holder ran an 800ms hold: "0ms patched listen
  *  entered, exists=false / 800ms the delay is over, exists=false / 801ms the listen call
@@ -230,12 +231,11 @@ function leaveStaleSocket(at: string = brokerSocket(root)): void {
  *  work and exits on its own. */
 const FIXTURE = `import { existsSync, lstatSync, readFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
-import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 const [root, delay, repo, go] = process.argv.slice(2);
-const real = net.Server.prototype.listen;
-net.Server.prototype.listen = function (...args) {
+const real = Bun.listen;
+Bun.listen = function (...args) {
   writeSync(1, 'paused\\n');
   const end = Date.now() + Number(delay);
   while (Date.now() < end) {}

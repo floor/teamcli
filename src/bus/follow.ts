@@ -4,7 +4,7 @@
 // only wants what happens after it connects passes `skipBacklog` and starts from the batch's
 // cursor. A closed, refused or absent bus calls `onDown` once and the caller falls back to its
 // own reading; nothing here retries on its own.
-import { connect, type Socket } from 'node:net';
+import { dialing, socketRuntime } from '../runtime/bun-socket.ts';
 import type { EventKind } from './kinds.ts';
 import type { SignedEventRecord } from './log.ts';
 import { busSocket, encodeBusLine, MAX_BUS_ANSWER_BYTES, parseBusAnswer, type BusSubscribeRequest } from './server.ts';
@@ -41,16 +41,13 @@ export function followBus(
   let first = true;
   let buffer = '';
   let next: BusFollow | null = null;
-  const socket: Socket = connect(busSocket(root));
   const fail = (why: string): void => {
     if (closed || down) return;
     down = true;
-    socket.destroy();
+    conn.destroy();
     handlers.onDown(why);
   };
-  socket.setEncoding('utf8');
-  socket.once('connect', () => socket.write(encodeBusLine(full)));
-  socket.on('data', (chunk: string) => {
+  const read = (chunk: string): void => {
     buffer += chunk;
     for (;;) {
       const at = buffer.indexOf('\n');
@@ -70,7 +67,7 @@ export function followBus(
         // and every push waited for the folder watch (2026-11-21: 63-98 ms instead of ~10 ms).
         if (first && request.skipBacklog === true && (request.cursor ?? 0) < parsed.newest_seq) {
           down = true;
-          socket.destroy();
+          conn.destroy();
           if (!closed) next = followBus(root, { ...request, cursor: parsed.newest_seq }, handlers);
           return;
         }
@@ -89,13 +86,16 @@ export function followBus(
       }
       return fail('the bus answered something this build cannot read');
     }
-  });
-  socket.once('error', () => fail(BUS_ABSENT));
-  socket.on('close', () => fail(BUS_ABSENT));
+  };
+  const Bun = socketRuntime();
+  const { conn, options, refused } = dialing(busSocket(root), { text: read, close: () => fail(BUS_ABSENT) });
+  // Queued until the connection opens.
+  conn.write(encodeBusLine(full));
+  Bun.connect(options).catch(refused);
   return {
     close: () => {
       closed = true;
-      socket.destroy();
+      conn.destroy();
       next?.close();
     },
   };
@@ -167,14 +167,17 @@ export function followBusRetrying(
  *  socket file left by a bus that died refuses the connection, so it reads as no bus. */
 export function busAnswers(root: string, ms = 300): Promise<boolean> {
   return new Promise((done) => {
-    const socket = connect(busSocket(root));
+    let settled = false;
     const finish = (answer: boolean): void => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      socket.destroy();
+      conn.destroy();
       done(answer);
     };
+    const Bun = socketRuntime();
+    const { conn, options, refused } = dialing(busSocket(root), { open: () => finish(true), close: () => finish(false) });
     const timer = setTimeout(() => finish(false), ms);
-    socket.once('connect', () => finish(true));
-    socket.once('error', () => finish(false));
+    Bun.connect(options).catch(refused);
   });
 }
