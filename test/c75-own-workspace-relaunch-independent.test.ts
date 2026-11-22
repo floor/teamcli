@@ -380,6 +380,9 @@ function makeSyntheticWorld(config: WorldConfig = {}): {
       return paneHoldsOnlyShell(target.process);
     },
     processInfo: (_session, pane) => panes.get(pane)?.process ?? null,
+    // The scene's pids (199, 901, ...) name no process of the scene; the machine's own table may
+    // hold a real one at that pid, whose birth the launch would then record. No birth reads here.
+    processStartOf: () => null,
     sleep: async () => {},
     now: () => NOW,
   };
