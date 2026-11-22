@@ -224,7 +224,7 @@ export function recordNamedSeatDigestsOf(standing: Standing, before: TeamFile, a
   // Read again at commit time, under the approval's own lock: the amendment applies only to the
   // approval the naming run judged. One the owner changed or revoked since is left as it is, and
   // the name reads as drift there, as a name set by hand does.
-  return withApprovalLock(store, () => {
+  return withApprovalLock(standing.record.approval.root, home, () => {
     const fresh = approvalStanding(root, home);
     if (fresh.kind !== 'verified' || fresh.generation !== standing.generation) return [];
     const record = fresh.record;

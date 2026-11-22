@@ -657,7 +657,8 @@ acme:
   approval with it only when the seat's stanza is otherwise exactly what was approved (a `stopped`
   mark an add clears aside): the seat's digest is re-recorded, so a delegated `team add` of that
   seat, or a copy from it, still matches. A seat edited beside its name stays drift, as any edit
-  does. The amendment re-reads the approval under the approval's own lock and applies only if
+  does. The amendment re-reads the approval under the approval's own lock — keyed by the checkout root,
+  as the generation is — and applies only if
   it is still the one the run judged (the same generation); an approval the owner changed or
   revoked meanwhile is left as it is, and the name reads there as drift. A nickname set by hand
   with `team config set` still needs a new approval.
@@ -665,8 +666,10 @@ acme:
   naming write (including `team config`'s) takes: two runs in two checkouts cannot both take one
   name. The name is published in that same transaction: a team the registry already holds shows
   it through its record, and a first run, which registers its row only later, through a claim in
-  `~/.config/team/name-claims.json` that every pick reads. A claim counts only while its team has
-  no registry row, and for a day at most; each claiming write prunes the rest. An add whose name was
+  `~/.config/team/name-claims.json` that every pick reads. A claim counts until the registry's own
+  view (the team's stored record or roster) shows that name for that seat — so a file-backed team,
+  whose roster is refreshed later, is covered too — and for a day at most; each claiming write
+  prunes the rest. An add whose name was
   taken while it checked is refused (`add.name-taken`), and the next add picks the next free name.
   A `team config` write whose record changed after it was read — an edit left open while a name
   was handed out, say — is refused (`config.changed`) and writes nothing; an editor's draft is

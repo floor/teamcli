@@ -8,12 +8,14 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { runConfig, type ConfigSources } from '../src/commands/config.ts';
 import { runNames } from '../src/commands/names.ts';
 import { seatNickname, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { autoNamedText, autoNamePlan, claimNames, unnamedSeatNotes, withNamingLock } from '../src/registry/names.ts';
+import { autoNamedText, autoNamePlan, claimNames, unnamedSeatNotes, withAutoNames, withNamingLock } from '../src/registry/names.ts';
+import { generationPath } from '../src/store/keys.ts';
+import { withApprovalLock } from '../src/store/store.ts';
 import { writeTeamText } from '../src/file/team-text.ts';
 import { NAME_POOLS } from '../src/registry/name-pools.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
@@ -94,6 +96,19 @@ function planFor(world: World, folder: string, text = stored(world, folder)) {
 }
 
 const POOL = NAME_POOLS['greek-myth']!;
+
+/** One team's record with its unnamed seats named, and the parsed team before and after. */
+function withAutoNamesFor(world: World, folder: string) {
+  const text = stored(world, folder);
+  const root = world.roots[folder]!;
+  const before = validateTeamFile(text, { home: world.home, root });
+  if (!before.ok) throw new Error(JSON.stringify(before.errors));
+  const plan = autoNamePlan({ home: world.home, root, team: before.team });
+  const named = withAutoNames(text, plan.assignments);
+  const after = validateTeamFile(named, { home: world.home, root });
+  if (!after.ok) throw new Error(JSON.stringify(after.errors));
+  return { text: named, before: before.team, after: after.team };
+}
 
 describe('the greek-myth pool', () => {
   test('ships about 150 distinct names, each one a nickname can be', () => {
@@ -247,17 +262,49 @@ describe('name claims', () => {
     expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
   });
 
-  test('a claim older than a day, or of a team the registry now holds, no longer counts', () => {
+  test('a claim older than a day no longer counts', () => {
     const world = place({ c: teamText('gamma', 'acme', [NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]) });
     const first = validateTeamFile(teamText('delta', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), NAMED('tester', 'checker', POOL[0]!)]));
     if (!first.ok) throw new Error(JSON.stringify(first.errors));
     claimNames({ home: world.home, root: join(world.roots.c!, '..', 'delta'), before: null, after: first.team, now: new Date(Date.now() - 25 * 60 * 60 * 1000) });
     expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
-    // A claim by a team that has its row: the row (and its stored record) is the authority.
-    const own = validateTeamFile(stored(world, 'c'));
-    if (!own.ok) throw new Error(JSON.stringify(own.errors));
-    claimNames({ home: world.home, root: world.roots.c!, before: null, after: { ...own.team, seats: own.team.seats.map((seat) => seat.name === 'checker' ? { ...seat, nickname: POOL[2]! } : seat) }, now: new Date() });
-    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[0]!]);
+  });
+
+  test('a file-backed team with a row: the claim counts until the registry\'s view shows the name, then is pruned', () => {
+    const lead = NAMED('orchestrator', 'lead', 'Quill').replace('    label:', '    leads: true\n    label:');
+    const world = place({
+      a: teamText('alpha', 'acme', [NAMED('orchestrator', 'lead', 'Wren').replace('    label:', '    leads: true\n    label:'), SEAT('tester', 'checker')]),
+      c: teamText('gamma', 'acme', [lead, SEAT('tester', 'checker')]),
+    });
+    const root = world.roots.a!;
+    const named = withAutoNamesFor(world, 'a');
+    // The file-backed write lands in the team file; the registry's stored record and roster are
+    // refreshed later, outside the naming lock.
+    const wrote = writeTeamText(join(root, '.agents', 'team.yaml'), named.text, { home: world.home, env: { TEAM_CONFIG_SOURCE: 'file' } });
+    if (!wrote.ok) throw new Error(JSON.stringify(wrote.errors));
+    expect(stored(world, 'a')).not.toContain(`nickname: ${POOL[0]!}`);
+    claimNames({ home: world.home, root, before: named.before, after: named.after, now: new Date() });
+    // The row exists, but its view does not show the name yet: the claim holds it.
+    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
+    // Once the registry's own view carries it, the row holds the name and the claim is pruned.
+    const synced = writeTeamText(join(root, '.agents', 'team.yaml'), named.text, { home: world.home, env: { TEAM_CONFIG_SOURCE: 'registry' } });
+    if (!synced.ok) throw new Error(JSON.stringify(synced.errors));
+    expect(planFor(world, 'c').assignments.map((one) => one.nickname)).toEqual([POOL[1]!]);
+    claimNames({ home: world.home, root: world.roots.c!, before: null, after: named.after, now: new Date() });
+    expect(readFileSync(join(world.home, '.config', 'team', 'name-claims.json'), 'utf8')).not.toContain(`"teamId": "${teamIdOf(root)}"`);
+  });
+});
+
+describe('the approval lock', () => {
+  test('is keyed by the checkout root, as the generation is, whichever store a signing writes', () => {
+    const world = place({ a: teamText('alpha', 'acme', [LEAD]) });
+    const root = world.roots.a!;
+    const folder = join(world.home, '.config', 'team', 'approval-locks', basename(generationPath(root, world.home), '.json'));
+    expect(withApprovalLock(root, world.home, () => existsSync(join(folder, 'team.lock')))).toBe(true);
+    // Another root is another lock.
+    const other = join(root, '..', 'renamed');
+    expect(withApprovalLock(other, world.home, () => existsSync(join(folder, 'team.lock')))).toBe(false);
+    expect(existsSync(join(folder, 'team.lock'))).toBe(false);
   });
 });
 

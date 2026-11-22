@@ -126,14 +126,22 @@ export function nicknameHolders(home: string, exceptTeamId: string): NicknameHol
     if (error instanceof TeamsError) return [];
     throw error;
   }
+  const rows = rowHolders(home, teams);
+  // A name claimed under the naming lock is held as well until the registry's own view shows it
+  // for that team and seat — a first run before its row, or a row whose stored record or roster
+  // has not caught up with the write (claimNames).
+  return [
+    ...liveClaims(home, rows).filter((claim) => claim.teamId !== exceptTeamId),
+    ...rows.filter((holder) => holder.teamId !== exceptTeamId),
+  ];
+}
+
+/** Every seat carrying a nickname in the registry's own view of its teams: a team's stored
+ *  record text, else its roster lines; archived teams left out. */
+function rowHolders(home: string, teams: Record<string, TeamRecord>): NicknameHolder[] {
   const out: NicknameHolder[] = [];
-  // A name claimed under the naming lock by a team the registry holds no row for yet — a first
-  // run, between its record write and its registration — is held as well (nameClaims).
-  for (const claim of liveClaims(home, teams)) {
-    if (claim.teamId !== exceptTeamId) out.push(claim);
-  }
   for (const [id, record] of Object.entries(teams)) {
-    if (id === exceptTeamId || record.lifecycle === 'archived') continue;
+    if (record.lifecycle === 'archived') continue;
     const stored = storedSeats(home, id);
     const project = projectOf(home, record, stored?.team ?? null, record.root);
     for (const seat of stored?.seats ?? rosterSeats(record)) {
@@ -279,9 +287,10 @@ export function nicknameTakenNotes(team: TeamFile, root: string, home: string | 
 // The name claims: a small ledger beside the registry, `name-claims.json`, written only under the
 // naming lock in the same transaction as the record write that brings a nickname. It closes the
 // one gap the registry leaves: a team's nicknames reach other allocators through its registry
-// row, and a first run writes its record well before `up` registers the row. A claim counts only
-// while its team has no row (the row is the authority once it exists) and for a day at most, and
-// each claiming write prunes the rest, so a forgotten team or a removed seat leaves nothing behind.
+// row, its stored record or its roster, and a first run writes its record well before `up`
+// registers the row, while a file-backed team's roster is refreshed after the write. A claim
+// counts until that view shows the nickname for its team and seat, and for a day at most, and each
+// claiming write prunes the rest, so a forgotten team or a removed seat leaves nothing behind.
 const CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 
 type NameClaim = NicknameHolder & { at: string };
@@ -302,9 +311,11 @@ function readClaims(home: string): NameClaim[] {
   }
 }
 
-/** The claims still in force: young enough, and of a team the registry holds no row for. */
-function liveClaims(home: string, teams: Record<string, TeamRecord>, now: number = Date.now()): NameClaim[] {
-  return readClaims(home).filter((claim) => !Object.hasOwn(teams, claim.teamId) && now - Date.parse(claim.at) < CLAIM_TTL_MS);
+/** The claims still in force: younger than a day, and not yet shown by the registry's own view —
+ *  no holder there carries that nickname for that team and seat. */
+function liveClaims(home: string, rows: readonly NicknameHolder[], now: number = Date.now()): NameClaim[] {
+  return readClaims(home).filter((claim) => now - Date.parse(claim.at) < CLAIM_TTL_MS
+    && !rows.some((holder) => holder.teamId === claim.teamId && holder.seat === claim.seat && sameNickname(holder.nickname, claim.nickname)));
 }
 
 /**
@@ -332,7 +343,7 @@ export function claimNames(input: { home: string | undefined; root: string; befo
   try {
     teams = readTeams(home);
   } catch {}
-  const kept = liveClaims(home, teams).filter((claim) => !(claim.teamId === teamId && fresh.some((one) => one.seat === claim.seat)));
+  const kept = liveClaims(home, rowHolders(home, teams)).filter((claim) => !(claim.teamId === teamId && fresh.some((one) => one.seat === claim.seat)));
   if (fresh.length === 0 && kept.length === readClaims(home).length) return;
   writeAtomic(claimsPath(home), `${JSON.stringify({ format: 1, claims: [...kept, ...fresh] }, null, 2)}\n`);
 }
