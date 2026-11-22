@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 
 type Manifest = {
@@ -73,6 +72,9 @@ export function buildIdentity(argv: readonly string[] = process.argv): BuildIden
   let builtAt = 0;
   try {
     const real = realpathSync(entry);
+    // node:crypto is loaded only here, when a build digest is asked for: the thin send client
+    // imports this module for `version()` alone and never pays for it.
+    const { createHash } = process.getBuiltinModule('node:crypto');
     build = createHash('sha256').update(readFileSync(real)).digest('hex').slice(0, 16);
     builtAt = statSync(real).mtimeMs;
   } catch {
