@@ -20,7 +20,7 @@ export const READS: Record<string, string> = {
   'src/herdr.ts#shellPaneExec node:child_process.execFileSync': 'the body of the paneExec runner (herdr pane read)',
   // Reads: the child, probe or query changes nothing.
   'src/analyse/read.ts#runGitReadOnly node:child_process.spawnSync': 'git, read-only by construction',
-  'src/broker/server.ts#probeSocket node:net.connect': 'socket liveness probe; nothing is asked',
+  'src/broker/server.ts#probeSocket Bun.connect': 'socket liveness probe; nothing is asked',
   'src/bus/follow.ts#busAnswers Bun.connect': 'bus liveness probe',
   'src/bus/follow.ts#followBus Bun.connect': 'bus subscription: reads events',
   'src/bus/server.ts#probeSocket Bun.connect': 'socket liveness probe; nothing is asked',

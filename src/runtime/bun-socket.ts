@@ -20,6 +20,8 @@ export type BunSocket = {
   terminate(): void;
   /** Lets the process exit while this socket is open. */
   unref(): void;
+  /** Stops reading: nothing more arrives, the peer's FIN included. */
+  pause(): void;
   /** The descriptor under the socket. */
   readonly fd: number;
   /** The caller's own value for this socket. */
@@ -94,6 +96,9 @@ export type Conn = {
   setTimeout(ms: number, onIdle?: () => void): void;
   /** Lets the process exit while this connection is open. */
   unref(): void;
+  /** Stops reading for good: no more data, and the peer's FIN is not seen (it cannot end this
+   *  side early). Writes still go. */
+  pause(): void;
   /** Calls `listener` once, at close (or now, after the current call, if already closed). */
   onClose(listener: (error?: SocketError) => void): void;
   /** Calls `listener` once, the next time queued bytes are all written after a `false` write. */
@@ -126,6 +131,7 @@ function connOf(events: ConnEvents): ConnState {
   let ending = false;
   let ended = false;
   let wantUnref = false;
+  let paused = false;
   const queue: Uint8Array[] = [];
   let decoder: TextDecoder | null = null;
   let encoder: TextEncoder | null = null;
@@ -163,7 +169,9 @@ function connOf(events: ConnEvents): ConnState {
   const finishEnd = (): void => {
     if (ended || socket === null) return;
     ended = true;
-    socket.shutdown();
+    // A paused side reads nothing more, so it waits for no FIN of the peer's: it closes.
+    if (paused) socket.end();
+    else socket.shutdown();
   };
   /** Writes the queue's head on; false when the kernel stopped taking or the socket closed. */
   const flush = (): boolean => {
@@ -211,6 +219,10 @@ function connOf(events: ConnEvents): ConnState {
       wantUnref = true;
       socket?.unref();
     },
+    pause() {
+      paused = true;
+      socket?.pause();
+    },
     onClose(listener) {
       if (closed) queueMicrotask(() => listener(closeError));
       else closeListeners.push(listener);
@@ -233,6 +245,7 @@ function connOf(events: ConnEvents): ConnState {
       }
       socket = opened;
       if (wantUnref) opened.unref();
+      if (paused) opened.pause();
       // Writes made before the connection opened were queued; they go first.
       const waited = queue.length > 0;
       const flushed = flush();
@@ -241,7 +254,7 @@ function connOf(events: ConnEvents): ConnState {
       if (waited && flushed && !ending) drained();
     },
     data(_socket, chunk) {
-      if (destroyed) return;
+      if (destroyed || paused) return;
       touch();
       events.bytes?.(chunk);
       if (events.text !== undefined) events.text((decoder ??= new TextDecoder()).decode(chunk, { stream: true }));
@@ -253,7 +266,7 @@ function connOf(events: ConnEvents): ConnState {
       else drained();
     },
     end() {
-      if (destroyed) return;
+      if (destroyed || paused) return;
       events.end?.();
       // The peer is done writing: finish this side as node's default does, after what is queued.
       conn.end();
