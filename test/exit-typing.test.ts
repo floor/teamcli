@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { stripSgr } from '../src/ansi.ts';
 import { type ExitIo, typeExit } from '../src/commands/down.ts';
 import { boxHoldsOther, boxHoldsText } from '../src/launch/deliver.ts';
-import { exitConfirmKey, profileFor } from '../src/profiles/profile.ts';
+import { clearPresses, exitConfirmKey, profileFor } from '../src/profiles/profile.ts';
 import { loadScreen } from '../src/watch/screen-file.ts';
 import { readScreen, screenData } from '../src/watch/screen.ts';
 
@@ -66,6 +66,8 @@ function paneOf(
 ): { io: ExitIo; sent: Sent[]; types: string[] } {
   const text = exitText(cli);
   const clearKey = profileFor(cli)?.exitClear ?? '';
+  // The box empties once the last of the presses the key takes for the text has gone out.
+  let clearsLeft = clearPresses(clearKey, text).length;
   let typed = false;
   let drawn = false;
   let wiped = false;
@@ -86,7 +88,7 @@ function paneOf(
     });
     // The flip comes after the record, as in leftoverPane: the record keeps the reading the
     // key was decided on, not the frame the key itself draws.
-    if (key === clearKey && opts.cleared !== undefined) wiped = true;
+    if (key === clearKey && opts.cleared !== undefined && --clearsLeft <= 0) wiped = true;
     if (key === 'enter' && opts.afterEnter !== undefined) entered = true;
     return true;
   };
@@ -125,6 +127,7 @@ function leftoverPane(
 ): { io: ExitIo; sent: Sent[]; types: string[] } {
   const text = exitText(cli);
   const key = profileFor(cli)?.exitClear ?? '';
+  let clearsLeft = clearPresses(key, text).length;
   let cleared = false;
   let typed = false;
   let drawn = false;
@@ -144,7 +147,7 @@ function leftoverPane(
       kind: readScreen(cli, screen(), { cwd: io.foregroundCwd?.() ?? undefined, home: io.home }).kind,
       holds: boxHoldsText(cli, text, screen(), { cwd: io.foregroundCwd?.() ?? undefined, home: io.home }),
     });
-    if (keySent === key) cleared = true;
+    if (keySent === key && --clearsLeft <= 0) cleared = true;
     if (keySent === 'enter' && opts.afterEnter !== undefined) entered = true;
     return true;
   };
@@ -209,7 +212,7 @@ describe('a refused or swallowed Enter clears its own typed text', () => {
     });
     expect(await typeExit(pane.io, 'codex', exitText('codex'))).toBe('cleared');
     expect(pane.types).toEqual(['/exit']);
-    expect(pane.sent).toEqual([{ key: 'ctrl+u', kind: 'unsent', holds: true }]);
+    expect(pane.sent).toEqual(Array.from({ length: 5 }, () => ({ key: 'backspace', kind: 'unsent', holds: true })));
   });
 
   test('codex: an Enter that went out and never ran is cleared at the draw-wait deadline', async () => {
@@ -223,8 +226,63 @@ describe('a refused or swallowed Enter clears its own typed text', () => {
     expect(pane.types).toEqual(['/exit']);
     expect(pane.sent).toEqual([
       { key: 'enter', kind: 'unsent', holds: true },
-      { key: 'ctrl+u', kind: 'unsent', holds: true },
+      ...Array.from({ length: 5 }, () => ({ key: 'backspace', kind: 'unsent', holds: true })),
     ]);
+  });
+});
+
+// Seen live on Codex 0.167.0 after a machine restart: `/exit` typed, the slash popup drawn
+// (`› /exit  exit Codex`), and an Enter pressed at once stayed unsent under the popup; ctrl+u
+// then left the text there, while backspaces removed it. The pane below models that: an Enter
+// runs the exit only once the popup has had the settle, ctrl+u deletes nothing, and each
+// backspace deletes one character.
+describe('codex: the slash popup over /exit', () => {
+  function popupPane() {
+    let box = '';
+    let typedAt = 0;
+    let exited = false;
+    let clock = 1_000_000;
+    const keys: string[] = [];
+    const io: ExitIo = {
+      typeText: (line) => {
+        box += line;
+        typedAt = clock;
+        return true;
+      },
+      sendKey: (key) => {
+        keys.push(key);
+        if (key === 'backspace') box = [...box].slice(0, -1).join('');
+        return true;
+      },
+      pressEnter: () => {
+        keys.push('enter');
+        if (box === '/exit' && clock - typedAt >= 200) exited = true;
+        return true;
+      },
+      screen: () => (exited ? 'zsh $ ' : box === '' ? fixture('codex-idle-ansi.txt') : fixture('codex-unsent-ansi.txt')),
+      status: () => 'idle',
+      foreground: () => (exited ? ['zsh'] : ['codex']),
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      now: () => clock,
+    };
+    return { io, keys, box: () => box };
+  }
+
+  test('the Enter waits for the popup, and the exit runs', async () => {
+    const pane = popupPane();
+    expect(profileFor('codex')?.exitCompletion).toBe(true);
+    expect(await typeExit(pane.io, 'codex', '/exit')).toBe(true);
+    expect(pane.keys).toEqual(['enter']);
+  });
+
+  test('an exit that never ran is cleared with one backspace per character, not ctrl+u', async () => {
+    const pane = popupPane();
+    pane.io.pressEnter = () => true;
+    expect(await typeExit(pane.io, 'codex', '/exit')).toBe('cleared');
+    expect(pane.box()).toBe('');
+    expect(pane.keys).toEqual(['backspace', 'backspace', 'backspace', 'backspace', 'backspace']);
   });
 });
 
@@ -1201,7 +1259,7 @@ describe('independent adversarial checks: refused or swallowed Enter clears only
       });
       expect(await typeExit(refused.io, cli, exitText(cli))).toBe('cleared');
       expect(refused.types).toEqual([exitText(cli)]);
-      expect(refused.sent).toEqual([{ key: clearKey, kind: 'unsent', holds: true }]);
+      expect(refused.sent).toEqual(clearPresses(clearKey, exitText(cli)).map((key) => ({ key, kind: 'unsent', holds: true })));
 
       // 2. Swallowed Enter (`pressEnter` returns true, box stays unsent holding `/exit` through DRAW_WAIT_MS):
       //    clears `/exit` with `exit_clear` and returns 'cleared'.
@@ -1212,7 +1270,7 @@ describe('independent adversarial checks: refused or swallowed Enter clears only
       expect(swallowed.types).toEqual([exitText(cli)]);
       expect(swallowed.sent).toEqual([
         { key: 'enter', kind: 'unsent', holds: true },
-        { key: clearKey, kind: 'unsent', holds: true },
+        ...clearPresses(clearKey, exitText(cli)).map((key) => ({ key, kind: 'unsent', holds: true })),
       ]);
     });
   }

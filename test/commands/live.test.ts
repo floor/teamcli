@@ -1676,7 +1676,7 @@ describe('team up, live', () => {
     expect(code).toBe(1);
     expect(io.out).toContain(
       'codex-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
-      + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n',
+      + 'press Enter in its pane to send it, or clear the box (Backspace until empty), then run up again\n',
     );
     // The resume verifies the box and presses Enter; this stub's pane never takes the key, so
     // the submit is retried while the box still reads back as the line — RULES_ENTER_TRIES

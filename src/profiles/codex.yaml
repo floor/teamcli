@@ -41,10 +41,15 @@ login:
     - status
   hint: codex login
 exit: /exit
-# The one key that empties the box, from the 0.160.0 capture: ctrl+u returns the
-# composer to its empty placeholder. Used only to clear an exit text that did not read
-# back as typed, and only when the box holds exactly that text.
-exit_clear: ctrl+u
+# `/exit` opens the slash-command popup (`› /exit  exit Codex`, exit-typed.txt), and an Enter
+# pressed right after the typing was seen live to stay unsent under the popup on many seats
+# (0.167.0, a loaded machine after a restart). The popup is the completion row: the Enter
+# waits the settle first.
+exit_completion: true
+# The key that clears an exit text that did not run. ctrl+u empties a plain draft (0.160.0,
+# 0.167.0), but live it left `/exit` under the popup; five backspaces cleared it. A backspace
+# is pressed once per character of the text it clears.
+exit_clear: backspace
 # The measured way into the input box (2026-10-19, herdr 0.7.1, a 55-column pane, codex-cli
 # 0.161.0): one ctrl+u removed the draft's last row; the pair [ctrl+u, ctrl+k] cleared one row per
 # pass and left the box empty after the passes its rows counted (four for a three-line draft; the
