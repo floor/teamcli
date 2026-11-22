@@ -37,6 +37,8 @@ function git(cwd: string, ...args: string[]): void {
 
 /** A lead whose pane is a person's, and the reviewer these scenes read: kept by the run, with a
  *  launch record and a pane process a previous launch left. */
+// The worker's socket is an opt-in the team file declares (`inbound: accept`): a launch's own
+// accept authorizes nothing by itself.
 function teamText(): string {
   return `format: 1
 project: acme
@@ -61,6 +63,7 @@ seats:
   - role: reviewer
     name: worker
     label: worker
+    inbound: accept
     cli: claude-code
     vendor: anthropic
     model: Claude Opus

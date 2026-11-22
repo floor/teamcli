@@ -1161,10 +1161,13 @@ function liveInboxIn(w: WalkWorld): void {
   );
 }
 
-/** The receiving session's own declaration that it accepts cross-session frames, and the socket
- *  its pane exposes. The declaration's file predates the socket, so the session was started after
- *  the declaration took effect and the socket leg is live. */
+/** The receiving session's own declaration that it accepts cross-session frames, the team file's
+ *  opt-in (`inbound: accept` on the seat: a launch's own accept authorizes nothing by itself), and
+ *  the socket its pane exposes. The declaration's file predates the socket, so the session was
+ *  started after the declaration took effect and the socket leg is live. */
 function acceptInbound(w: WalkWorld): void {
+  const file = join(w.dir, 'team.yaml');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('    name: orchestrator\n', '    name: orchestrator\n    inbound: accept\n'));
   const path = cliHookSettingsPath(w.dir, 'floor', 'orchestrator');
   if (path === null) throw new Error('the fixture seat declares no settings path');
   mkdirSync(dirname(path), { recursive: true });
@@ -1323,7 +1326,9 @@ describe('the client send walk', () => {
     expect(host.typed).toEqual([]);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
     const log = readFileSync(join(w.dir, LOG_FILE), 'utf8');
-    expect(log).toContain('orchestrator: sent on the socket');
+    // The history line is the send's one record of success: the log keeps no separate "sent on
+    // the socket" line, only the client walk's own outcome.
+    expect(log).not.toContain('sent on the socket');
     expect(log).toContain('orchestrator: delivered (socket) for client drop drop-1');
     expect(log).not.toContain('queued, no event adapter');
   });
