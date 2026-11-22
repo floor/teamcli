@@ -23,7 +23,8 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { readStateFile, writeStateFile } from '../file-write.ts';
 import { mkdirSync } from '../host/guarded-fs.ts';
 import type { Io } from '../io.ts';
-import { readState } from '../state.ts';
+import { readState, updateState } from '../state.ts';
+import { seatProcessVerdict } from './identity.ts';
 import { readScreen } from '../watch/screen.ts';
 import { launchLimit } from '../watch/machine.ts';
 import { CHANNEL_OVERDUE_MS, type ChannelUnproven } from '../queue/resend.ts';
@@ -129,6 +130,17 @@ export async function relaunchRestoredSeats(input: {
       mark(seat.name, undefined);
       own = undefined;
     }
+    // A pane whose live process is not the recorded launch (a resume the restart rebind could not
+    // prove) runs no launch line either: its record says so, as the re-tie would have, so the
+    // send walk, the reach check and this relaunch take it the same way.
+    if (held.channel_launch !== false && channelOptionProven(seat.launch)
+      && seatProcessVerdict(held.launched, sources.launch?.processInfo?.(session, held.pane) ?? null) === 'replaced') {
+      updateState(dir, (state) => {
+        const one = state.sessions[session]?.seats[seat.name];
+        if (one !== undefined && identity(one.launched) === identity(held.launched)) one.channel_launch = false;
+      });
+      held.channel_launch = readState(dir).sessions[session]?.seats[seat.name]?.channel_launch;
+    }
     const restored = held.channel_launch === false && channelOptionProven(seat.launch);
     if (restored && own?.relaunched !== true) {
       if (own === undefined) {
@@ -164,7 +176,11 @@ export async function relaunchRestoredSeats(input: {
         if (exit === 0 && after?.launched !== undefined) {
           own = { launched: identity(after.launched), at: now().toISOString(), relaunched: true };
           mark(seat.name, own);
-          lines.push(`${seat.name}: relaunched through its launch line with its conversation ${held.agent_session}`);
+          // Through the line only when the new process carries the channel flag; a launch that fell
+          // back without it is said as such, and the reach check reports it if it stays unproven.
+          lines.push(after.channel_launch === true
+            ? `${seat.name}: relaunched through its launch line with its conversation ${held.agent_session}`
+            : `${seat.name}: restarted with its conversation ${held.agent_session}, but its new process carries no channel flag; the reach check reports it if it stays unreachable`);
         } else {
           const last = said.join('').split('\n').map((one) => one.trim()).filter((one) => one !== '').at(-1) ?? `exit ${String(exit)}`;
           waits.push(`${seat.name} not relaunched yet (${last})`);

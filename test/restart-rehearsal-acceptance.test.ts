@@ -137,7 +137,9 @@ type World = {
 
 const conv = (name: string): string => `conv-${name}`;
 
-function makeWorld(): World {
+/** `unprovable`: seats whose resumed process has no readable birth, so the restart rebind's
+ *  proof refuses them and the restore pass leaves their pre-restart record as it was. */
+function makeWorld(unprovable: readonly Name[] = []): World {
   const panes = new Map<string, Pane>();
   const clock = Date.now();
   const births = new Map<number, number>();
@@ -146,8 +148,10 @@ function makeWorld(): World {
     // Before the restart: the launch line's shell and CLI, an hour ago. After it: the host's own.
     births.set(P + 100 + at, clock - 3_600_000);
     births.set(P + 200 + at, clock - 3_599_000);
-    births.set(P + 700 + at, clock - 60_000);
-    births.set(P + 800 + at, clock - 59_000);
+    if (!unprovable.includes(name)) {
+      births.set(P + 700 + at, clock - 60_000);
+      births.set(P + 800 + at, clock - 59_000);
+    }
     parents.set(P + 800 + at, P + 700 + at);
     // The host restored each pane and resumed its conversation: a new shell and CLI, not the ones
     // the launch line started, and no development-channel flag on the process.
@@ -160,7 +164,9 @@ function makeWorld(): World {
 }
 
 /** The record each seat had before the restart: ready, launched through its line, its conversation. */
-function recordBeforeRestart(w: World): void {
+/** `leadPair: false` leaves the project folder without lead2's channel pair: its restart then
+ *  launches without the channel flag. */
+function recordBeforeRestart(w: World, leadPair = true): void {
   const loaded = loadTeamFile(root, { home });
   if (!loaded.ok) throw new Error(`the drill team does not load: ${JSON.stringify(loaded.errors)}`);
   const seats: Record<string, SeatState> = {};
@@ -181,7 +187,7 @@ function recordBeforeRestart(w: World): void {
   writeFileSync(join(dir, 'team.state.json'), JSON.stringify({ format: 1, sessions: { [SESSION]: { seats, worktrees: {} } } }));
   // The team's registry row (one root, its roster and lobby) and the project folder's channel
   // pair for the lead that runs there and is restarted from here.
-  registerDefaultChannelFixture(root, home, 'lead2');
+  registerDefaultChannelFixture(root, home, leadPair ? 'lead2' : undefined);
   upsertTeam(home, teamIdOf(root), { lifecycle: 'running', by: 'owner' });
 }
 
@@ -553,5 +559,44 @@ describe('a machine restart, rehearsed: every Claude seat ends with a working pu
     expect(orchestrator.legs.find((leg) => leg.leg === 'drop')?.state).toBe('attempted');
     expect(orchestrator.text).toContain('its channel is not a working push: the process in its pane was not started from its launch line');
     expect(readdirSync(seatMailDirIn(dir, SESSION, 'boss', 'stamped')).some((one) => one.endsWith(SEND_TAIL))).toBe(true);
+  });
+
+  test('a seat the rebind could not prove is still taken; a restart without the flag is not called one through the line', async () => {
+    mkdirSync(join(base, 'sockets'), { recursive: true });
+    // boss and worker-a come back with no readable process birth: the rebind refuses both, and
+    // their records still name the pre-restart launch with the channel flag on. lead2's folder
+    // has no channel pair, so its restart launches without the flag.
+    const w = makeWorld(['boss', 'worker-a']);
+    messageKeyOf(home);
+    expect(activate(root, { home, build: 'b', actors: () => [daemon] }).kind).toBe('activated');
+    recordBeforeRestart(w, false);
+    listenersUp();
+    await approve(w);
+
+    const first = await sweep(w);
+    if (first.kind !== 'ran') throw new Error(JSON.stringify(first));
+    // The seat whose rebind failed is relaunched like the others, with its own conversation.
+    expect(restartsOf(w)).toEqual(['lead2', 'worker-a', 'worker-b']);
+    expect(w.ran.find((run) => run.command.includes('--name worker-a '))?.command).toContain(`${FLAG} --resume conv-worker-a `);
+    expect(held('worker-a')?.channel_launch).toBe(true);
+    // The orchestrator the rebind could not prove: not restarted, the owner named the restart,
+    // and a send routes around its channel.
+    expect(first.summary.line).toContain('the owner approves `team restart boss --resume conv-boss`');
+    expect(held('boss')?.channel_launch).toBe(false);
+    const orchestrator = await sendTo(w, 'boss');
+    expect(orchestrator.legs.find((leg) => leg.leg === 'channel')).toEqual({ leg: 'channel', state: 'skipped', reason: send.CHANNEL_FLAG_DROPPED });
+    // lead2 restarted, but its new process carries no channel flag: not said as through its line.
+    expect(held('lead2')?.channel_launch).toBe(false);
+    expect(first.summary.line).not.toContain('lead2: relaunched through its launch line');
+    expect(first.summary.line).toContain('lead2: restarted with its conversation conv-lead2, but its new process carries no channel flag');
+    // The reach check takes it from there: past the bound it is said once as unreachable, and it
+    // is not restarted again.
+    w.clock += CHANNEL_OVERDUE_MS + 1_000;
+    const late = await sweep(w);
+    if (late.kind !== 'ran') throw new Error(JSON.stringify(late));
+    expect(late.summary.line).toContain('lead2: unreachable after restore: not started from its launch line');
+    await sweep(w);
+    expect(noticesFor(w, 'lead2: unreachable after restore')).toHaveLength(1);
+    expect(restartsOf(w).filter((one) => one === 'lead2')).toHaveLength(1);
   });
 });
