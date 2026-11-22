@@ -16,7 +16,6 @@
 // `ack`: then the seat the team places, in the one team and session the grant signs, acknowledges
 // it here, under the same verified bound a reply to the same thread is admitted by.
 import { relayIfConfined } from '../send/confined-outbox.ts';
-import { ACK_FLAG_OPTIONS } from '../send/command-grammar.ts';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
@@ -158,7 +157,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
   // for it, as that seat (rfc-event-comms E5, src/send/confined-outbox.ts).
   const relayed = await relayIfConfined('ack', argv, io);
   if (relayed !== null) return relayed;
-  const args = readArgs(argv, [], [...ACK_FLAG_OPTIONS]);
+  const args = readArgs(argv, [], ['json']);
   if (args.error) return usage(io, json, args.error);
   const id = args.rest[0];
   if (id === undefined) return usage(io, json, '<id> is required');

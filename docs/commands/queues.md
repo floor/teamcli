@@ -8,7 +8,7 @@ The per-seat delivery queues of a checkout (rfc-event-comms, steps E6, E7 and E7
     team queues activate
     team queues prove [<seat>]
     team queues deactivate
-    team queues reader on|off
+    team queues reader <on|off>
 
 ## What each verb does
 

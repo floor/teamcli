@@ -277,7 +277,7 @@ function buildScene(
   };
 }
 
-describe('FLO-1469 independent verification', () => {
+describe('independent verification of the unproven Claude seat pointer and activation guard', () => {
   test('1. activation guard: refuses running unproven Claude seat without pointer proof, ignores stopped seat, and activates when proven or pointer-proved', async () => {
     const at = setupActiveRoot();
     writeDaemon(at.home);

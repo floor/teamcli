@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 const ROOT = resolve(import.meta.dir, '..');
 const assignment = JSON.parse(readFileSync(join(ROOT, 'scripts', 'ci-shard-assignment.json'), 'utf8')) as { shards: number };
 const at = process.argv.indexOf('--out');
-const out = at === -1 ? mkdtempSync(join(tmpdir(), 'team-test-fast-')) : resolve(process.argv[at + 1]!);
+const out = at === -1 ? mkdtempSync(join(tmpdir(), 'teamcli-fast-')) : resolve(process.argv[at + 1]!);
 mkdirSync(out, { recursive: true });
 const started = Date.now();
 // The machine's own registry must come out of a run as it went in: a scene that writes it reaches
