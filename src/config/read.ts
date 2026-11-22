@@ -38,6 +38,8 @@ export type SeatSettingsInput = {
   project: string;
   seat: ConfigSeatInput & { name: string };
   teamDeliveryOrder: readonly OrderWord[] | null;
+  /** The team file's own `desktop_control`, when it writes one. */
+  teamDesktopControl?: boolean | null;
   /** The loaded declaration's `entity:`, when it names one. It is the entity a team file
    *  declares, which a registry that names no entity must not hide: the entity source is still
    *  read, and one that does not verify refuses the read instead of being skipped. */
@@ -108,7 +110,7 @@ export function seatAgentOf(home: string, team: TeamContext, seatName: string): 
 export function readSeatSettings(input: SeatSettingsInput): SeatSettingsRead {
   const home = input.home === undefined ? homedir() : input.home;
   if (home === null) {
-    return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder) };
+    return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder, {}, input.teamDesktopControl ?? null) };
   }
   const { agentId, entity, projectId } = agentIdOf(home, input.root, input.seat.name);
   // The declaration's own entity wins: a registry that names none must not turn the entity
@@ -126,5 +128,5 @@ export function readSeatSettings(input: SeatSettingsInput): SeatSettingsRead {
     if (source !== undefined) record.sourceFile = source;
     records[setting.key] = record;
   }
-  return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder, records) };
+  return { ok: true, rows: composeSeatConfig(input.seat, input.teamDeliveryOrder, records, input.teamDesktopControl ?? null) };
 }

@@ -165,3 +165,93 @@ export function currentCodexRecipe(line: string): string | null {
   }
   return after !== null && JSON.stringify(after) === JSON.stringify(expected) ? changed : null;
 }
+
+/** One `-c` pair's key and value, split at its first `=`; null for a word with none. */
+function configPair(pair: string): { key: string; value: string } | null {
+  const at = pair.indexOf('=');
+  return at <= 0 ? null : { key: pair.slice(0, at).trim(), value: pair.slice(at + 1).trim() };
+}
+
+/** Every `-c`/`--config` key a decoded line sets, with the last value it gives, read as the CLI
+ *  reads its own words: a bare `--` ends option parsing. */
+function configValues(decoded: readonly string[]): Map<string, string> {
+  const values = new Map<string, string>();
+  for (let i = 0; i < decoded.length; i++) {
+    const word = decoded[i]!;
+    if (word === '--') break;
+    const inline = /^--config=(.*)$/.exec(word);
+    const value = word === '-c' || word === '--config' ? decoded[i + 1] : inline?.[1];
+    if (value === undefined) continue;
+    if (word === '-c' || word === '--config') i++;
+    const pair = configPair(value);
+    if (pair !== null) values.set(pair.key, pair.value);
+  }
+  return values;
+}
+
+/** The plain config pairs (`desktop_control.config`) a recorded line does not set to the value
+ *  required, last word winning. A line this reader cannot decode carries none of them. */
+export function configGaps(line: string, required: readonly string[], words?: readonly string[] | null): string[] {
+  const decoded = decodedFor(line, words);
+  if (decoded === null) return [...required];
+  const values = configValues(decoded);
+  return required.filter((pair) => {
+    const wanted = configPair(pair);
+    return wanted === null || values.get(wanted.key) !== wanted.value;
+  });
+}
+
+/** A Codex app-server's start words with one seat's pins made effective: the feature pins as
+ *  `withPinnedFeatures` places them, then each config pair whose last value differs, appended. */
+export function withPinnedConfig(config: readonly string[], pins: { features: readonly string[]; config: readonly string[] }): string[] {
+  const featured = withPinnedFeatures(config, pins.features);
+  const gaps = configGaps('', pins.config, featured);
+  return gaps.length === 0 ? featured : [...featured, ...gaps.flatMap((pair) => ['-c', pair])];
+}
+
+/** The words every pin sentence for a seat with `desktop_control` off ends on. */
+export const DESKTOP_PIN_GAP = 'desktop_control is off for it, so its launch pins computer and browser control off';
+
+/**
+ * The sentence naming a seat whose recorded line misses its pins, or null when it carries them
+ * all: `featureMismatch` for the feature pins, then the config pairs a seat with desktop control
+ * off carries. The repair is the seat's relaunch, which writes a line with every pin.
+ */
+export function pinMismatch(
+  line: string | undefined,
+  pins: { features: readonly string[]; config: readonly string[] },
+  words?: readonly string[] | null,
+): string | null {
+  if (pins.config.length === 0) return featureMismatch(line, pins.features, words);
+  const why = DESKTOP_PIN_GAP;
+  if (line === undefined) return `its recorded launch line is unknown; ${why}`;
+  if (decodedFor(line, words) === null) return `its recorded launch line cannot be read; ${why}`;
+  const gaps = [
+    ...featureGaps(line, pins.features, words).map((pair) => `features.${pair}`),
+    ...configGaps(line, pins.config, words),
+  ];
+  if (gaps.length === 0) return null;
+  return `its recorded launch line does not pin ${gaps.join(', ')}; ${why}`;
+}
+
+/** The pins one seat's launch carries: `name=value` feature pairs and plain `-c` config pairs. */
+export type SeatPins = { features: readonly string[]; config: readonly string[] };
+
+/** The pins a seat of this profile carries for its `desktop_control` word. */
+export function seatPins(profile: { features: readonly string[]; desktopControl?: { features: readonly string[]; config: readonly string[] } | null } | null | undefined, desktopControl: boolean): SeatPins {
+  if (profile === null || profile === undefined) return { features: [], config: [] };
+  const block = profile.desktopControl ?? null;
+  if (!desktopControl || block === null) {
+    return { features: [...profile.features], config: desktopControl ? [] : [...(block?.config ?? [])] };
+  }
+  const lifted = new Set(block.features);
+  return {
+    features: profile.features.filter((pair) => !lifted.has(pair.slice(0, pair.lastIndexOf('=')))),
+    config: [],
+  };
+}
+
+/** The words the pins stand for on a launch line: `-c features.<pair>` then `-c <pair>`. */
+export function seatPinWords(pins: SeatPins): string[] {
+  return [...pinnedWords(pins.features), ...pins.config.flatMap((pair) => ['-c', pair])];
+}

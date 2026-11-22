@@ -18,7 +18,7 @@ import type { DoctorSources } from '../src/commands/doctor.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { setHerdrCapture, setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
-import { pinnedWords } from '../src/launch/features.ts';
+import { seatPins, seatPinWords } from '../src/launch/features.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { CHANNEL_FLAG, CHANNEL_SERVER } from '../src/mcp/channel.ts';
 import { planChannelPair, publishChannelPair } from '../src/mcp/launch-config.ts';
@@ -404,11 +404,11 @@ test('a Codex seat on the incompatible-feature dialog is relaunched and no optio
     pane === AFTER ? FEATURE_SCREEN : 'ready\n'
   ));
   expect(await runUp(['--dry-run'], dry, planned), `${dry.out}\n${dry.err}`).toBe(0);
-  const pins = pinnedWords(profileFor('codex')?.features ?? []);
+  const pins = seatPinWords(seatPins(profileFor('codex'), false));
   // Dialog recovery relaunches without the retired fixed false pair, with the current pins.
   expect(pins).toEqual([
     '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
-    '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
+    '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false', '-c', 'features.browser_use_full_cdp_access=false', '-c', 'mcp_servers.cua_repl.command=/usr/bin/false', '-c', 'mcp_servers.cua_repl.enabled=false', '-c', 'mcp_servers.node_repl.command=/usr/bin/false', '-c', 'mcp_servers.node_repl.enabled=false', '-c', 'plugins.computer-use@openai-bundled.enabled=false', '-c', 'plugins.unified-computer-use@openai-bundled.enabled=false', '-c', 'plugins.browser@openai-bundled.enabled=false',
   ]);
   for (let at = 1; at < pins.length; at += 2) expect(dry.out).toContain(pins[at]!);
   expect(dry.out).toContain('closed without choosing a dialog option; launched again with the coordination flag');

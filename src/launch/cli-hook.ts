@@ -21,6 +21,7 @@
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
 // stdin — no session id, no transcript path, no environment.
 import { shippedClaudeSettings } from '../launchers/shipped.ts';
+import { claudeDesktopDeny } from './desktop-control.ts';
 import { closeSync, constants, lstatSync, readFileSync, readSync, realpathSync, type Stats } from 'node:fs';
 import { fchmodSync, lutimesSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from '../host/guarded-fs.ts';
 import { createHash } from 'node:crypto';
@@ -64,6 +65,9 @@ export type CliHookSeat = {
   role?: string;
   /** The seat's own `access`, over its role's default (shipped launchers). */
   access?: 'read' | 'write';
+  /** The seat's resolved `desktop_control`. Anything but true writes the deny rules for the
+   *  computer-use and browser-control MCP tools into the seat's settings file. */
+  desktopControl?: boolean;
 };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
@@ -776,12 +780,25 @@ export function installCliHooks(
       : presenceBindingAt(dir, session, seat);
     const presence = binding === null ? undefined : { dir, session, seat, binding };
     const base = cliHookSettings(statePath, drops, command, inbound, presence, cli);
-    const extra = shippedClaudeSettings(byName.get(seat)?.launcher, byName.get(seat)?.role, byName.get(seat)?.access);
+    const shipped = shippedClaudeSettings(byName.get(seat)?.launcher, byName.get(seat)?.role, byName.get(seat)?.access);
+    // A seat whose `desktop_control` is off (the default) is denied the computer-use and
+    // browser-control MCP tools in this same file: the CLI reads one --settings.
+    const deny = byName.get(seat)?.cli === 'claude-code' ? claudeDesktopDeny(byName.get(seat)?.desktopControl) : [];
+    const extra = withDeny(shipped, deny);
     const text = extra === undefined ? base : `${JSON.stringify({ ...extra, ...(JSON.parse(base) as Record<string, unknown>) }, null, 2)}\n`;
     if (!writeSettings(settingsPath, text)) continue;
     landed[seat] = settingsPath;
   }
   return landed;
+}
+
+/** The shipped settings with `deny` added to their `permissions.deny`, or the deny alone when
+ *  there are none; undefined when there is nothing to add. */
+function withDeny(settings: Record<string, unknown> | undefined, deny: readonly string[]): Record<string, unknown> | undefined {
+  if (deny.length === 0) return settings;
+  const permissions = (settings?.permissions ?? {}) as Record<string, unknown>;
+  const held = Array.isArray(permissions.deny) ? (permissions.deny as string[]) : [];
+  return { ...(settings ?? {}), permissions: { ...permissions, deny: [...new Set([...held, ...deny])] } };
 }
 
 /** What one no-restart refresh did, per seat it looked at. A seat is in exactly one list, and a

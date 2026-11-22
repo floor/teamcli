@@ -12,6 +12,7 @@ import { realSources as restartSources } from '../src/commands/restart.ts';
 import { registerInbox, selfRunner } from '../src/mcp/register.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { profileFor } from '../src/profiles/index.ts';
+import { seatPins } from '../src/launch/features.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { testIo } from './helpers.ts';
 
@@ -216,9 +217,11 @@ describe('the codex launch line round-trips its values through shell quoting and
 
   function pairs(line: string): Map<string, string> {
     const argv = words(line);
-    const at = argv.flatMap((word, index) => (word === '-c' && !(argv[index + 1] ?? '').startsWith('features.') ? [index] : []));
+    const pinned = new Set(seatPins(profileFor('codex'), false).config);
+    const at = argv.flatMap((word, index) => (word === '-c' && !(argv[index + 1] ?? '').startsWith('features.') && !pinned.has(argv[index + 1] ?? '') ? [index] : []));
     // Codex keeps only the two inbox pairs after the obsolete OAuth refresh override was removed;
-    // the profile's feature pins are the other `-c` words, and are not the inbox's.
+    // the profile's feature pins and its computer and browser config pins are the other `-c`
+    // words, and are not the inbox's.
     expect(at).toHaveLength(2);
     const filled = new Map<string, string>();
     for (const index of at) {

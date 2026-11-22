@@ -107,6 +107,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     operator: valueOf<string>(ctx, 'operator'),
     deliveryOrder: valueOf<TeamFile['deliveryOrder']>(ctx, 'delivery_order'),
     senderName: valueOf<TeamFile['senderName']>(ctx, 'sender_name'),
+    ...(valueOf<boolean | null>(ctx, 'desktop_control') == null ? {} : { desktopControl: valueOf<boolean>(ctx, 'desktop_control') }),
     messaging: valueOf<TeamFile['messaging']>(ctx, 'messaging'),
     ...(policies !== null && policies !== undefined ? { policies } : {}),
     ...(bus !== null && bus !== undefined ? { bus } : {}),

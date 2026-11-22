@@ -38,7 +38,8 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { verifyLobby } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import { launchBinary, launchLineFindings } from '../launch/line.ts';
-import { featureMismatch } from '../launch/features.ts';
+import { DESKTOP_PIN_GAP, pinMismatch, seatPins } from '../launch/features.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
@@ -224,7 +225,9 @@ export function blocksLaunch(finding: Finding): boolean {
     && !finding.text.startsWith("the watch's pane is gone")
     && !finding.text.startsWith('the watch ended with its pane')
     // A restored seat's missing reach is repaired by its own restart: it never blocks one.
-    && !finding.text.includes(': unreachable after restore: ');
+    && !finding.text.includes(': unreachable after restore: ')
+    // A seat missing its computer and browser pins is repaired by its own relaunch.
+    && !finding.text.includes(DESKTOP_PIN_GAP);
 }
 
 export const doctor: Command = (argv, io) => runDoctor(argv, io, realSources);
@@ -737,21 +740,25 @@ function personaFindings(team: TeamFile, root: string, home: string): Finding[] 
 // the RECORDED launch line in team's own state, never a running process's command line; a
 // record that holds no line says unknown rather than a guess. A seat the state does not record
 // was not left running by this session and is not named.
-function featureFindings(team: TeamFile, dir: string, session: string): Finding[] {
+//
+// The pins follow the seat's `desktop_control` word. A seat with it off (the default) whose line
+// lacks the computer and browser pins is a miss, not a warning: it may be driving the user's
+// desktop or browser. It never blocks the relaunch that repairs it (`blocksLaunch`).
+function featureFindings(team: TeamFile, dir: string, session: string, home?: string, root?: string): Finding[] {
   const recorded = readState(dir).sessions[session]?.seats ?? {};
   const findings: Finding[] = [];
   for (const seat of team.seats) {
     if (seat.stopped) continue;
-    const features = profileFor(seat.cli)?.features ?? [];
-    if (features.length === 0) continue;
+    const pins = seatPins(profileFor(seat.cli), seatDesktopControl({ team, seat: seat.name, home: home ?? null, ...(root === undefined ? {} : { root }) }));
+    if (pins.features.length === 0 && pins.config.length === 0) continue;
     const held = recorded[seat.name];
     if (!held) continue;
     // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
     // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
     // than as carrying a pin written after a script the CLI never receives.
-    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
+    const said = pinMismatch(held.launch_line, pins, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
-    findings.push({ level: 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
+    findings.push({ level: pins.config.length > 0 ? 'miss' : 'warn', text: `${seat.name}: ${said}; run \`team restart ${seat.name}\`` });
   }
   return findings;
 }
@@ -906,7 +913,7 @@ export function doctorFindings(
   findings.push(...identityFindings(team, dir, session, sources));
   findings.push(...swapFindings(team, dir, session));
   findings.push(...placeholderVersionFindings(team, dir, session, sources));
-  findings.push(...featureFindings(team, dir, session));
+  findings.push(...featureFindings(team, dir, session, sources.home, root));
   findings.push(...personaFindings(team, root, sources.home));
   findings.push(...claudeChannelFindings(team, dir, root, session, sources.home, sources.now()));
 

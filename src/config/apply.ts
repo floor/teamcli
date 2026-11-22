@@ -1,6 +1,6 @@
 // The runtime reading of a seat's at-once settings: what the next send, admission or name lookup
 // sees. The keys are the same signed chain `team settings` prints, resolved nearest first; this
-// reading takes only the three a runtime consumer acts on.
+// reading takes only the words a runtime consumer acts on.
 //
 // Two readings of the same chain. `resolveSeatOverrides` / `resolveSeatSettings` hand an acting
 // caller the chain's answer whole: verified words, or the reasons a source could not be read or
@@ -13,6 +13,7 @@
 import { readAgents, type Agent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { DeliveryLeg } from '../settings/inherit.ts';
+import type { ConfigLevel } from './registry.ts';
 import { agentIdOf, seatAgentOf, teamContextOf, type TeamContext } from './read.ts';
 import {
   readConfigSources,
@@ -31,6 +32,9 @@ export type SeatOverrides = {
   nickname?: string;
   deliveryOrder?: readonly DeliveryLeg[];
   human?: boolean;
+  /** The nearest signed `desktop_control` word and the level it was set at: a seat record beats
+   *  the seat's file entry, a wider one stands under it (`resolveDesktopControl`). */
+  desktopControl?: { value: boolean; level: ConfigLevel };
 };
 
 /** The chain's answer for a seat: the verified at-once words, or why a source was not readable. */
@@ -44,6 +48,9 @@ function overridesOf(chain: Extract<ConfigChainResult, { ok: true }>): SeatOverr
   for (const setting of chain.settings) {
     if (setting.key === 'nickname' && typeof setting.value === 'string') overrides.nickname = setting.value;
     if (setting.key === 'human' && typeof setting.value === 'boolean') overrides.human = setting.value;
+    if (setting.key === 'desktop_control' && typeof setting.value === 'boolean') {
+      overrides.desktopControl = { value: setting.value, level: setting.level };
+    }
     if (setting.key === 'delivery_order' && Array.isArray(setting.value)) {
       overrides.deliveryOrder = [...(setting.value as readonly DeliveryLeg[])];
     }

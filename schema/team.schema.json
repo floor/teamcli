@@ -704,6 +704,10 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "desktop_control": {
+            "type": "boolean",
+            "$comment": "whether this seat may control the computer (computer use, the user's browser, desktop apps); wins over the team's desktop_control, and off when neither writes one"
+          },
           "channel": {
             "enum": [
               "off",
@@ -863,6 +867,10 @@
         "seat@team"
       ],
       "$comment": "how a sender reads in TeamCLI headlines: auto (the nickname inside its own team, seat@team from another), nickname, seat, or seat@team; the registry id stays in every record, and the default is auto"
+    },
+    "desktop_control": {
+      "type": "boolean",
+      "$comment": "whether the team's seats may control the computer (computer use, the user's browser, desktop apps): off when omitted; a seat's own desktop_control wins, so a team turns it on only for the seat that needs it"
     },
     "messaging": {
       "type": "object",

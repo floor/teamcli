@@ -7,6 +7,7 @@
 import { describe, expect, test } from 'bun:test';
 import { codexEndpointConfig, remoteCodexCommand } from '../../src/launch/plan.ts';
 import { profileFor } from '../../src/profiles/index.ts';
+import { seatPins, seatPinWords } from '../../src/launch/features.ts';
 import { launchCommand, resumeCarry } from '../../src/profiles/profile.ts';
 
 const codex = profileFor('codex')!;
@@ -18,8 +19,8 @@ const launched = (profile: ReturnType<typeof profileFor>, line: string): string 
 
 /** The profile's computer- and browser-use pins, as every Codex launch carries them: after the
  *  options, before the CLI's own `--`. */
-const PINS = codex.features.map((pair) => ` -c features.${pair}`).join('');
-const PIN_CONFIG = codex.features.flatMap((pair) => ['-c', `features.${pair}`]);
+const PIN_CONFIG = seatPinWords(seatPins(codex, false));
+const PINS = PIN_CONFIG.map((word) => ` ${word}`).join('');
 const pinned = (line: string): string => {
   const at = line.indexOf(' -- ');
   return at < 0 ? `${line}${PINS}` : `${line.slice(0, at)}${PINS}${line.slice(at)}`;

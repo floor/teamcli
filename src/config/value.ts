@@ -122,6 +122,7 @@ export function checkSeatSetting(
     case 'delivery_order':
       return governed(key, value, chain);
     case 'human':
+    case 'desktop_control':
       return governed(key, value, chain);
   }
 }

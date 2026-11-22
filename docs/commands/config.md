@@ -170,6 +170,7 @@ order in force. The registry names the policy on each row so the two can be told
 | `nickname` | seat | unique in the team, never `lead` | unset | — | at once |
 | `delivery_order` | seat | delivery legs, tighten only | the team's order, else `typed, drop` | `delivery-order` | at once |
 | `human` | seat | true or false | false | — | at once |
+| `desktop_control` | team, seat | true or false | false | — | the CLI's next start: a restart that resumes |
 
 `restart that resumes` is what `team restart` does for a CLI that keeps its session: the value is
 handed to the CLI at its next start. `at once` is a value TeamCLI reads on its next command with no
@@ -194,20 +195,24 @@ restart.
 
 ```console
 $ team config keys ; echo "exit $?"
-  KEY             LEVELS  ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES
-  model           seat    a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes
-  effort          seat    one of the CLI profile's effort levels                           -            -               restart that resumes
-  nickname        seat    unique in the team, never lead                                   -            -               at once
-  delivery_order  seat    delivery legs, tighten only                                      typed, drop  delivery-order  at once
-  human           seat    true or false                                                    false        -               at once
+  KEY              LEVELS      ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES
+  model            seat        a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes
+  effort           seat        one of the CLI profile's effort levels                           -            -               restart that resumes
+  nickname         seat        unique in the team, never lead                                   -            -               at once
+  delivery_order   seat        delivery legs, tighten only                                      typed, drop  delivery-order  at once
+  human            seat        true or false                                                    false        -               at once
+  desktop_control  team, seat  true or false                                                    false        -               restart that resumes
 exit 0
 ```
 
-Every key is a seat key today, so `seat` lists them all and a level above a seat has none yet:
+`desktop_control` is the one key a team may also set (see
+[`desktop_control`](../team-file.md#desktop_control)); every other key is a seat key, so `team`
+lists only it:
 
 ```console
 $ team config keys team ; echo "exit $?"
-no settings are registered at team level
+  KEY              LEVELS      ALLOWED        DEFAULT  GOVERNED BY  APPLIES
+  desktop_control  team, seat  true or false  false    -            restart that resumes
 exit 0
 ```
 
@@ -280,6 +285,18 @@ $ team config keys seat --json ; echo "exit $?"
       "default": false,
       "governed_by": null,
       "applies": "at-once"
+    },
+    {
+      "key": "desktop_control",
+      "levels": [
+        "team",
+        "seat"
+      ],
+      "type": "boolean",
+      "allowed": "true or false",
+      "default": false,
+      "governed_by": null,
+      "applies": "restart-resume"
     }
   ]
 }

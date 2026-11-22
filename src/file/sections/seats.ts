@@ -17,6 +17,7 @@ import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
 import { readDeliveryOrder } from './delivery_order.ts';
 import { readSenderName } from './sender_name.ts';
+import { readDesktopControl } from './desktop_control.ts';
 import { readMessaging } from './messaging.ts';
 import { MODES } from './workspace.ts';
 
@@ -121,6 +122,7 @@ export const seats: Section = {
         leads: { type: 'boolean', $comment: 'the seat that leads: exactly one seat carries it' },
         assistant: { type: 'boolean', $comment: 'the entity\'s assistant: at most one seat carries it' },
         human: { type: 'boolean', $comment: 'the pane is a person\'s: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there' },
+        desktop_control: { type: 'boolean', $comment: 'whether this seat may control the computer (computer use, the user\'s browser, desktop apps); wins over the team\'s desktop_control, and off when neither writes one' },
         channel: {
           enum: ['off', 'on'],
           $comment: 'the team-inbox channel for a claude-code seat: omitted or on is the default, and off leaves the launch and the seat\'s MCP pair alone',
@@ -193,7 +195,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'launcher', 'access', 'brief', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'channel', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'channel', 'watch_wake', 'public_only', 'compact_delivery', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'messaging', 'liveness', 'desktop_control',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -288,6 +290,9 @@ function readSeats(
     // nudge there either. A field of the built seat like `assistant`, omitted when the file
     // marks none — every file that marks no seat keeps the digest it had.
     const human = check.flag(fields.get('human'), `${at}: human`);
+    // The seat's own word on controlling the computer, true or false, omitted when the file
+    // writes none — every file that writes none keeps the digest it had.
+    const desktopControl = readDesktopControl(fields.get('desktop_control'), `${at}: desktop_control`, check);
     // Omitted unless the file writes `off`, so every file that writes no channel key keeps the
     // digest it had. `on` is the default and is not stored.
     const channelWord = check.oneOf(fields.get('channel'), `${at}: channel`, ['off', 'on']);
@@ -390,6 +395,8 @@ function readSeats(
         ...(assistant && count <= 1 ? { assistant: true as const } : {}),
         // Omitted when the file marks no human, for the same reason.
         ...(human ? { human: true as const } : {}),
+        // Omitted when the file writes no desktop_control word, for the same reason.
+        ...(desktopControl !== undefined ? { desktopControl } : {}),
         ...(channelOff ? { channelOff: true as const } : {}),
         // Omitted when the file writes no watch_wake word, for the same reason.
         ...(watchWake !== undefined ? { watchWake } : {}),

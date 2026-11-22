@@ -25,6 +25,7 @@ import { watch } from './watch.ts';
 import { watchChecks } from './watch-checks.ts';
 import { seats } from './seats.ts';
 import { deliveryOrder } from './delivery_order.ts';
+import { desktopControl } from './desktop_control.ts';
 import { senderName } from './sender_name.ts';
 import { messaging } from './messaging.ts';
 import { policies } from './policies.ts';
@@ -98,6 +99,9 @@ export const SECTIONS: readonly Section[] = [
   // `delivery_order`, so a file written before it keeps every digest and approval it had. The
   // seat-level word sits on a seat and is read by the seats section above.
   senderName,
+  // The file's word on whether its seats may control the computer: non-owner and additive, like
+  // `delivery_order`. The seat-level word sits on a seat and is read by the seats section.
+  desktopControl,
   // The file's word on the store a send leaves for its seats (ADR D8): non-owner and additive,
   // like `delivery_order`. The seat-level word sits on a seat and is read by the seats section.
   messaging,

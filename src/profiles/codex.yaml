@@ -18,20 +18,58 @@ unattended:
 # Current recipes remove that historical pin: a fixed override can differ from the shared server.
 # Old recorded recipes shed that exact pair through currentCodexRecipe before relaunch.
 #
-# No seat drives the owner's desktop or browser: those carry his signed-in accounts. These four
-# are the switches, measured on codex-cli 0.167.0 in a scratch CODEX_HOME: `codex features list`
-# printed `computer_use`, `browser_use`, `browser_use_external` and `in_app_browser` as `stable
-# true`, and the same command with `-c features.<name>=false` for each printed them `false`.
+# No seat drives the user's desktop or browser unless its `desktop_control` says so: those carry
+# signed-in accounts. These four are the switches, measured on codex-cli 0.167.0 in a scratch
+# CODEX_HOME: `codex features list` printed `computer_use`, `browser_use`,
+# `browser_use_external` and `in_app_browser` as `stable true`, and the same command with
+# `-c features.<name>=false` for each printed them `false`.
 # `codex --help`, `codex app-server --help` and `codex app-server daemon --help` all document
 # `--disable <FEATURE>` as "Equivalent to `-c features.<name>=false`". A pin rides every TUI
 # line and the managed app-server's start words (`codexEndpointConfig`), because an attached TUI
 # runs its turns under the app-server's configuration, not its own; the shared background server
 # must hold the same set, or a TUI that meets it shows the incompatible-settings dialog.
+#
+# `browser_use_full_cdp_access` is the fifth switch (codex-cli 0.167.0, scratch CODEX_HOME:
+# `stable true`, and `false` under `-c features.browser_use_full_cdp_access=false`).
 features:
   - computer_use=false
   - browser_use=false
   - browser_use_external=false
   - in_app_browser=false
+  - browser_use_full_cdp_access=false
+# The team's `desktop_control` setting, per seat, off by default. Off: the five feature pins
+# above, and the `config` pairs below ride the seat's line and its managed app-server's start
+# words. On: the feature pins named here are lifted and no `config` pair is placed.
+#
+# The computer-control tools also come from MCP servers a desktop app registers in the user's
+# Codex config (`cua_repl`, `node_repl`) and from bundled plugins. Measured on codex-cli 0.167.0
+# with a scratch CODEX_HOME:
+# - `-c mcp_servers.<name>.enabled=false` alone, for a server the config does not hold, makes
+#   every command refuse ("invalid transport in `mcp_servers.<name>`"). With
+#   `-c mcp_servers.<name>.command=/usr/bin/false` beside it (a word that is not TOML is taken as
+#   a literal string), `codex mcp list --json` printed the server `enabled: false` both when it
+#   was absent (a disabled stub) and when a stdio server of that name was present (its command
+#   replaced, disabled). A present server with a `url` transport refuses the pair, so the seat
+#   does not start rather than start with it.
+# - The `-c` path is split at every dot, quotes included: `mcp_servers."cua_repl".enabled=false`
+#   named a server called `"cua_repl"`, not `cua_repl`. A plugin id is therefore written bare;
+#   `plugins.<id>.enabled=false` was accepted with no such plugin installed, and a non-boolean
+#   value was refused ("expected a boolean"). Its effect on an installed plugin was not measured.
+desktop_control:
+  features:
+    - computer_use
+    - browser_use
+    - browser_use_external
+    - in_app_browser
+    - browser_use_full_cdp_access
+  config:
+    - mcp_servers.cua_repl.command=/usr/bin/false
+    - mcp_servers.cua_repl.enabled=false
+    - mcp_servers.node_repl.command=/usr/bin/false
+    - mcp_servers.node_repl.enabled=false
+    - plugins.computer-use@openai-bundled.enabled=false
+    - plugins.unified-computer-use@openai-bundled.enabled=false
+    - plugins.browser@openai-bundled.enabled=false
 rules:
   launch_prompt: positional
 # The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a

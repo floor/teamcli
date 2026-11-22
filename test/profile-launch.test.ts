@@ -131,7 +131,7 @@ const commands: [string, string, string, string][] = [
   ['claude-code', 'claude --model claude-opus-5-5 ', "Don't stop.\n- two", "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt 'Don'\\''t stop.\n- two'"],
   // Codex launches omit the obsolete OAuth refresh override after the dialog fix, and pin
   // computer and browser use off.
-  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false'],
+  ['codex', 'codex -m gpt-6-sol', 'Rules.', 'AGENT_UNATTENDED=1 codex -m gpt-6-sol -a never -s danger-full-access --no-alt-screen -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false'],
   ['cursor', 'cursor-agent', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --force --sandbox disabled'],
   ['cursor', 'cursor-agent --model grok-4.7-high', 'Rules.', 'AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled'],
   ['antigravity', 'agy --model gemini-3.8-flash-high', 'Rules.', 'AGENT_UNATTENDED=1 agy --model gemini-3.8-flash-high --dangerously-skip-permissions'],

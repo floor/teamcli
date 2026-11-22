@@ -57,6 +57,7 @@ import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } f
 import { installCliHooks, plannedCliHooks, refreshCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { registryLaunches, upPlan } from '../launch/plan.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
@@ -439,6 +440,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       name: seat.name,
       cli: seat.cli,
       launch: seat.launch,
+      desktopControl: seatDesktopControl({ team, seat: seat.name, home: home ?? null, root }),
       ...(seat.inbound === undefined ? {} : { inbound: seat.inbound }),
     }], home === undefined ? undefined : { project: team.project, root, home });
     if (refresh.refused !== undefined) {
@@ -739,7 +741,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
-    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
+    const installed = installCliHooks(dir, session, [{ ...planned, fresh: true, desktopControl: seatDesktopControl({ team, seat: planned.name, home: home ?? null, root }), ...(team.seats.find((item) => item.name === planned.name)?.inbound === undefined ? {} : { inbound: team.seats.find((item) => item.name === planned.name)!.inbound! }) }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
       logLine(dir, 'reload', who, `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());

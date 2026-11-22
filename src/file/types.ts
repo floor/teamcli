@@ -196,6 +196,12 @@ export type Seat = {
    */
   human?: true;
   /**
+   * The seat's own word on whether it may control the computer (computer use, the user's
+   * browser, desktop apps), when the file writes `desktop_control`. Absent otherwise, so a file
+   * that writes none keeps the digest it had; the team's word, then off, stands under it.
+   */
+  desktopControl?: boolean;
+  /**
    * The seat opts out of the team-inbox channel. Absent means on: every claude-code seat gets
    * the channel, and a file that writes no `channel` key keeps the digest it had. `off` is the
    * only stored word.
@@ -327,6 +333,12 @@ export type TeamFile = {
    * record's.
    */
   senderName: SenderNameMode | null;
+  /**
+   * The file's own word on whether its seats may control the computer, or null/absent when it
+   * writes none: off is the default. A seat's own word wins over it. Non-owner and additive, as
+   * `sender_name` is: a file written before it keeps its digests.
+   */
+  desktopControl?: boolean | null;
   /**
    * The file's own word on the store a send leaves for its seats, when the file writes one:
    * `first`, `parallel` or `none`, read for a seat whose chain says nothing nearer. Non-owner and

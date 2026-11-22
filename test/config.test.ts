@@ -13,12 +13,13 @@ async function run(argv: string[]): Promise<{ code: number; out: string; err: st
 }
 
 const TABLE = [
-  "  KEY             LEVELS  ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES",
-  "  model           seat    a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes",
-  "  effort          seat    one of the CLI profile's effort levels                           -            -               restart that resumes",
-  "  nickname        seat    unique in the team, never lead                                   -            -               at once",
-  "  delivery_order  seat    delivery legs, tighten only                                      typed, drop  delivery-order  at once",
-  "  human           seat    true or false                                                    false        -               at once",
+  "  KEY              LEVELS      ALLOWED                                                          DEFAULT      GOVERNED BY     APPLIES",
+  "  model            seat        a model the seat's profile and the allowed-models policy accept  -            allowed-models  restart that resumes",
+  "  effort           seat        one of the CLI profile's effort levels                           -            -               restart that resumes",
+  "  nickname         seat        unique in the team, never lead                                   -            -               at once",
+  "  delivery_order   seat        delivery legs, tighten only                                      typed, drop  delivery-order  at once",
+  "  human            seat        true or false                                                    false        -               at once",
+  "  desktop_control  team, seat  true or false                                                    false        -               restart that resumes",
 ].join('\n') + '\n';
 
 describe('team config keys', () => {
@@ -36,8 +37,17 @@ describe('team config keys', () => {
     expect(seat.out).toBe(all.out);
   });
 
+  test('the team level lists desktop_control alone', async () => {
+    const result = await run(['keys', 'team']);
+    expect(result.code).toBe(0);
+    expect(result.out).toBe([
+      '  KEY              LEVELS      ALLOWED        DEFAULT  GOVERNED BY  APPLIES',
+      '  desktop_control  team, seat  true or false  false    -            restart that resumes',
+    ].join('\n') + '\n');
+  });
+
   test('a level with no registered keys says so', async () => {
-    for (const level of ['entity', 'project', 'team']) {
+    for (const level of ['entity', 'project']) {
       const result = await run(['keys', level]);
       expect(result.code).toBe(0);
       expect(result.out).toBe(`no settings are registered at ${level} level\n`);
@@ -64,7 +74,7 @@ describe('team config keys', () => {
     expect(doc.schema).toEqual({ name: 'team.config-keys', version: 1 });
     expect(doc.format).toBe(1);
     expect(doc.level).toBeNull();
-    expect(doc.keys.map((entry) => entry.key)).toEqual(['model', 'effort', 'nickname', 'delivery_order', 'human']);
+    expect(doc.keys.map((entry) => entry.key)).toEqual(['model', 'effort', 'nickname', 'delivery_order', 'human', 'desktop_control']);
     expect(doc.keys[0]).toEqual({
       key: 'model',
       levels: ['seat'],
@@ -76,13 +86,22 @@ describe('team config keys', () => {
     });
     expect(doc.keys[3]!.default).toEqual(['typed', 'drop']);
     expect(doc.keys[4]!.default).toBe(false);
+    expect(doc.keys[5]).toEqual({
+      key: 'desktop_control',
+      levels: ['team', 'seat'],
+      type: 'boolean',
+      allowed: 'true or false',
+      default: false,
+      governed_by: null,
+      applies: 'restart-resume',
+    });
   });
 
   test('--json of a level with no keys is an empty list, not an error', async () => {
-    const result = await run(['keys', 'team', '--json']);
+    const result = await run(['keys', 'project', '--json']);
     expect(result.code).toBe(0);
     const doc = JSON.parse(result.out) as { level: string; keys: unknown[] };
-    expect(doc.level).toBe('team');
+    expect(doc.level).toBe('project');
     expect(doc.keys).toEqual([]);
   });
 });
