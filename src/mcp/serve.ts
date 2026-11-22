@@ -2047,7 +2047,9 @@ export async function runMcpServe(
     }
     const staleLaunchNow = staleLaunch(generationNow, boundEpoch, seat.name);
     if (staleLaunchNow !== null) return staleLaunchNow;
-    const file = readTeam();
+    // The declaration is read fresh for the authorization, never the kept read: a witness taken
+    // after a read, or a stamp of a link rather than the file it names, could hold an old roster.
+    const file = readTeamFresh();
     if (!file.ok) {
       return `the team file cannot be read now, so this server cannot prove its seat is still declared: ${file.errors[0]?.message ?? 'the team file could not be read'}`;
     }
