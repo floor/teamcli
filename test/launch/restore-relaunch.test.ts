@@ -32,12 +32,12 @@ beforeEach(() => {
 });
 afterEach(() => { rmSync(base, { recursive: true, force: true }); });
 
-type SeatSpec = { name: string; launch?: string; channel?: boolean };
+type SeatSpec = { name: string; launch?: string; channel?: boolean; channelOff?: boolean };
 
 function team(seats: SeatSpec[], entity: string | null = null): TeamFile {
   return {
-    project: 'proj', entity, orchestrator: 'lead', machine: LIMITS,
-    seats: seats.map((one) => ({ name: one.name, cli: 'claude-code', launch: one.launch ?? FLAGGED, cwd: '.' })),
+    project: 'proj', entity, orchestrator: 'lead', operator: 'lead', trust: [], machine: LIMITS,
+    seats: seats.map((one) => ({ name: one.name, cli: 'claude-code', launch: one.launch ?? FLAGGED, cwd: '.', ...(one.channelOff === true ? { channelOff: true } : {}) })),
   } as unknown as TeamFile;
 }
 
@@ -193,8 +193,8 @@ describe('a restored Claude seat comes back through its launch line', () => {
     expect(w.notices.filter((one) => one.body.includes('owner approves'))).toHaveLength(1);
   });
 
-  test('a seat whose line carries no channel flag, or launched with it, is left as it is', async () => {
-    const seats = [{ name: 'plain', launch: 'claude' }, { name: 'live', channel: true }];
+  test('a seat whose launch carries no channel flag (it declines the channel), or launched with it, is left as it is', async () => {
+    const seats = [{ name: 'plain', launch: 'claude', channelOff: true }, { name: 'live', channel: true }];
     restoredState(seats);
     const w = world();
     w.status['w0:p1'] = 'idle';
@@ -202,5 +202,39 @@ describe('a restored Claude seat comes back through its launch line', () => {
     const out = await pass(w, team(seats));
     expect(w.restarts).toEqual([]);
     expect(out).toEqual({ lines: [], pending: null });
+  });
+
+  test('a plain line the launch planning puts the flag on is relaunched like a flagged one', async () => {
+    const seats = [{ name: 'plain', launch: 'claude' }];
+    restoredState(seats);
+    const w = world();
+    w.status['w0:p1'] = 'idle';
+    await pass(w, team(seats));
+    expect(w.restarts).toEqual([['plain', '--resume', 'conv-plain', '--session', SESSION]]);
+  });
+
+  test('a notice that was not written stays owed and is written on a later pass under the same id', async () => {
+    for (const orchestrator of [true, false]) {
+      const seats = [{ name: orchestrator ? 'lead' : 'worker' }];
+      restoredState(seats);
+      const w = world();
+      w.status['w0:p1'] = 'idle';
+      const file = team(seats, orchestrator ? 'proj' : null);
+      const failing = { ...depsOf(w), notify: (one: { lead: string; body: string; id: string }) => { w.notices.push(one); return false; } };
+      const run = (deps: RestoreRelaunchDeps) => relaunchRestoredSeats({ root: base, dir, session: SESSION, team: file, sources: sourcesOf(w), caller: { kind: 'owner' }, deps });
+      if (!orchestrator) {
+        await run(failing);
+        w.clock = new Date(T0.getTime() + CHANNEL_OVERDUE_MS + 1_000);
+      }
+      const first = await run(failing);
+      expect(w.notices).toHaveLength(1);
+      expect(first.pending).toContain('its notice to the lead was not written');
+      const second = await run(depsOf(w));
+      expect(w.notices).toHaveLength(2);
+      expect(w.notices[1]!.id).toBe(w.notices[0]!.id);
+      expect(second.pending).toBeNull();
+      await run(depsOf(w));
+      expect(w.notices).toHaveLength(2);
+    }
   });
 });
