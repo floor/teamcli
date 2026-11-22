@@ -32,7 +32,10 @@ The CLI help runs list `-a never`, `-s danger-full-access`, `--no-alt-screen`,
 - `confirmation`: no confirmation dialog appeared when clearing the draft, dismissing the question and plan with Escape, or exiting.
 - `exit question`: `/exit` returned directly to the shell.
 
-## thread-locked.txt (2026-11-17)
+## Thread locked (2026-11-17)
+
+- `thread-locked.txt` and `thread-locked-ansi.txt`: captured read-only, as below.
+
 
 The Codex TUI after `codex resume <id>` when another app-server still held the conversation (`thread-locked.txt` plain, `thread-locked-ansi.txt` the styled `--format ansi` read the launch takes):
 "This conversation is open in another app — Close it there and press R", with only retry, fork

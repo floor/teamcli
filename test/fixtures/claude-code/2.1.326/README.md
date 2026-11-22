@@ -14,4 +14,10 @@ folder pins two frames, not a new tested ceiling.
 
 ## Not produced
 
-`working`, `question`, `permission`, `trust`, a model-failure turn: not produced.
+- `working`: not produced, nothing was submitted.
+- `question`: not produced, nothing was submitted.
+- `permission`: not produced, nothing was submitted.
+- `trust`: not produced in this folder, which pins the frames listed above only.
+- `unsent`: not produced as `unsent.txt`, the typed draft is pinned as `unsent-typed.txt`.
+- `unknown` (exit): not produced in this folder, which pins the frames listed above only.
+- A model-failure turn: not produced, nothing was submitted.
