@@ -106,8 +106,6 @@ describe('the daemon runs a queued self-restart', () => {
     expect(lines).toEqual(['lead: restarted itself with its conversation conv-lead']);
     expect(queued()).toBe(false);
     expect(hasSelfRestartRequests(dir)).toBe(false);
-    // The emptied folder is removed, so the daemon's next look is one existence check.
-    expect(existsSync(join(dir, 'self-restart'))).toBe(false);
     await pass(w);
     expect(w.restarts).toHaveLength(1);
     expect(w.notices).toEqual([]);

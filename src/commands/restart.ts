@@ -700,8 +700,13 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       );
     }
     const pinnedLaunch = pinnedRead.recorded.launch ?? declared.launch;
-    const carried = resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
-    if (carried.kind !== 'line') {
+    // A self-restart on a launcher runs the launcher's resolved line, never the recorded recipe
+    // (a first launch can record the legacy `launch:` text): the plan carries the conversation
+    // onto the resolved line, and the check before the stop verifies it. The ownership proof
+    // above stands for every seat.
+    const judgedByResolver = internal.selfRequest !== undefined && declared.launcher !== undefined;
+    const carried = judgedByResolver ? null : resumeCarry(declared.cli, pinnedLaunch, pinnedResume);
+    if (carried !== null && carried.kind !== 'line') {
       return notReadyRefused(
         out,
         json,

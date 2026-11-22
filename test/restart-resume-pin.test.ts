@@ -21,6 +21,9 @@ import { beginSession, endSession } from '../src/sessions/registry.ts';
 import { storePath } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { handoverPath } from '../src/handover/paths.ts';
+import { runSelfRestarts, selfRestartPath } from '../src/launch/self-restart.ts';
+import type { UpSources } from '../src/commands/up.ts';
+import { existsSync } from 'node:fs';
 import { discardFixtures } from './fixture-cleanup.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
@@ -84,7 +87,7 @@ function makeFixture(yaml: (root: string) => string = YAML): Fixture {
   return { root, home, dir, file, team: parsed.team };
 }
 
-function seedSeatWithSessions(fixture: Fixture): void {
+function seedSeatWithSessions(fixture: Fixture, agentLaunch = 'claude --model claude-opus-5-5'): void {
   const workerSeat = fixture.team.seats.find((s) => s.name === 'worker')!;
   const leadSeat = fixture.team.seats.find((s) => s.name === 'lead')!;
 
@@ -161,7 +164,7 @@ function seedSeatWithSessions(fixture: Fixture): void {
     lab: 'anthropic',
     signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
     launcher: null,
-    launch: 'claude --model claude-opus-5-5',
+    launch: agentLaunch,
     reach: {
       session: 'acme',
       pane: 'pane-old',
@@ -576,5 +579,43 @@ describe('team restart for a self-restart request', () => {
     expect(await runRestart(['worker', '--resume', 'sess-earlier'], switchedIo, switched.harness.sources, { selfRequest: { ...request, conversation: 'sess-earlier' } })).toBe(1);
     expect(switchedIo.err).toContain('its launch or conversation changed since its self-restart request');
     expect([...moved.harness.closed, ...switched.harness.closed]).toEqual([]);
+  });
+
+  test('end to end through the daemon pass: a launcher seat whose recorded recipe is the legacy fixed-session line resumes', async () => {
+    const LEGACY = 'claude --model claude-opus-5-5 --session-id 0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b';
+    const fixture = makeFixture((root) => YAML(root).replace(`  - ${root}\n`, `  - ${root}\n  - ${join(root, '..', 'work')}\n`).replace(
+      '    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n',
+      `    name: worker\n    label: worker\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: ${LEGACY}\n    launcher: claude-code\n    cwd: ../work\n`,
+    ));
+    mkdirSync(join(fixture.root, '..', 'work'), { recursive: true });
+    // The first launch recorded the legacy declared line as the seat's recipe, as `up` can.
+    seedSeatWithSessions(fixture, LEGACY);
+    updateState(fixture.dir, (state) => { state.sessions.acme!.seats.worker!.launched = { shell: 300, cli: [301] }; });
+    const harness = makeHarness(fixture);
+    // The seat queues its own restart from its recorded pane.
+    const queueIo = testIo(fixture.root, { kind: 'seat', name: 'worker', pane: 'pane-old', session: 'acme' });
+    expect(await runRestart(['worker', '--self'], queueIo, harness.sources), queueIo.err).toBe(0);
+    expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(true);
+    // The daemon's pass: idle at an empty prompt, so it runs the restart with the request.
+    const upSources = {
+      home: fixture.home,
+      now: () => NOW,
+      agents: () => harness.sources.agents('acme'),
+      launch: { paneText: () => CLAUDE_IDLE },
+    } as unknown as UpSources;
+    const notices: string[] = [];
+    const lines = await runSelfRestarts({
+      home: fixture.home, root: fixture.root, dir: fixture.dir, team: fixture.team, sources: upSources, caller: owner,
+      deps: {
+        restart: (argv, io, request) => runRestart(argv, io, harness.sources, { selfRequest: request }),
+        notify: (one) => { notices.push(one.body); return true; },
+      },
+    });
+    expect(notices).toEqual([]);
+    expect(lines).toEqual(['worker: restarted itself with its conversation sess-latest']);
+    expect(harness.ran).toHaveLength(1);
+    expect(harness.ran[0]?.command).toContain('--resume sess-latest');
+    expect(harness.ran[0]?.command).not.toContain('0b9e4f7a-1c2d-4e3f-8a5b-6c7d8e9f0a1b');
+    expect(existsSync(selfRestartPath(fixture.dir, 'acme', 'worker'))).toBe(false);
   });
 });
