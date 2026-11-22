@@ -8,7 +8,9 @@ import { secretWord } from '../launch/secret-words.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
 import { shellWords } from '../launch/shell-words.ts';
 import { assignmentWordName } from '../profiles/profile.ts';
-import { CLAUDE_AUTH_DEFAULT, CLAUDE_TOKEN_ENTRY, parseClaudeAuth, type ClaudeAuth } from './claude-auth.ts';
+import { readFileSync } from 'node:fs';
+import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
+import { CLAUDE_AUTH_DEFAULT, CLAUDE_TOKEN_ENTRY, parseClaudeAuth, routedSettingsText, type ClaudeAuth } from './claude-auth.ts';
 
 export type ClaudeAuthContext = {
   /** The home the signed policy sources live under. */
@@ -92,4 +94,33 @@ export function withClaudeToken(line: string, seat: { cli: string; vendor: strin
   if (!anthropicClaudeSeat(seat) || seat.auth !== 'store' || seat.held !== true) return line;
   if (!claudeTokenLine(line)) return line;
   return `${secretWord(CLAUDE_TOKEN_ENTRY, CLAUDE_TOKEN_ENTRY)} ${line}`;
+}
+
+/**
+ * The team's seats the launch hands the store's subscription token: Claude Code seats on
+ * Anthropic whose file the gate proves (`claudeTokenSeat`), when `claude-auth` is `store` and the
+ * entity's store holds the entry, asked by name. Their settings files are written with the direct
+ * route (src/launch/cli-hook.ts), and the plan checks the file before it hands the token. `store`
+ * is the caller's injected store; absent, the system's own for the team's entity.
+ */
+export function claudeTokenSeats(context: ClaudeAuthContext & { store?: SecretStore | null }): Set<string> {
+  const seats = context.team.seats.filter((seat) => claudeTokenSeat(seat));
+  if (seats.length === 0 || claudeAuthInForce(context) !== 'store') return new Set();
+  const entity = context.team.entity;
+  const store = context.store !== undefined
+    ? context.store
+    : systemSecretStore({ home: context.home, ...(typeof entity === 'string' && entity !== '' ? { entity } : {}) });
+  return store?.holds?.(CLAUDE_TOKEN_ENTRY) === true ? new Set(seats.map((seat) => seat.name)) : new Set();
+}
+
+/** Whether the settings file a seat's launch passes holds the direct route: the token is handed
+ *  only to a seat whose file does, so a file that did not land, or was written without it, gives
+ *  nothing (fail closed). */
+export function routedSettingsFile(path: string | undefined): boolean {
+  if (path === undefined) return false;
+  try {
+    return routedSettingsText(readFileSync(path, 'utf8'));
+  } catch {
+    return false;
+  }
 }

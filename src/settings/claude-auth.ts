@@ -17,3 +17,44 @@ export const CLAUDE_TOKEN_ENTRY = 'CLAUDE_CODE_OAUTH_TOKEN';
 export function parseClaudeAuth(raw: unknown): ClaudeAuth | null {
   return typeof raw === 'string' && (CLAUDE_AUTH_VALUES as readonly string[]).includes(raw) ? raw as ClaudeAuth : null;
 }
+
+/** Anthropic's own endpoint, the one a seat signing in with the subscription token talks to. */
+export const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com';
+
+/** The variables that send Claude Code to another provider instead of Anthropic. An empty value
+ *  is read as unset for provider selection (Claude Code's environment-variable reference). */
+export const PROVIDER_SWITCHES = [
+  'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_MANTLE',
+  'CLAUDE_CODE_USE_ANTHROPIC_AWS', 'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
+] as const;
+
+/**
+ * The direct route a seat that takes the token is held to in its own generated settings file,
+ * which the launch passes with `--settings`: that level stands above the user's, the project's and
+ * the project-local settings files, and a settings `env` value replaces the one a shell exported.
+ * Only the machine's managed settings stand above it. The endpoint is named, never emptied, and
+ * every provider switch is emptied, so no lower file or shell profile can route the CLI elsewhere.
+ */
+export function claudeRouteEnv(): Record<string, string> {
+  return { ANTHROPIC_BASE_URL: ANTHROPIC_ENDPOINT, ...Object.fromEntries(PROVIDER_SWITCHES.map((name) => [name, ''])) };
+}
+
+/** The same route on the launch line itself, in front of the CLI: the endpoint named, and the
+ *  provider switches and any other Anthropic credential the pane's shell exported emptied, so the
+ *  seat's process starts on Anthropic with the token alone even before its settings are read. */
+export function claudeRouteWords(): string[] {
+  return [`ANTHROPIC_BASE_URL=${ANTHROPIC_ENDPOINT}`, 'ANTHROPIC_AUTH_TOKEN=', 'ANTHROPIC_API_KEY=', ...PROVIDER_SWITCHES.map((name) => `${name}=`)];
+}
+
+/** Whether a generated settings file's text holds the direct route (`claudeRouteEnv`). */
+export function routedSettingsText(text: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const env = (parsed as { env?: unknown } | null)?.env;
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) return false;
+  return Object.entries(claudeRouteEnv()).every(([name, value]) => (env as Record<string, unknown>)[name] === value);
+}

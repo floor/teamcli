@@ -53,7 +53,7 @@ import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, otherMatchingStores, otherStoreNote, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
-import { anthropicClaudeSeat, claudeAuthInForce, claudeTokenSeat } from '../settings/claude-auth-policy.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, claudeTokenSeat, claudeTokenSeats } from '../settings/claude-auth-policy.ts';
 import { CLAUDE_TOKEN_ENTRY } from '../settings/claude-auth.ts';
 import { lobbyPath as derivedLobby } from '../worktree/place.ts';
 
@@ -369,8 +369,9 @@ export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, 
   const eligible = seats.filter((seat) => claudeTokenSeat(seat));
   if (eligible.length === 0) return null;
   if (claudeAuthInForce({ home: sources.home, root, team }) !== 'store') return null;
-  const held = sources.secretStore?.(team.entity)?.holds?.(CLAUDE_TOKEN_ENTRY) ?? null;
-  if (held !== true) {
+  // The launch's own determination: the same seats, the same setting, the same store asked by name.
+  const given = claudeTokenSeats({ home: sources.home, root, team, store: sources.secretStore?.(team.entity) ?? null });
+  if (!eligible.some((seat) => given.has(seat.name))) {
     return [{
       level: 'miss',
       text: `log in to claude-code: \`${hint}\`; on a machine with no browser, run \`claude setup-token\` and keep the token in the system's secret store as ${CLAUDE_TOKEN_ENTRY}`,
@@ -378,7 +379,7 @@ export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, 
   }
   const findings: Finding[] = [{
     level: 'ok',
-    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}`,
+    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}, held to Anthropic's endpoint by their own settings (only the machine's managed Claude settings stand above them)`,
   }];
   const others = seats.filter((seat) => !eligible.includes(seat) && anthropicClaudeSeat(seat));
   if (others.length > 0) {

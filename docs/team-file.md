@@ -1167,6 +1167,21 @@ signs in with it at launch:
    and the seat's record, `team status`, the logs and the plan carry the entry's name and the
    store's lookup command, never the value.
 
+The route to Anthropic is enforced, not assumed. A seat that takes the token:
+
+- has its own generated settings file (the one its launch passes with `--settings`) set
+  `env.ANTHROPIC_BASE_URL` to `https://api.anthropic.com` and every provider switch
+  (`CLAUDE_CODE_USE_BEDROCK`, `…_VERTEX`, `…_FOUNDRY`, `…_MANTLE`, `…_ANTHROPIC_AWS`,
+  `…_ANTHROPIC_GOOGLE_CLOUD`) to empty, which Claude Code reads as unset. That level stands above
+  the user's, the project's and the project-local settings files, and a settings `env` value
+  replaces one the shell exported, so neither a settings file nor a shell profile can send the CLI
+  to a gateway. The token is handed only when that file is in place.
+- starts with the same endpoint and switches, and `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`
+  emptied, in front of its line.
+
+Only the machine's managed Claude settings stand above the seat's file. If they route Claude Code
+to an endpoint, nothing TeamCLI writes overrides them, so don't keep the token on such a machine.
+
 Which seats take it:
 
 - Only a seat whose `cli` is `claude-code` and whose `vendor` is `anthropic`, on a line proved to

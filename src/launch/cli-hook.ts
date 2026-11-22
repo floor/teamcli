@@ -20,6 +20,7 @@
 // (`supportsCliHook`). Nothing under the owner's CLI home is read or written: the settings file
 // is one this run names on the seat's launch line, and the hooks take nothing from the CLI's
 // stdin — no session id, no transcript path, no environment.
+import { claudeRouteEnv, routedSettingsText } from '../settings/claude-auth.ts';
 import { shippedClaudeSettings } from '../launchers/shipped.ts';
 import { claudeDesktopDeny, claudeDesktopSettings } from './desktop-control.ts';
 import { closeSync, constants, lstatSync, readFileSync, readSync, realpathSync, type Stats } from 'node:fs';
@@ -68,6 +69,10 @@ export type CliHookSeat = {
   /** The seat's resolved `desktop_control`. Only false writes the deny rules for the computer-use,
    *  browser-control and claude.ai connector MCP tools into the seat's settings file. */
   desktopControl?: boolean;
+  /** True for a Claude Code seat the launch hands the store's subscription token: its file holds
+   *  the direct route to Anthropic (`claudeRouteEnv`), so no lower settings file and no exported
+   *  variable can send the CLI, and the token, to another endpoint. */
+  claudeRoute?: boolean;
 };
 
 /** Whether a seat's name can become a file name: the team file's own rule (one path segment,
@@ -786,7 +791,10 @@ export function installCliHooks(
     const claude = byName.get(seat)?.cli === 'claude-code';
     const deny = claude ? claudeDesktopDeny(byName.get(seat)?.desktopControl) : [];
     const denied = withDeny(shipped, deny);
-    const off = claude ? claudeDesktopSettings(byName.get(seat)?.desktopControl) : {};
+    const off = {
+      ...(claude ? claudeDesktopSettings(byName.get(seat)?.desktopControl) : {}),
+      ...(claude && byName.get(seat)?.claudeRoute === true ? { env: claudeRouteEnv() } : {}),
+    };
     const extra = Object.keys(off).length === 0 ? denied : { ...(denied ?? {}), ...off };
     const text = extra === undefined ? base : `${JSON.stringify({ ...extra, ...(JSON.parse(base) as Record<string, unknown>) }, null, 2)}\n`;
     if (!writeSettings(settingsPath, text)) continue;
@@ -858,7 +866,11 @@ export function refreshCliHooks(
   // a file this refresh created would declare a time newer than a running seat's socket.
   const running = seats.filter((seat) => prior.has(seat.name));
   if (running.length === 0) return result;
-  const landed = installCliHooks(dir, session, running.map((seat) => ({ ...seat, fresh: false })), guard, root);
+  // A running seat keeps the route its file was launched with: a refresh that dropped it would let
+  // a lower settings file route the token elsewhere when the CLI reloads its settings.
+  const landed = installCliHooks(dir, session, running.map((seat) => ({
+    ...seat, fresh: false, claudeRoute: seat.claudeRoute ?? routedSettingsText(prior.get(seat.name)!.text),
+  })), guard, root);
   for (const seat of running) {
     const before = prior.get(seat.name)!;
     const path = landed[seat.name];

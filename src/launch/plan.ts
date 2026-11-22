@@ -26,8 +26,8 @@ import { accountKeyCommand, shippedEnv, shippedLauncher } from '../launchers/shi
 import { launchAccountFor, type LaunchAccount } from '../launchers/accounts.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
 import { fillSecretWords, hasSecretWord } from './secret-words.ts';
-import { anthropicClaudeSeat, claudeAuthInForce, withClaudeToken } from '../settings/claude-auth-policy.ts';
-import { CLAUDE_TOKEN_ENTRY } from '../settings/claude-auth.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, routedSettingsFile, withClaudeToken } from '../settings/claude-auth-policy.ts';
+import { CLAUDE_TOKEN_ENTRY, claudeRouteWords } from '../settings/claude-auth.ts';
 import { identityFor } from '../commands/git.ts';
 import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.ts';
 import { getRelativeDirOps } from '../send/drop-retention.ts';
@@ -1784,11 +1784,18 @@ export function upPlan(input: UpInput): Step[] {
     // holds one and `claude-auth` is `store` (src/settings/claude-auth-policy.ts): its line takes
     // the entry's secret word, filled below like any other, so only the seat's shell reads the
     // value. The store is asked whether it holds the entry by name; its value is never read here.
+    // The route is enforced, not inferred: the seat's own settings file must hold the direct route
+    // to Anthropic (written by the hook install for the seats `claudeTokenSeats` names), and the
+    // launch clears the routing and credential variables in front of the CLI (below).
     const vendor = seat.vendor ?? input.team?.seats.find((one) => one.name === seat.name)?.vendor;
-    if (wouldLaunch && input.home !== undefined && input.team !== undefined && anthropicClaudeSeat({ cli: profile.cli, vendor })) {
+    let claudeToken = false;
+    if (wouldLaunch && input.home !== undefined && input.team !== undefined && anthropicClaudeSeat({ cli: profile.cli, vendor })
+      && routedSettingsFile(input.cliHooks?.[seat.name])) {
       const auth = claudeAuthInForce({ home: input.home, root: input.root, team: input.team });
       const held = auth === 'store' ? seatStore()?.holds?.(CLAUDE_TOKEN_ENTRY) ?? null : null;
-      baseLine = withClaudeToken(baseLine, { cli: profile.cli, vendor, auth, held });
+      const withToken = withClaudeToken(baseLine, { cli: profile.cli, vendor, auth, held });
+      claudeToken = withToken !== baseLine;
+      baseLine = withToken;
     }
     // A provider key the seat's own line names (`NAME={secret:<entry>}`, the profile's vendor
     // word a swap wrote) is filled with the machine's secret store's lookup here, before any
@@ -1964,6 +1971,10 @@ export function upPlan(input: UpInput): Step[] {
     const addedResume = namedResumeTarget(profile.cli, command) !== null
       && namedResumeTarget(profile.cli, seat.launch) === null;
     const recordLine = addedResume ? pinned : (fromResolver ? command : pinned);
+    // A seat handed the token starts on Anthropic's own endpoint with no other provider switch or
+    // Anthropic credential its pane's shell exported: those words stand in front of the whole
+    // line, after the record is taken, so the record keeps the recipe it always kept.
+    if (claudeToken) command = `${claudeRouteWords().join(' ')} ${command}`;
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
