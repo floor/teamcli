@@ -24,7 +24,7 @@ const CLI = 'zsh /w/as-floor.sh codex -m gpt-6.1-sol';
 const PIN = 'features.mcp_oauth_refresh_coordination=false';
 const PINNED = `${CLI} -c ${PIN}`;
 /** The profile's current pins as a recorded line carries them. */
-const CURRENT_PINS = '-c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false';
+const CURRENT_PINS = '-c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false';
 const CURRENT = `${CLI} ${CURRENT_PINS}`;
 // Neutral fixture ids: the host's pane and workspace shapes are never written into a test.
 const PANE_ONE = 'fixture-pane-one';

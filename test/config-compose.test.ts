@@ -19,6 +19,7 @@ describe('a seat that writes every setting', () => {
     nickname: 'Reviewer',
     human: true,
     deliveryOrder: ['mcp-inbox', 'typed'],
+    desktopControl: false,
   };
 
   test('every row reads the team file', () => {
@@ -129,6 +130,7 @@ describe('the row order', () => {
       'nickname',
       'delivery_order',
       'human',
+      'desktop_control',
     ]);
   });
 
@@ -139,7 +141,41 @@ describe('the row order', () => {
       'at-once',
       'at-once',
       'at-once',
+      'restart-resume',
     ]);
+  });
+});
+
+describe('desktop_control', () => {
+  test('off by default when neither the seat nor the team writes one', () => {
+    const found = row(BARE, null, 'desktop_control');
+    expect(found.value).toBe(false);
+    expect(found.origin).toBe('default');
+  });
+
+  test('the team file\'s word stands under a seat that writes none', () => {
+    const found = composeSeatConfig(BARE, null, {}, true).find((entry) => entry.key === 'desktop_control')!;
+    expect(found.value).toBe(true);
+    expect(found.origin).toBe('team default');
+  });
+
+  test('the seat\'s own word wins over the team\'s, both ways', () => {
+    const off = composeSeatConfig({ ...BARE, desktopControl: false }, null, {}, true).find((entry) => entry.key === 'desktop_control')!;
+    expect(off.value).toBe(false);
+    expect(off.origin).toBe('team file');
+    const on = composeSeatConfig({ ...BARE, desktopControl: true }, null, {}, false).find((entry) => entry.key === 'desktop_control')!;
+    expect(on.value).toBe(true);
+  });
+
+  test('a seat record beats the seat\'s file word; a team record stands under it', () => {
+    const seatRecord = composeSeatConfig({ ...BARE, desktopControl: false }, null, { desktop_control: { level: 'seat', value: true } })
+      .find((entry) => entry.key === 'desktop_control')!;
+    expect(seatRecord.value).toBe(true);
+    expect(seatRecord.origin).toBe('seat record');
+    const teamRecord = composeSeatConfig({ ...BARE, desktopControl: false }, null, { desktop_control: { level: 'team', value: true } })
+      .find((entry) => entry.key === 'desktop_control')!;
+    expect(teamRecord.value).toBe(false);
+    expect(teamRecord.origin).toBe('team file');
   });
 });
 

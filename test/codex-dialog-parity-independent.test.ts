@@ -20,7 +20,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
-import { currentCodexRecipe, pinnedWords } from '../src/launch/features.ts';
+import { currentCodexRecipe, seatPins, seatPinWords } from '../src/launch/features.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { launchCommandOrRefusal, pinnedRecordLine, profileFor } from '../src/profiles/profile.ts';
 import { findAgent, registerAgent } from '../src/registry/agents.ts';
@@ -110,9 +110,9 @@ describe('the recorded recipe sheds exactly the retired pair', () => {
   });
 
   test('the profile pins only computer and browser use off, and the record line sheds the pair', () => {
-    expect(pinnedWords(profileFor('codex')?.features ?? [])).toEqual([
+    expect(seatPinWords(seatPins(profileFor('codex'), false))).toEqual([
       '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
-      '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
+      '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false', '-c', 'features.browser_use_full_cdp_access=false', '-c', 'mcp_servers.cua_repl.command=/usr/bin/false', '-c', 'mcp_servers.cua_repl.enabled=false', '-c', 'mcp_servers.node_repl.command=/usr/bin/false', '-c', 'mcp_servers.node_repl.enabled=false', '-c', 'plugins.computer-use@openai-bundled.enabled=false', '-c', 'plugins.unified-computer-use@openai-bundled.enabled=false', '-c', 'plugins.browser@openai-bundled.enabled=false',
     ]);
     expect(pinnedRecordLine('codex', RECIPE_OLD, [])).toBe('codex -m gpt-6.1-sol');
   });

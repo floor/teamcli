@@ -62,7 +62,8 @@
               "effort",
               "nickname",
               "delivery_order",
-              "human"
+              "human",
+              "desktop_control"
             ]
           },
           "value": {

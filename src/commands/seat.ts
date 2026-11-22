@@ -294,6 +294,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     project: team.project,
     seat: declared,
     teamDeliveryOrder: team.deliveryOrder,
+    teamDesktopControl: team.desktopControl ?? null,
     entity: team.entity,
   });
   if (!settingsRead.ok) {
@@ -330,7 +331,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     const style = ttyStyle(io, { json });
     const settingsLines = renderTable({
       headers: ['KEY', 'VALUE', 'SOURCE', 'APPLIES'],
-      rows: settings.map((entry) => [entry.key, sayConfigValue(entry.value), sayConfigOrigin(entry.origin), sayApply(entry.applies)]),
+      rows: settings.map((entry) => [entry.key, sayConfigValue(entry.value), sayConfigOrigin(entry.origin, entry.key), sayApply(entry.applies)]),
       style,
     });
     const objectLines = renderTable({

@@ -100,6 +100,7 @@ import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
 import { pretrustModeOf } from '../policy/first-minute.ts';
 import { codexCommandHasFlag, formatPlan, launchWillRun, managedCodexLaunch, registryLaunches, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -3900,6 +3901,7 @@ async function runUpInMemo(argv: string[], io: Io, sources: UpSources, internal?
   const inboundOf = (name: string) => team.seats.find((item) => item.name === name)?.inbound;
   const hookSeats = (fresh: readonly string[] = []) => seats.map(({ name, cli, launch, human }) => ({
     name, cli, launch,
+    desktopControl: seatDesktopControl({ team, seat: name, home: sources.home ?? null, root }),
     ...(inboundOf(name) === undefined ? {} : { inbound: inboundOf(name) }),
     ...(human ? { human: true as const } : {}),
     ...(fresh.includes(name) ? { fresh: true as const } : {}),

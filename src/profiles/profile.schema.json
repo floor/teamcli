@@ -25,6 +25,15 @@
       "description": "optional: the one feature set every seat's launch pins, as name=true or name=false; each pair rides the launch as a trailing -c features.<pair>, so the CLI's last-wins config rule makes it the seat's effective value",
       "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+=(true|false)$" }
     },
+    "desktop_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "optional: what a seat's desktop_control setting changes on the launch; features names the pins of features a seat with desktop control on does not carry, and config is the -c pairs a seat with it off carries (computer and browser MCP servers and plugins off)",
+      "properties": {
+        "features": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" } },
+        "config": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "rules": {
       "oneOf": [
         { "const": "first-message" },

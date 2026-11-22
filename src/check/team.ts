@@ -88,7 +88,8 @@ import {
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { rosterOf } from '../permissions/who.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
-import { featureMismatch } from '../launch/features.ts';
+import { pinMismatch, seatPins } from '../launch/features.ts';
+import { seatDesktopControl } from '../launch/desktop-control.ts';
 import { overridesInForceOf } from '../profiles/overrides.ts';
 import { cliWordList, displayEffort } from '../profiles/profile.ts';
 import {
@@ -709,6 +710,17 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     sources.now(),
     continuityIds,
   );
+  // Each seat's `desktop_control`, read once: the pins its recorded line and its managed
+  // server must carry follow it.
+  const desktopWords = new Map<string, boolean>();
+  const desktopOf = (name: string): boolean => {
+    let on = desktopWords.get(name);
+    if (on === undefined) {
+      on = seatDesktopControl({ team, seat: name, home: sources.home ?? null, root });
+      desktopWords.set(name, on);
+    }
+    return on;
+  };
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
     // `compare()`'s plain words: one line per held seat, the richer one.
@@ -723,8 +735,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...sidebarChecked.differences,
     ...startFolderDifferences(team, state, root, sources.home ?? homedir(), session),
     ...seatCwdDifferences(team, state, root),
-    ...featureDifferences(team, state),
-    ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources),
+    ...featureDifferences(team, state, desktopOf),
+    ...unmanagedCodexServerDifferences(team, state, live, dir, session, continuityIds, sources, desktopOf),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
     // A team file left beside a registry team that says something else: never silent.
@@ -1941,18 +1953,20 @@ function labelDrifts(
 // process's command line, and a record that holds no line says unknown rather than a guess. The
 // repair is the relaunch that writes the pinned line; a seat the state does not record was not
 // left running by this session and is not named.
-function featureDifferences(team: TeamFile, state: SessionState): Difference[] {
+function featureDifferences(team: TeamFile, state: SessionState, desktopOf: (seat: string) => boolean = () => false): Difference[] {
   const out: Difference[] = [];
   for (const seat of team.seats) {
     if (seat.stopped) continue;
-    const features = profileFor(seat.cli)?.features ?? [];
-    if (features.length === 0) continue;
+    // The seat's own pins: with `desktop_control` off (the default) every feature pin and the
+    // profile's computer and browser config pairs; on, the ones the profile lifts are not asked.
+    const pins = seatPins(profileFor(seat.cli), desktopOf(seat.name));
+    if (pins.features.length === 0 && pins.config.length === 0) continue;
     const held = state.seats[seat.name];
     if (!held) continue;
     // The line is read through the launch scope: a pin inside a quoted script that runs the CLI
     // is one the CLI reads, and a line that scope cannot decode is reported as unreadable rather
     // than as carrying a pin written after a script the CLI never receives.
-    const said = featureMismatch(held.launch_line, features, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
+    const said = pinMismatch(held.launch_line, pins, held.launch_line === undefined ? undefined : cliWordList(seat.cli, held.launch_line));
     if (said === null) continue;
     out.push({ what: `${seat.name}: ${said}`, repair: `team restart ${seat.name}` });
   }
@@ -2027,6 +2041,7 @@ function unmanagedCodexServerDifferences(
   session: string,
   continuityIds: ReadonlyMap<string, string | null> | undefined,
   sources: CheckSources,
+  desktopOf: (seat: string) => boolean = () => false,
 ): Difference[] {
   const out: Difference[] = [];
   if (live !== null && !live.running) return out;
@@ -2150,7 +2165,7 @@ function unmanagedCodexServerDifferences(
       });
       continue;
     }
-    const plannedFlags = codexEndpointStartConfig(lineText);
+    const plannedFlags = codexEndpointStartConfig(lineText, desktopOf(seat.name));
     if (!endpointContainsConfig(record.config, plannedFlags)) {
       out.push({
         what: `${seat.name}: running against an unmanaged Codex server (its recorded endpoint config lacks the seat's start flags)`,

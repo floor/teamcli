@@ -400,7 +400,7 @@ seats:
           workspace: 'w2',
           cli: 'codex',
           presence_binding: BINDING,
-          launch_line: "zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false'",
+          launch_line: "zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false'",
           launched: { shell: 200, cli: [201] },
         };
       });
@@ -430,14 +430,14 @@ seats:
         '-c', 'features.mcp_oauth_refresh_coordination=false',
         // The profile's computer- and browser-use pins close every endpoint's config.
         '-c', 'features.computer_use=false', '-c', 'features.browser_use=false',
-        '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false',
+        '-c', 'features.browser_use_external=false', '-c', 'features.in_app_browser=false', '-c', 'features.browser_use_full_cdp_access=false', '-c', 'mcp_servers.cua_repl.command=/usr/bin/false', '-c', 'mcp_servers.cua_repl.enabled=false', '-c', 'mcp_servers.node_repl.command=/usr/bin/false', '-c', 'mcp_servers.node_repl.enabled=false', '-c', 'plugins.computer-use@openai-bundled.enabled=false', '-c', 'plugins.unified-computer-use@openai-bundled.enabled=false', '-c', 'plugins.browser@openai-bundled.enabled=false',
       ];
 
       // Scene B1: seat recorded remote does not match its own endpoint record.
       updateState(w.dir, (state) => {
         const seat = state.sessions[SESSION]!.seats[SEAT]!;
         seat.launch_line =
-          "zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false --remote unix:///tmp/foreign.sock'";
+          "zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false --remote unix:///tmp/foreign.sock'";
         seat.codex_endpoint = {
           url: w.socket.url,
           binding: BINDING,
@@ -469,7 +469,7 @@ seats:
       updateState(w.dir, (state) => {
         const seat = state.sessions[SESSION]!.seats[SEAT]!;
         seat.launch_line =
-          `zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false --remote ${w.socket.url}'`;
+          `zsh -lc 'codex -m gpt-5.4 -a never -s danger-full-access -c features.mcp_oauth_refresh_coordination=false -c features.computer_use=false -c features.browser_use=false -c features.browser_use_external=false -c features.in_app_browser=false -c features.browser_use_full_cdp_access=false -c mcp_servers.cua_repl.command=/usr/bin/false -c mcp_servers.cua_repl.enabled=false -c mcp_servers.node_repl.command=/usr/bin/false -c mcp_servers.node_repl.enabled=false -c plugins.computer-use@openai-bundled.enabled=false -c plugins.unified-computer-use@openai-bundled.enabled=false -c plugins.browser@openai-bundled.enabled=false --remote ${w.socket.url}'`;
         seat.codex_endpoint = {
           url: w.socket.url,
           binding: BINDING,

@@ -36,11 +36,12 @@ import {
   withLaunchSession,
   withResume,
 } from '../src/profiles/profile.ts';
+import { seatPins, seatPinWords } from '../src/launch/features.ts';
 
 const claude = profileFor('claude-code')!;
 const codex = profileFor('codex')!;
 /** The profile's computer- and browser-use pins, as the CLI receives them on every launch. */
-const PIN_ARGV = codex.features.flatMap((pair) => ['-c', `features.${pair}`]);
+const PIN_ARGV = seatPinWords(seatPins(codex, false));
 const antigravity = profileFor('antigravity')!;
 const HOOK = '/synthetic/hook.json';
 const RULES = 'Rules for this session';

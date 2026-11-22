@@ -14,7 +14,8 @@ block scalars, a second document and duplicate keys are refused, with the line n
 Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
 behind it before it is stored. The format is walked below, by example; after it, this page
 documents the sections one by one: `tasks`, `seats`, `delivery_order`, `messaging.store`,
-`webhook`, `sender_name`, `grant`, `delegates`, tempo, and `budgets` with the format.
+`webhook`, `sender_name`, `desktop_control`, `grant`, `delegates`, tempo, and `budgets` with the
+format.
 
 ## Editing with team config
 
@@ -971,6 +972,52 @@ sender_name: nickname
   sender's team as the send wrote it, so a cross-team sender whose seat name another team also
   uses reads by its address in the feed when the registry holds that team; a line from a build
   that recorded none reads the plain seat name, never a guessed nickname.
+
+## `desktop_control`
+
+Whether a seat may control the computer: computer use, the user's browser, and desktop apps.
+Off by default. A team turns it on only for the seat that needs it, on that seat; a team-level
+word is the default for every seat that writes none, and a seat's own word always wins.
+
+```yaml
+seats:
+  - role: implementer
+    name: helper
+    cli: codex
+    launch: codex -m gpt-6.1-sol
+    desktop_control: true
+```
+
+- The word is `true` or `false`. Any other value is `desktop_control must be true or false`.
+- The word in force is read nearest first: a signed seat setting (`team settings set <seat>
+  desktop_control true`), the seat's own key, a signed setting at a wider level, this file's
+  top-level `desktop_control`, then `false`. A signed chain that does not verify declares
+  nothing, so the seat stays off. `team settings <seat>` shows the value and where it comes from.
+- It is read at launch: a change takes the seat's next start (`team restart <seat>`).
+- Off, a Codex seat's launch line, its recorded recipe and the start words of the app-server
+  TeamCLI runs for it carry `-c features.<name>=false` for `computer_use`, `browser_use`,
+  `browser_use_external`, `in_app_browser` and `browser_use_full_cdp_access`, and turn off the
+  computer and browser MCP servers a desktop app registers in the user's Codex config
+  (`cua_repl`, `node_repl`) and the bundled computer-use and browser plugins
+  (`-c plugins.<id>.enabled=false`). Each server is pinned as
+  `-c mcp_servers.<name>.command=/usr/bin/false -c mcp_servers.<name>.enabled=false`: Codex
+  refuses `enabled=false` alone for a server its config does not hold, and the pair is accepted
+  whether the server is absent or a local (stdio) server. A server of that name with a `url`
+  transport makes Codex refuse the pair, and the seat does not start.
+- Off, a Claude Code seat's settings file denies `mcp__computer-use`, `mcp__claude-in-chrome`
+  and `mcp__Claude_Browser`. A seat whose launch line names its own `--settings` gets no
+  settings file from TeamCLI, and no deny.
+- On, none of these is placed: the seat runs with the user's own configuration.
+- `team check` (and `team doctor`) names a running seat whose recorded launch line lacks a pin
+  its setting asks for, with `team restart <seat>` as the repair, and a seat whose managed
+  app-server was started without them.
+- A per-seat difference holds where a seat's turns run under its own configuration: a Codex seat
+  on the app-server TeamCLI starts for it (the `codex-daemon` policy, on by default) or launched
+  with `--no-daemon`. A Codex seat that attaches to the machine's shared background server runs
+  its turns under that server's configuration: its feature set must match every other seat's
+  there (Codex shows "Background server has incompatible feature settings" otherwise), and its
+  own MCP and plugin pairs do not reach that server. Seats with different `desktop_control`
+  words cannot share one background server.
 
 ## `grant`
 

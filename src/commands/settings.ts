@@ -152,6 +152,7 @@ function executeRead(
     project: team.project,
     seat,
     teamDeliveryOrder: team.deliveryOrder,
+    teamDesktopControl: team.desktopControl ?? null,
     entity: team.entity,
   });
   if (!read.ok) return sourceExit(io, json, read.refusals.map((one) => one.why));
@@ -173,7 +174,7 @@ function executeRead(
     const style = ttyStyle(io, { json });
     const lines = renderTable({
       headers: ['KEY', 'VALUE', 'SOURCE', 'APPLIES'],
-      rows: rows.map((row) => [row.key, sayConfigValue(row.value), sayConfigOrigin(row.origin), sayApply(row.applies)]),
+      rows: rows.map((row) => [row.key, sayConfigValue(row.value), sayConfigOrigin(row.origin, row.key), sayApply(row.applies)]),
       style,
     });
     io.stdout(`${lines.join('\n')}\n`);
@@ -372,6 +373,7 @@ function readSeatRows(
     project: team.project,
     seat,
     teamDeliveryOrder: team.deliveryOrder,
+    teamDesktopControl: team.desktopControl ?? null,
     entity: team.entity,
   });
   if (read.ok) return { ok: true, rows: read.rows };

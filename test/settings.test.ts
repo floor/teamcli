@@ -138,12 +138,13 @@ describe('a seat that writes every setting', () => {
     const result = await run(['lead']);
     expect(result.code).toBe(0);
     expect(result.out).toBe(
-      '  KEY             VALUE             SOURCE      APPLIES\n'
-      + '  model           Claude Opus       team file   restart that resumes\n'
-      + '  effort          high              team file   restart that resumes\n'
-      + '  nickname        Reviewer          team file   at once\n'
-      + '  delivery_order  mcp-inbox, typed  team order  at once\n'
-      + '  human           false             default     at once\n',
+      '  KEY              VALUE             SOURCE      APPLIES\n'
+      + '  model            Claude Opus       team file   restart that resumes\n'
+      + '  effort           high              team file   restart that resumes\n'
+      + '  nickname         Reviewer          team file   at once\n'
+      + '  delivery_order   mcp-inbox, typed  team order  at once\n'
+      + '  human            false             default     at once\n'
+      + '  desktop_control  false             default     restart that resumes\n',
     );
     expect(result.err).toBe('');
   });
@@ -154,12 +155,13 @@ describe('a seat that writes none', () => {
     const result = await run(['worker']);
     expect(result.code).toBe(0);
     expect(result.out).toBe(
-      '  KEY             VALUE        SOURCE     APPLIES\n'
-      + '  model           Claude Opus  team file  restart that resumes\n'
-      + '  effort          -            unset      restart that resumes\n'
-      + '  nickname        -            unset      at once\n'
-      + '  delivery_order  typed        team file  at once\n'
-      + '  human           true         team file  at once\n',
+      '  KEY              VALUE        SOURCE     APPLIES\n'
+      + '  model            Claude Opus  team file  restart that resumes\n'
+      + '  effort           -            unset      restart that resumes\n'
+      + '  nickname         -            unset      at once\n'
+      + '  delivery_order   typed        team file  at once\n'
+      + '  human            true         team file  at once\n'
+      + '  desktop_control  false        default    restart that resumes\n',
     );
   });
 });
@@ -191,6 +193,7 @@ describe('--json', () => {
       { key: 'nickname', value: 'Reviewer', source: 'team file', applies: 'at-once' },
       { key: 'delivery_order', value: ['mcp-inbox', 'typed'], source: 'team default', applies: 'at-once' },
       { key: 'human', value: false, source: 'default', applies: 'at-once' },
+      { key: 'desktop_control', value: false, source: 'default', applies: 'restart-resume' },
     ]);
   });
 });

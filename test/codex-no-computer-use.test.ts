@@ -17,8 +17,14 @@ import type { CodexEndpointRecord } from '../src/daemon/presence/endpoint-record
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { shortSocketBase } from './helpers.ts';
 
-const OFF = ['computer_use=false', 'browser_use=false', 'browser_use_external=false', 'in_app_browser=false'];
-const OFF_WORDS = OFF.flatMap((pair) => ['-c', `features.${pair}`]);
+const OFF = ['computer_use=false', 'browser_use=false', 'browser_use_external=false', 'in_app_browser=false', 'browser_use_full_cdp_access=false'];
+const CONFIG_OFF = [
+  'mcp_servers.cua_repl.command=/usr/bin/false', 'mcp_servers.cua_repl.enabled=false',
+  'mcp_servers.node_repl.command=/usr/bin/false', 'mcp_servers.node_repl.enabled=false',
+  'plugins.computer-use@openai-bundled.enabled=false', 'plugins.unified-computer-use@openai-bundled.enabled=false',
+  'plugins.browser@openai-bundled.enabled=false',
+];
+const OFF_WORDS = [...OFF.flatMap((pair) => ['-c', `features.${pair}`]), ...CONFIG_OFF.flatMap((pair) => ['-c', pair])];
 const SESSION = 'acme';
 const SEAT = 'coder';
 const BINDING = 'prs_0123456789ab';
@@ -37,10 +43,10 @@ function effective(words: readonly string[]): Record<string, boolean | undefined
   return Object.fromEntries(OFF.map((pair) => [pair.split('=')[0]!, settings.get(pair.split('=')[0]!)]));
 }
 
-const ALL_OFF = { computer_use: false, browser_use: false, browser_use_external: false, in_app_browser: false };
+const ALL_OFF = { computer_use: false, browser_use: false, browser_use_external: false, in_app_browser: false, browser_use_full_cdp_access: false };
 
 describe('the profile pins computer and browser use off', () => {
-  test('the codex profile carries the four off pairs', () => {
+  test('the codex profile carries the five off pairs', () => {
     expect(codex().features).toEqual(OFF);
   });
 

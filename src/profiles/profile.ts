@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import type { SessionCliSpec } from '../send/session-cli.ts';
-import { currentCodexRecipe, pinnedWords } from '../launch/features.ts';
+import { currentCodexRecipe, seatPins, seatPinWords } from '../launch/features.ts';
 import {
   appendOnLaunchLine,
   appendPositionalOnLaunchLine,
@@ -109,6 +109,11 @@ export interface Profile {
    *  last-wins config rule makes them the effective values: a seat and the shared background
    *  server it joins then present the same set, whichever value its config file holds. */
   features: readonly string[];
+  /** What a seat's `desktop_control` setting changes on this CLI's launch, or null for a CLI
+   *  whose launch carries nothing for it. `features` names the pins of `features` that a seat
+   *  with desktop control on does not carry; `config` is the `-c` pairs a seat with it off
+   *  carries beside its feature pins (the computer and browser MCP servers and plugins off). */
+  desktopControl?: { features: readonly string[]; config: readonly string[] } | null;
   /** The option that carries the rules, or null when they go as a first message or are
    *  prepended to each brief. */
   rulesOption: string | null;
@@ -503,7 +508,7 @@ export function launchCommandOrRefusal(
   cliHook?: string | null,
   place?: InboxPlace,
   displayName?: string,
-  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
+  runtimePolicies?: { codexDaemon?: 'on' | 'off'; desktopControl?: boolean },
   rulesLine?: string,
   warn?: (text: string) => void,
   /** The seat's absolute launch folder, filled into a profile settings value's `{cwd}`. Absent:
@@ -590,7 +595,10 @@ export function launchCommandOrRefusal(
   // `-c` for one key took the last value in both orders), so the pin is the seat's effective
   // value whichever its config file holds, and every seat of the CLI presents the same set to
   // the one background server they share.
-  options.push(...pinnedWords(profile.features));
+  // A seat's `desktop_control` word decides which of them it carries: off, the default, carries
+  // every feature pin and the profile's computer and browser config pairs; on lifts the ones the
+  // profile names (src/launch/desktop-control.ts).
+  options.push(...seatPinWords(seatPins(profile, runtimePolicies?.desktopControl === true)));
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
   // is never typed into the pane. It is positional: it stays after the line's own `--`, where a
   // message-mode CLI reads its prompt, never among the options before the delimiter.
@@ -645,7 +653,7 @@ export function launchCommand(
   cliHook?: string | null,
   place?: InboxPlace,
   displayName?: string,
-  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
+  runtimePolicies?: { codexDaemon?: 'on' | 'off'; desktopControl?: boolean },
   rulesLine?: string,
   warn?: (text: string) => void,
   cwd?: string,
@@ -670,10 +678,10 @@ export function supportsCliHook(cli: string): boolean {
  * launch puts the options too; the report then says the line cannot be read rather than claiming
  * the pin took effect.
  */
-export function pinnedRecordLine(cli: string, line: string, features: readonly string[]): string {
+export function pinnedRecordLine(cli: string, line: string, features: readonly string[], config: readonly string[] = []): string {
   if (cli === 'codex') line = currentCodexRecipe(line) ?? line;
   const profile = profileFor(cli);
-  const addition = pinnedWords(features).map(shellQuote).join(' ');
+  const addition = seatPinWords({ features, config }).map(shellQuote).join(' ');
   if (profile === null || addition === '') return line;
   return appendOnLaunchLine(line, addition, profile.binary).line;
 }
@@ -1404,7 +1412,7 @@ const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules',
 // (the delivery CLI a session runs and the public-only declaration the send path proves),
 // `features` (the pinned feature set the launch and the recorded line carry) and the watch
 // retry (`watch_wake`, `watch_wake_tries`).
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'typed_wake_max', 'wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'session_cli', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'exit_completion', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'settings', 'typed_wake', 'typed_wake_settle_ms', 'typed_wake_max', 'wake', 'read_hint', 'watch_wake', 'watch_wake_tries', 'not_started', 'abandon_answers', 'public_only', 'features', 'desktop_control'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1963,6 +1971,7 @@ function launchOf(root: YamlNode): Shipped {
   const notStartedEntry = optional(entries, 'not_started');
   const abandonAnswersEntry = optional(entries, 'abandon_answers');
   const featuresEntry = optional(entries, 'features');
+  const desktopControlEntry = optional(entries, 'desktop_control');
   const vendorsEntry = optional(entries, 'vendors');
   const credentialsEntry = optional(entries, 'credentials');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
@@ -2021,6 +2030,9 @@ function launchOf(root: YamlNode): Shipped {
       tested: testedOf(required(entries, 'tested', root.line).value),
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       features: featuresEntry ? featuresOf(featuresEntry.value) : [],
+      desktopControl: desktopControlEntry
+        ? desktopControlOf(desktopControlEntry.value, featuresEntry ? featuresOf(featuresEntry.value) : [])
+        : null,
       rulesOption: rules.option,
       rulesFileOption: rules.fileOption ?? null,
       rulesMode: rules.mode,
@@ -2098,6 +2110,36 @@ function featuresOf(node: YamlNode): string[] {
     }
     return pair;
   });
+}
+
+/** The profile's `desktop_control` block: the feature names a seat with desktop control on does
+ *  not pin (each one a pin of `features`), and the `-c` pairs a seat with it off carries. A
+ *  pair is `key=value` with a dotted key and a value, both plain shell words, and never a
+ *  `features.` key, which `features` alone carries. The CLI splits the key at every dot, quotes
+ *  included, so a quoted segment would name another key and is refused here. */
+function desktopControlOf(node: YamlNode, features: readonly string[]): { features: string[]; config: string[] } {
+  if (node.kind !== 'map') fail(node.line, '"desktop_control" must be a map of features and config');
+  const pinned = new Set(features.map((pair) => pair.slice(0, pair.lastIndexOf('='))));
+  let names: string[] = [];
+  let config: string[] = [];
+  for (const entry of node.entries) {
+    if (entry.key === 'features') {
+      names = strings(entry.value, 'desktop_control.features');
+      for (const name of names) {
+        if (!pinned.has(name)) fail(entry.value.line, `"desktop_control.features" names ${name}, which "features" does not pin`);
+      }
+    } else if (entry.key === 'config') {
+      config = strings(entry.value, 'desktop_control.config');
+      for (const pair of config) {
+        if (!/^[A-Za-z0-9_@-]+(?:\.[A-Za-z0-9_@-]+)+=[A-Za-z0-9_./-]+$/.test(pair) || pair.startsWith('features.')) {
+          fail(entry.value.line, `"desktop_control.config" entry ${JSON.stringify(pair)} is not a dotted key=value pair of plain words outside features`);
+        }
+      }
+    } else {
+      fail(entry.value.line, `"desktop_control" has no key "${entry.key}"`);
+    }
+  }
+  return { features: names, config };
 }
 
 /** The providers a CLI can run on, as the adapter names them. Each env word is one shell word

@@ -31,7 +31,8 @@ import { grokCommandDenyLine, grokCommandDenyPolicy } from './grok-command-deny.
 import { getRelativeDirOps } from '../send/drop-retention.ts';
 import type { GrokCommandDeny } from '../settings/grok-command-deny.ts';
 import { launchedCliBinary } from './line.ts';
-import { featureToggle, withPinnedFeatures } from './features.ts';
+import { featureToggle, seatPins, withPinnedConfig } from './features.ts';
+import { seatDesktopControl } from './desktop-control.ts';
 import { channelRestoreStep } from './reboot.ts';
 import type { WaitingRecord } from '../state.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -133,6 +134,9 @@ export type Op =
       grokSandbox?: GrokSandbox;
       /** Verified team policy, regenerated and checked before each Cursor/Grok launch. */
       cursorCommandDeny?: Exclude<GrokCommandDeny, 'off'>;
+      /** The seat may control the computer: its managed app-server starts without the
+       *  profile's computer and browser pins. Absent: off, and the server carries them. */
+      desktopControl?: true;
       /**
        * The command is the declarative launcher's argv and is run as given. The launch does
        * not mint a session, attach an endpoint, or rewrite a sandbox flag onto it.
@@ -477,6 +481,10 @@ export interface UpSeat {
   /** The resolved `codex-daemon` policy (`on | off`) for a Codex seat. When omitted, `upPlan`
    *  resolves it from the signed policy chain (`entity -> project -> team -> seat`). */
   codexDaemon?: CodexDaemonValue;
+  /** The seat's resolved `desktop_control` (src/settings/desktop-control.ts). When omitted,
+   *  `upPlan` reads it from the team file and the signed settings chain; off unless a word turns
+   *  it on. */
+  desktopControl?: boolean;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
   rulesFile?: { path: string; line: string };
@@ -992,12 +1000,12 @@ export function codexEndpointConfig(command: string): string[] {
 /**
  * The words a seat's managed Codex app-server starts with, and the ones its reuse and `team
  * check` compare a live server against: the line's own (`codexEndpointConfig`), closed by the
- * profile's pinned feature set (`withPinnedFeatures`). The server's feature set is then the
+ * seat's pins for its `desktop_control` word (`withPinnedConfig`). The server's feature set is then the
  * team's even for a line whose pins a wrapper script adds where no reader can see them, and an
  * attached TUI — which runs its turns under the server's configuration — gets that set too.
  */
-export function codexEndpointStartConfig(command: string): string[] {
-  return withPinnedFeatures(codexEndpointConfig(command), profileFor('codex')?.features ?? []);
+export function codexEndpointStartConfig(command: string, desktopControl = false): string[] {
+  return withPinnedConfig(codexEndpointConfig(command), seatPins(profileFor('codex'), desktopControl));
 }
 
 /**
@@ -1510,6 +1518,15 @@ export function upPlan(input: UpInput): Step[] {
         session,
       });
     }
+    // Whether this seat may control the computer: off unless the seat's own word, or the team's
+    // under it, turns it on. Off, its launch carries the profile's computer and browser pins.
+    const desktopControl = seat.desktopControl ?? seatDesktopControl({
+      team: input.team,
+      seat: seat.name,
+      ...(input.home === undefined ? {} : { home: input.home }),
+      root: input.root,
+    });
+    const pins = seatPins(profile, desktopControl);
     // The id a proven conversation writes into the launch line: the state-agreeing record's
     // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
     // form cannot carry either; the plan says so on the launch rather than losing it silently.
@@ -1776,7 +1793,7 @@ export function upPlan(input: UpInput): Step[] {
     let denyRecordLine: string | undefined;
     if (profile.cli === 'grok' && commandDeny !== 'off') {
       const actual = grokCommandDenyLine(commandDeny, baseLine);
-      const recorded = fromResolver ? actual : grokCommandDenyLine(commandDeny, pinnedRecordLine(profile.cli, seat.launch, profile.features));
+      const recorded = fromResolver ? actual : grokCommandDenyLine(commandDeny, pinnedRecordLine(profile.cli, seat.launch, pins.features, pins.config));
       if (!actual.ok || !recorded.ok) {
         const why = !actual.ok ? actual.why : !recorded.ok ? recorded.why : 'native deny placement failed';
         steps.push({ kind: 'skip', text: `${seat.name}: would refuse: ${why}`, do: { do: 'refuse', seat: seat.name, why } });
@@ -1791,7 +1808,7 @@ export function upPlan(input: UpInput): Step[] {
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine, (text) => {
+    }, seat.sessionName, { ...(codexDaemon === undefined ? {} : { codexDaemon }), desktopControl }, rulesLine, (text) => {
       // A launch line whose shape this version cannot prove keeps 0.5.10's placement of the
       // options after it; the seat says so on the launch step rather than losing the words.
       launchWarnings.push(text);
@@ -1917,7 +1934,7 @@ export function upPlan(input: UpInput): Step[] {
     // Every other launch keeps the base recipe, with the profile's pins placed where the
     // launch puts them, never the expanded command. A resume id this run appended rides the
     // command only: the record keeps the recipe, so a later fresh start is not blocked by it.
-    const pinned = denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, profile.features);
+    const pinned = denyRecordLine ?? pinnedRecordLine(profile.cli, seat.launch, pins.features, pins.config);
     const addedResume = namedResumeTarget(profile.cli, command) !== null
       && namedResumeTarget(profile.cli, seat.launch) === null;
     const recordLine = addedResume ? pinned : (fromResolver ? command : pinned);
@@ -1960,7 +1977,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...((fromResolver && !shippedLaunch) || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...((fromResolver && !shippedLaunch) || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: reuse?.pane ?? seat.pane, ...(reuse === undefined ? {} : { reuse: reuse.launched, workspace: reuse.workspace }), ...(reuse === undefined && seat.workspace !== undefined ? { workspace: seat.workspace } : {}), cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), ...(channelFallback === undefined ? {} : { channelNotice: channelFallback }), watcher, rulesCarried, recordLine, ...(channel === undefined ? {} : { channel }), ...(fromResolver ? { resolved: true as const } : {}), ...((fromResolver && !shippedLaunch) || !(managedCodex && input.stateDir !== undefined) ? {} : { codexEndpoint: { dir: input.stateDir } }), ...((fromResolver && !shippedLaunch) || plannedSandbox === undefined ? {} : { grokSandbox: plannedSandbox }), ...(ownStartFolder === undefined ? {} : { ownStartFolder }), ...(profile.cli === 'cursor' && commandDeny !== 'off' ? { cursorCommandDeny: commandDeny } : {}), ...(desktopControl ? { desktopControl: true as const } : {}) },
       });
     }
     const rules = profile.rulesMode;
