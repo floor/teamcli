@@ -100,7 +100,13 @@ function walk(dir: string): string[] {
   return out;
 }
 
-async function until(check: () => boolean, label: string, ms = 4_000): Promise<void> {
+// Each wait polls its own condition and returns the moment it holds; the deadline only bounds a
+// condition that never comes. A loaded CI runner took past 4 s to stage the fourth restart's
+// decision, so the bound is generous and every scene that waits has a timeout above it.
+const UNTIL_MS = 20_000;
+const SCENE_MS = 60_000;
+
+async function until(check: () => boolean, label: string, ms = UNTIL_MS): Promise<void> {
   const deadline = Date.now() + ms;
   for (;;) {
     if (check()) return;
@@ -376,7 +382,7 @@ describe('a stuck watch or a late chores child is restarted for its own root', (
     } finally {
       await scene.close();
     }
-  }, 15_000);
+  }, SCENE_MS);
 
   test('a chores child late past 30 beats is restarted once, with one lead notice and one log line', async () => {
     const scene = await open('running');
@@ -400,7 +406,7 @@ describe('a stuck watch or a late chores child is restarted for its own root', (
     } finally {
       await scene.close();
     }
-  }, 15_000);
+  }, SCENE_MS);
 
   test('a chores child late under the limit is left running, and the beat recorded the count', async () => {
     const scene = await open('running');
@@ -436,7 +442,7 @@ describe('a stuck watch or a late chores child is restarted for its own root', (
     } finally {
       await scene.close();
     }
-  }, 15_000);
+  }, SCENE_MS);
 
   test('a fourth restart inside an hour is left for a person, and the next beat is silent', async () => {
     const scene = await open('starting');
@@ -469,7 +475,7 @@ describe('a stuck watch or a late chores child is restarted for its own root', (
     } finally {
       await scene.close();
     }
-  }, 15_000);
+  }, SCENE_MS);
 });
 
 
@@ -491,7 +497,7 @@ test('real startup progress can exceed the startup age, but a first pass that st
     await until(() => kills(scene, scene.stuck) === 1, 'a first pass without progress did not expire');
     expectUntouched(scene);
   } finally { await scene.close(); }
-});
+}, SCENE_MS);
 
 test('a pulse for another root cannot refresh this watched roots startup clock', async () => {
   const scene = await open('foreign-progress');
@@ -500,4 +506,4 @@ test('a pulse for another root cannot refresh this watched roots startup clock',
     await until(() => kills(scene, scene.stuck) === 1, 'a foreign-root pulse incorrectly refreshed startup');
     expectUntouched(scene);
   } finally { await scene.close(); }
-});
+}, SCENE_MS);
