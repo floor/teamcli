@@ -130,6 +130,8 @@ function nativeQueue(): { route: NonNullable<SendHost['nativeRoute']>; copies: s
 }
 
 const AGY_IDLE = readFileSync(join(import.meta.dir, 'fixtures', 'antigravity', '1.4.12', 'idle.txt'), 'utf8');
+/** The one pointer line a re-send types to the agy seat with one message waiting. */
+const AGY_POINTER = 'team: 1 unread message waiting — read them all with: team drops --read --seat agy';
 
 const headerOf = (text: string | undefined): string => (text ?? '').split('\n')[0] ?? '';
 const numberOf = (text: string | undefined): number | null => {
@@ -503,9 +505,9 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     // cascade orders them).
     expect(said.filter((line) => line.includes(`message ${ID} is not acknowledged; offered again on the typed`))).toHaveLength(2);
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain(`message ${ID} · delivery 2: run team drops`);
-    expect(lines[1]).toContain(`message ${ID} · delivery 3: run team drops`);
     for (const line of lines) {
+      // One line for every waiting message: the count and the seat's own read, no id, no copy.
+      expect(line).toStartWith(`${AGY_POINTER} [w:`);
       expect(line).not.toContain('the secret body');
       // The wake-attempt fence's token rides on the line (the screen proof).
       expect(line).toMatch(/\[w:[^\]]+\]/);
@@ -513,11 +515,12 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(2);
     const shown = readMessage({ dropDir, root: at.root, session: SESSION, seat: 'agy' }, ID, at.home);
     if (!shown.ok) throw new Error('the read failed');
-    expect(numberOf(shown.body)).toBe(4);
+    // The pointers numbered no copy: the read that serves the body takes the next one.
+    expect(numberOf(shown.body)).toBe(2);
     expect(shown.body).toContain('the secret body');
   });
 
-  test('the re-send pointer renders no wake template: the sender, then the message, its number and team drops, nothing of the body', async () => {
+  test('the re-send pointer renders no wake template and no sender: the count and the seat\'s own read, nothing of the body', async () => {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
     recordPane(at, 'agy', 'pane-agy');
@@ -527,7 +530,7 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     const lines: string[] = [];
     await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE }), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(new RegExp(`^\\S+ — message ${ID} · delivery 2: run team drops \\[w:[^\\]]+\\]$`));
+    expect(lines[0]).toMatch(new RegExp(`^${AGY_POINTER} \\[w:[^\\]]+\\]$`));
     expect(lines[0]).not.toContain('tiny');
     expect(lines[0]).not.toContain('Message from');
   });
@@ -554,14 +557,14 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     // The same CLI pid under the same shell, born later: a reused pid is not the launch.
     await pass(owner('agy', 'pane-agy', { cliStart: 1_700_000_009_999 }));
     expect(lines).toEqual([]);
-    // The pointer's number is taken only inside the proven first-key step: none was taken.
+    // No pointer numbers a copy.
     expect(copyHistory(dropDir, ID)).toMatchObject({ copies: 1 });
     // No re-send was recorded for any of them: every attempt was withdrawn, the record stays due.
     expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(0);
     // The recorded launch, read fresh: the pointer is typed.
     await pass(owner('agy', 'pane-agy'));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`message ${ID} · delivery`);
+    expect(lines[0]).toStartWith(AGY_POINTER);
   });
 
   /** A launch recorded in herdr's process-group order, helper first: [helper 223, CLI 222]. */
@@ -690,7 +693,7 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     age(stampedFolder(at, 'agy'), ID, 31 * MIN);
     await wakeUnreadDrops(scene(owner('agy', 'pane-agy')), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`message ${ID} · delivery 2: run team drops`);
+    expect(lines[0]).toStartWith(AGY_POINTER);
   });
 
   test('the owner proof is asked before every key: a pane handed over after the line is typed gets no Enter, and no re-send is credited', async () => {
@@ -709,7 +712,7 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     expect(said.some((line) => line.includes('offered again on the typed'))).toBe(false);
   });
 
-  test('two typed requests in one pass: the pointer credits only the id it names; the other is withdrawn and stays due', async () => {
+  test('two typed requests in one pass: one pointer line counts both, and both are credited as re-sent', async () => {
     const at = made(['typed'], [{ name: 'agy', role: 'implementer', cli: 'antigravity', launch: 'agy' }]);
     activateRoot(at);
     recordPane(at, 'agy', 'pane-agy');
@@ -720,13 +723,15 @@ describe('every leg type takes copies 2 and 3, numbered', () => {
     const lines: string[] = [];
     await wakeUnreadDrops(passScene(at, new Date(Date.now() + 61_000), fake(at, { agents: () => [] }), { seat: 'agy', cli: 'agy', typedWake: typedSeam(lines), screen: AGY_IDLE }), { unreadAfter: 600 });
     expect(lines).toHaveLength(1);
-    const named = lines[0]?.includes(ID) === true ? ID : ID2;
-    const other = named === ID ? ID2 : ID;
-    expect(attemptLedger(stampedFolder(at, 'agy'), named).attempts).toBe(1);
-    expect(attemptLedger(stampedFolder(at, 'agy'), other).attempts).toBe(0);
+    expect(lines[0]).toStartWith('team: 2 unread messages waiting — read them all with: team drops --read --seat agy [w:');
+    expect(lines[0]).not.toContain(ID);
+    expect(lines[0]).not.toContain('first');
+    expect(attemptLedger(stampedFolder(at, 'agy'), ID).attempts).toBe(1);
+    expect(attemptLedger(stampedFolder(at, 'agy'), ID2).attempts).toBe(1);
     const history = readHistory('acme', at.root, at.home);
-    expect(history.ok && history.entries.filter((entry) => entry.note?.includes('re-sent on the typed') === true).map((entry) => entry.id)).toEqual([named]);
-    expect(resendCandidates(seatOf(at, dropDir, 'agy'), Date.now() + 62_000)).toContain(other);
+    expect(history.ok && history.entries.filter((entry) => entry.note?.includes('re-sent on the typed') === true).map((entry) => entry.id).sort()).toEqual([ID, ID2].sort());
+    // Neither is due again before its backoff: the next pass types nothing.
+    expect(resendCandidates(seatOf(at, dropDir, 'agy'), Date.now() + 62_000)).toEqual([]);
   });
 
   test('a typed request is recorded only once its pointer was typed with its token; until then the record stays due', async () => {

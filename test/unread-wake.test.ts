@@ -1071,6 +1071,25 @@ describe("the watch's typed wake retry", () => {
     expect(JSON.parse(readFileSync(wakeLinesPath(dropDir), 'utf8')).at).toHaveLength(6);
   });
 
+  test('a line the hourly cap holds back is said: by the pass, and by the report at twice the window', async () => {
+    const { made, team } = typedWorld('muse');
+    const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nheld back', new Date(NOW.getTime() - 11 * MIN));
+    const one = pane(MUSE_IDLE);
+    const calls: { pane: string; line: string; cli: string; session: string }[] = [];
+    const sources = typedSources(one, typedSeam([TYPED_FAILED], calls));
+    const live = liveWith('helper', 'helper-pane');
+    const recent = Array.from({ length: 6 }, (_, k) => NOW.getTime() - (k + 1) * 5 * MIN);
+    writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: recent })}\n`);
+    const said: string[] = [];
+    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources, live }), { unreadAfter: N });
+    expect(calls).toEqual([]);
+    expect(said.some((line) => line.startsWith('helper: the hourly cap of 6 typed wake lines is reached; no wake line was typed this pass, 1 unread message waits'))).toBe(true);
+    // The report names the cap, not a bare "no wake line was typed".
+    reportUnreadDrops(sceneOf(made, team, one, [], { sources, live, now: new Date(NOW.getTime() + 10 * MIN) }), { unreadAfter: N });
+    const toOwner = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    expect(toOwner.body).toContain(`no wake line was typed; the hourly cap of 6 typed wake lines held a wake line back at ${NOW.toISOString()}`);
+  });
+
   test('a message older than the slow retries\' age bound is not retried again', async () => {
     const { made, team } = typedWorld('muse');
     const dropDir = seedMessage(made, 'acme', 'helper', UNREAD_A, 'from the owner\n\nancient', new Date(NOW.getTime() - WAKE_SLOW_MAX_AGE_MS - MIN));

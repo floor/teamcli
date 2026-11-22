@@ -22,7 +22,7 @@ import { signReceiptPayload, signRecord, writeReceipt } from '../src/send/record
 import type { Live } from '../src/status/compare.ts';
 import type { RetryScene, RetrySources } from '../src/watch/retry.ts';
 import { readScreen } from '../src/watch/screen.ts';
-import { reportStuckSeats } from '../src/watch/unread.ts';
+import { reportStuckSeats, wakeLinesPath } from '../src/watch/unread.ts';
 import { appendHistory } from '../src/send/history.ts';
 
 const NOW = new Date('2026-11-05T12:00:00.000Z');
@@ -517,4 +517,43 @@ test('a read receipt closes the episode; the messages still waiting are named ag
   expect(notices[1]).toContain('3 messages wait');
   // The age is the message's own, read at this pass: 100 minutes when it landed, 102 by now.
   expect(notices[1]).toContain('oldest 102 min');
+});
+
+test('a pointer typed for a newer waiting message is named, not denied: the report asks every waiting id', () => {
+  const made = world();
+  const team = teamOf(made);
+  fourHeld(made);
+  // The re-send's one pointer line was written for OLD_3, not the oldest.
+  const pointedAt = new Date(NOW.getTime() - 30 * MIN).toISOString();
+  const wrote = appendHistory(team.project, made.root, made.home, {
+    ts: pointedAt,
+    from: 'owner',
+    to: 'worker',
+    body: `message ${OLD_3}`,
+    id: OLD_3,
+    outcome: 'awaiting receipt',
+    note: 'not acknowledged; re-sent on the typed (the pointer)',
+    via: 'typed',
+  });
+  expect(wrote.ok).toBe(true);
+  const one = pane(ANTIGRAVITY_IDLE);
+  report(made, team, one, []);
+  const first = leadNotices(made);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toContain(`a typed wake was delivered at ${pointedAt} and the seat has not read it since`);
+  expect(first[0]).not.toContain('no wake line was typed');
+  expect(first[0]).not.toContain('no wake reached it');
+});
+
+test('a line the hourly cap held back is said in the stuck report', () => {
+  const made = world();
+  const team = teamOf(made);
+  const dropDir = fourHeld(made);
+  const heldAt = NOW.getTime() - 5 * MIN;
+  writeFileSync(wakeLinesPath(dropDir), `${JSON.stringify({ at: [heldAt - MIN], held: heldAt })}\n`);
+  const one = pane(ANTIGRAVITY_IDLE);
+  report(made, team, one, []);
+  const first = leadNotices(made);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toContain(`no wake line was typed for any of them; the hourly cap of 6 typed wake lines held a wake line back at ${new Date(heldAt).toISOString()}`);
 });
