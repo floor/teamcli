@@ -1169,9 +1169,13 @@ signs in with it at launch:
 
 Which seats take it:
 
-- Only a seat whose `cli` is `claude-code` and whose `vendor` is `anthropic`. A seat on another
-  provider's endpoint never does, and neither does a line that sets `ANTHROPIC_BASE_URL`,
-  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` itself.
+- Only a seat whose `cli` is `claude-code` and whose `vendor` is `anthropic`, on a line proved to
+  run Claude Code on Anthropic: the shipped `claude-code` launcher, or a plain line of leading
+  variable assignments followed by the `claude` binary itself. The rule fails closed: a line
+  through `env`, a shell (`bash -c '…'`), a wrapper or a launcher script gets nothing, whatever it
+  sets inside; so does a line with a separator, a pipe, a redirection or a word computed at run
+  time, one that names an `ANTHROPIC_…` or `CLAUDE_CODE_USE_…` variable anywhere, and one that
+  brings a `--settings` file of its own. A seat on another provider's endpoint never takes it.
 - Only when the store holds the entry. Presence is asked by name, without the value: the Keychain
   lookup without `-w`, or the entry names the encrypted file keeps in the clear (nothing is
   decrypted). A store without the entry launches the seat exactly as before.
@@ -1189,7 +1193,8 @@ token. A chain that cannot be read or verified is read as `login`: the token is 
 only on a word that reads.
 
 [`team doctor`](commands/doctor.md), on a machine where `claude auth status` finds no session
-login, says `ok` when the store holds the entry (the seats sign in with it), and otherwise names
+login, says `ok` when the store holds the entry, naming only the seats the launch would hand it
+(a Claude seat that takes none still needs the login, and says so), and otherwise names
 both fixes: `claude auth login`, or `claude setup-token` with the token kept as
 `CLAUDE_CODE_OAUTH_TOKEN`. The token expires, and the store keeps no date doctor could read
 without the value: when seats stop signing in, run `claude setup-token` again and replace the

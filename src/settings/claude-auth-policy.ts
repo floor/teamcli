@@ -6,7 +6,8 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import type { TeamFile } from '../file/types.ts';
 import { secretWord } from '../launch/secret-words.ts';
 import { loadAndResolvePolicyChain } from '../policy/index.ts';
-import { leadingAssignments } from '../profiles/profile.ts';
+import { shellWords } from '../launch/shell-words.ts';
+import { assignmentWordName } from '../profiles/profile.ts';
 import { CLAUDE_AUTH_DEFAULT, CLAUDE_TOKEN_ENTRY, parseClaudeAuth, type ClaudeAuth } from './claude-auth.ts';
 
 export type ClaudeAuthContext = {
@@ -40,20 +41,55 @@ export function anthropicClaudeSeat(seat: { cli: string; vendor: string | undefi
   return seat.cli === 'claude-code' && seat.vendor?.toLowerCase() === 'anthropic';
 }
 
-/** The variables that point a Claude Code line at a credential or an endpoint of its own: a line
- *  that sets one is never handed the subscription token. */
-const OWN_CREDENTIAL = new Set([CLAUDE_TOKEN_ENTRY, 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL']);
+/** Variables that point Claude Code at a credential, an endpoint or another provider of its own
+ *  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, …). */
+const ROUTING = /ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_TOKEN/;
+
+/** What a shell reads as more than one plain command: a separator, a pipe, a redirection, a
+ *  backtick or a line break. */
+const COMPOUND = /[;&|<>`\n]/;
+
+/**
+ * Whether a launch line's effective program is Claude Code itself on Anthropic's own endpoint, as
+ * far as the line shows; fail closed. Only leading plain assignments, none of them routing and
+ * none computed at run time, then the `claude` binary itself (by name or by path), then words that
+ * neither name a routing variable, nor are computed at run time, nor bring a settings file of the
+ * line's own (`--settings`, whose `env` could route the CLI elsewhere). A line through `env`, a
+ * shell, a wrapper or a launcher script is never proved, whatever it sets inside, and gets nothing.
+ */
+export function claudeTokenLine(line: string): boolean {
+  if (COMPOUND.test(line)) return false;
+  const words = shellWords(line);
+  if (words === null) return false;
+  let at = 0;
+  for (; at < words.length; at++) {
+    const name = assignmentWordName(words[at]!.text);
+    if (name === null) break;
+    if (ROUTING.test(name) || words[at]!.expands) return false;
+  }
+  const program = words[at];
+  if (program === undefined || program.expands || program.text.split('/').at(-1) !== 'claude') return false;
+  return words.slice(at + 1).every((word) => !word.expands && !ROUTING.test(word.text) && !/^--settings(=|$)/.test(word.text));
+}
+
+/** Whether a file's seat would take the token on this machine's launch, as far as its file shows:
+ *  a Claude Code seat on Anthropic on the shipped `claude-code` launcher, or on a plain line the
+ *  gate proves. Any other launcher is resolved at launch, where the line it resolves to is gated. */
+export function claudeTokenSeat(seat: { cli: string; vendor: string | undefined; launch: string; launcher?: string }): boolean {
+  if (!anthropicClaudeSeat(seat)) return false;
+  if (seat.launcher !== undefined) return seat.launcher === 'claude-code';
+  return claudeTokenLine(seat.launch);
+}
 
 /**
  * The launch line with the token's secret word in front, or the line unchanged. Only a Claude
  * Code seat on Anthropic takes it, only when the setting is `store` and the store holds the entry,
- * and only on a line whose leading words read and set no credential or endpoint of their own. The
- * word names the entry; the launch fills it with the store's lookup (src/launch/secret-words.ts),
- * so the value reaches the seat's own shell only, never TeamCLI, its records or its logs.
+ * and only on a line `claudeTokenLine` proves runs Claude Code on Anthropic. The word names the
+ * entry; the launch fills it with the store's lookup (src/launch/secret-words.ts), so the value
+ * reaches the seat's own shell only, never TeamCLI, its records or its logs.
  */
 export function withClaudeToken(line: string, seat: { cli: string; vendor: string | undefined; auth: ClaudeAuth; held: boolean | null }): string {
   if (!anthropicClaudeSeat(seat) || seat.auth !== 'store' || seat.held !== true) return line;
-  const leading = leadingAssignments(line);
-  if (leading === null || leading.some((word) => OWN_CREDENTIAL.has(word.name))) return line;
+  if (!claudeTokenLine(line)) return line;
   return `${secretWord(CLAUDE_TOKEN_ENTRY, CLAUDE_TOKEN_ENTRY)} ${line}`;
 }

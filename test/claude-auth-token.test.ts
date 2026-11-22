@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
-import { claudeNoLoginFinding, type DoctorSources } from '../src/commands/doctor.ts';
+import { claudeNoLoginFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -16,7 +16,7 @@ import { formatPlan, upPlan, type UpSeat } from '../src/launch/plan.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { systemSecretStore, type SecretStore } from '../src/secrets/store.ts';
-import { claudeAuthInForce, withClaudeToken } from '../src/settings/claude-auth-policy.ts';
+import { claudeAuthInForce, claudeTokenLine, withClaudeToken } from '../src/settings/claude-auth-policy.ts';
 import { CLAUDE_TOKEN_ENTRY, parseClaudeAuth } from '../src/settings/claude-auth.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { discardFixtures } from './fixture-cleanup.ts';
@@ -59,6 +59,20 @@ const SEATS = `seats:
     model: DeepSeek Flash
     version: "4.0"
     launch: ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_AUTH_TOKEN={secret:DEEPSEEK_API_KEY} claude --model deepseek-flash
+  - name: wrapped
+    role: implementer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: env ANTHROPIC_BASE_URL=https://provider.example claude --model claude-opus-5-5
+  - name: scripted
+    role: implementer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: "bash -c 'ANTHROPIC_BASE_URL=https://provider.example claude --model claude-opus-5-5'"
   - name: worker
     role: implementer
     cli: codex
@@ -96,11 +110,13 @@ function plan(w: ReturnType<typeof world>, store: SecretStore) {
   const seats = [
     seat('lead', 'claude-code', 'claude --model claude-opus-5-5'),
     seat('provider', 'claude-code', 'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic ANTHROPIC_AUTH_TOKEN={secret:DEEPSEEK_API_KEY} claude --model deepseek-flash'),
+    seat('wrapped', 'claude-code', 'env ANTHROPIC_BASE_URL=https://provider.example claude --model claude-opus-5-5'),
+    seat('scripted', 'claude-code', "bash -c 'ANTHROPIC_BASE_URL=https://provider.example claude --model claude-opus-5-5'"),
     seat('worker', 'codex', 'codex -m gpt-6.1-sol'),
   ];
   const steps = upPlan({
     root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
-    cliHooks: { lead: join(w.root, 'lead.json'), provider: join(w.root, 'provider.json') }, seats, secretStore: store,
+    cliHooks: { lead: join(w.root, 'lead.json'), provider: join(w.root, 'provider.json'), wrapped: join(w.root, 'wrapped.json'), scripted: join(w.root, 'scripted.json') }, seats, secretStore: store,
   });
   const launches = new Map<string, { command: string; recordLine: string | undefined }>();
   for (const step of steps) if (step.do?.do === 'launch') launches.set(step.do.seat, { command: step.do.command, recordLine: step.do.recordLine });
@@ -121,8 +137,36 @@ describe('the line rule', () => {
   test('a line with a credential or endpoint of its own, or one whose words do not read, is left as it is', () => {
     for (const line of [
       'ANTHROPIC_BASE_URL=https://example.test claude', 'ANTHROPIC_AUTH_TOKEN=x claude', 'ANTHROPIC_API_KEY=x claude',
-      `${CLAUDE_TOKEN_ENTRY}=x claude`, "claude 'unclosed",
+      `${CLAUDE_TOKEN_ENTRY}=x claude`, "claude 'unclosed", 'CLAUDE_CODE_USE_BEDROCK=1 claude',
     ]) expect(withClaudeToken(line, on)).toBe(line);
+  });
+  test('a line through env, a shell, a wrapper or a launcher script gets nothing, whatever it sets inside (fail closed)', () => {
+    for (const line of [
+      // env with an endpoint after its first word
+      'env ANTHROPIC_BASE_URL=https://provider.example claude',
+      'env claude --model x',
+      // a quoted shell script that routes the CLI
+      "bash -c 'ANTHROPIC_BASE_URL=https://provider.example claude'",
+      "zsh -c 'export ANTHROPIC_AUTH_TOKEN=x; claude'",
+      // a wrapper or launcher script, even one that sets nothing visible
+      'zsh ./as-acme.sh claude --model x',
+      './launch-claude.sh',
+      'team-deepseek',
+      // compound lines and run-time words
+      'export ANTHROPIC_BASE_URL=https://provider.example; claude',
+      'claude && true', 'X=$(cat endpoint) claude', 'claude --model "$MODEL"',
+      // a word that names a routing variable anywhere after the program, or a settings file of its own
+      'claude --append-system-prompt ANTHROPIC_BASE_URL=https://provider.example',
+      'claude --settings ./routes.json', 'claude --settings=./routes.json',
+      // another program whose name merely contains it
+      'claude-wrapper', 'notclaude',
+    ]) {
+      expect(claudeTokenLine(line), line).toBe(false);
+      expect(withClaudeToken(line, on), line).toBe(line);
+    }
+    for (const line of ['claude', '/usr/local/bin/claude --model claude-opus-5-5', 'AGENT_UNATTENDED=1 claude --model x']) {
+      expect(claudeTokenLine(line), line).toBe(true);
+    }
   });
   test('the setting reads store or login, nothing else', () => {
     expect(parseClaudeAuth('store')).toBe('store');
@@ -143,11 +187,30 @@ describe('the launch plan', () => {
     expect(launches.get('provider')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
     expect(launches.get('provider')?.command).toContain('ANTHROPIC_AUTH_TOKEN="$(fake-store-lookup DEEPSEEK_API_KEY)"');
     expect(launches.get('worker')?.command).not.toContain(CLAUDE_TOKEN_ENTRY);
+    // Declared on Anthropic, but routed through env or a quoted script to another endpoint: nothing.
+    for (const name of ['wrapped', 'scripted']) {
+      const op = steps.map((step) => step.do).find((one) => (one?.do === 'launch' || one?.do === 'refuse') && one.seat === name);
+      expect(op, name).toBeDefined();
+      expect(JSON.stringify(op), name).not.toContain(CLAUDE_TOKEN_ENTRY);
+    }
     expect(JSON.stringify(steps)).not.toContain(FAKE_VALUE);
     expect(text).not.toContain(FAKE_VALUE);
     expect(text).not.toContain('{secret:');
-    // Presence was asked for the Claude seat alone.
-    expect(store.asked).toEqual([CLAUDE_TOKEN_ENTRY]);
+    // Presence was asked for the Anthropic Claude seats alone (the wrapped ones are then refused by the gate).
+    expect(store.asked.every((name) => name === CLAUDE_TOKEN_ENTRY)).toBe(true);
+  });
+
+  test('a seat on the shipped claude-code launcher, on Anthropic, takes it on its resolved line', () => {
+    const w = world();
+    const steps = upPlan({
+      root: w.root, home: w.home, team: w.team, session: 'morning', sessionRunning: true, watchAlive: true, watchLabel: 'Watch',
+      cliHooks: { lead: join(w.root, 'lead.json') }, secretStore: fakeStore([CLAUDE_TOKEN_ENTRY]),
+      seats: [{ ...seat('lead', 'claude-code', 'claude'), launcher: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5' }],
+    });
+    const op = steps.map((step) => step.do).find((one) => one?.do === 'launch');
+    const command = op?.do === 'launch' ? op.command : '';
+    expect(command).toContain(`${WORD} GH_TOKEN=`);
+    expect(command).toContain(' claude --model claude-opus-5-5');
   });
 
   test('a store that holds no entry launches the seat as before', () => {
@@ -212,28 +275,34 @@ describe('team doctor', () => {
     version: () => null, onPath: () => false, loggedIn: () => false, herdrVersion: () => null, sessionRunning: () => null,
     now: () => NOW, home: w.home, secretStore: () => store,
   });
+  const HINT = 'claude auth login';
+  const only = (w: ReturnType<typeof world>, names: string[]) => w.team.seats.filter((one) => names.includes(one.name));
 
   test('no session login and no entry: the miss names claude setup-token and the entry', () => {
     const w = world();
-    const finding = claudeNoLoginFinding(w.team, w.root, w.team.seats, sources(w, fakeStore([])));
-    expect(finding?.level).toBe('miss');
-    expect(finding?.text).toContain('claude setup-token');
-    expect(finding?.text).toContain(`as ${CLAUDE_TOKEN_ENTRY}`);
-    expect(claudeNoLoginFinding(w.team, w.root, w.team.seats, sources(w, null))?.level).toBe('miss');
+    const findings = claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([])), HINT);
+    expect(findings?.map((one) => one.level)).toEqual(['miss']);
+    expect(findings?.[0]?.text).toContain('claude setup-token');
+    expect(findings?.[0]?.text).toContain(`as ${CLAUDE_TOKEN_ENTRY}`);
+    expect(claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, null), HINT)?.[0]?.level).toBe('miss');
   });
 
-  test('no session login and the entry held: seats sign in from the store, nothing missing', () => {
+  test('the entry held: ok names only the seats the launch hands it, and a seat that takes none still needs the login', () => {
     const w = world();
-    const finding = claudeNoLoginFinding(w.team, w.root, w.team.seats, sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])));
-    expect(finding?.level).toBe('ok');
-    expect(finding?.text).toContain(CLAUDE_TOKEN_ENTRY);
+    const findings = claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT) ?? [];
+    expect(findings[0]).toEqual({ level: 'ok', text: `claude-code: no session login; lead sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}` });
+    expect(findings[1]?.level).toBe('miss');
+    expect(findings[1]?.text).toContain('wrapped, scripted take no stored token');
+    expect(claudeNoLoginFindings(w.team, w.root, only(w, ['lead']), sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)?.map((one) => one.level)).toEqual(['ok']);
   });
 
-  test('claude-auth login, or no Anthropic Claude seat, keeps the plain login line', () => {
+  test('a team whose Claude seats would take no token gets no ok from the store: the plain login line stands', () => {
+    const w = world();
+    expect(claudeNoLoginFindings(w.team, w.root, only(w, ['wrapped', 'scripted', 'provider']), sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)).toBeNull();
+  });
+
+  test('claude-auth login keeps the plain login line', () => {
     const w = world('login');
-    expect(claudeNoLoginFinding(w.team, w.root, w.team.seats, sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])))).toBeNull();
-    const v = world();
-    const providers = v.team.seats.filter((one) => one.vendor !== 'anthropic');
-    expect(claudeNoLoginFinding(v.team, v.root, providers, sources(v, fakeStore([CLAUDE_TOKEN_ENTRY])))).toBeNull();
+    expect(claudeNoLoginFindings(w.team, w.root, w.team.seats, sources(w, fakeStore([CLAUDE_TOKEN_ENTRY])), HINT)).toBeNull();
   });
 });

@@ -53,7 +53,7 @@ import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { approvalStanding, LEGACY_LINE, otherMatchingStores, otherStoreNote, type Standing } from '../store/store.ts';
 import { readScreen } from '../watch/screen.ts';
 import { systemSecretStore, type SecretStore } from '../secrets/store.ts';
-import { anthropicClaudeSeat, claudeAuthInForce } from '../settings/claude-auth-policy.ts';
+import { anthropicClaudeSeat, claudeAuthInForce, claudeTokenSeat } from '../settings/claude-auth-policy.ts';
 import { CLAUDE_TOKEN_ENTRY } from '../settings/claude-auth.ts';
 import { lobbyPath as derivedLobby } from '../worktree/place.ts';
 
@@ -358,21 +358,33 @@ function approvalFindings(standing: Standing): Finding[] {
 
 /**
  * What doctor says of a Claude Code CLI with no session login, when the team runs Claude Code seats
- * on Anthropic and `claude-auth` is `store`: they sign in with the store's subscription token when
- * the store holds one (an `ok`), and otherwise the miss names both fixes, the login and the token a
- * machine with no browser keeps in its store. Null: the plain login line stands.
+ * the launch would hand the store's subscription token (`claudeTokenSeat`: on Anthropic, on a line
+ * proved to run Claude Code there) and `claude-auth` is `store`. The store holds the entry: an
+ * `ok` naming those seats, with a `MISS` for the login still beside it when other Claude seats
+ * need one. It holds none: the `MISS` names both fixes, the login and the token a machine with no
+ * browser keeps in its store. Null: the plain login line stands alone.
  */
-export function claudeNoLoginFinding(team: TeamFile, root: string | undefined, seats: Seat[], sources: DoctorSources): Finding | null {
-  if (root === undefined || !seats.some((seat) => anthropicClaudeSeat(seat))) return null;
+export function claudeNoLoginFindings(team: TeamFile, root: string | undefined, seats: Seat[], sources: DoctorSources, hint: string): Finding[] | null {
+  if (root === undefined) return null;
+  const eligible = seats.filter((seat) => claudeTokenSeat(seat));
+  if (eligible.length === 0) return null;
   if (claudeAuthInForce({ home: sources.home, root, team }) !== 'store') return null;
   const held = sources.secretStore?.(team.entity)?.holds?.(CLAUDE_TOKEN_ENTRY) ?? null;
-  if (held === true) {
-    return { level: 'ok', text: `claude-code: no session login; its Anthropic seats sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}` };
+  if (held !== true) {
+    return [{
+      level: 'miss',
+      text: `log in to claude-code: \`${hint}\`; on a machine with no browser, run \`claude setup-token\` and keep the token in the system's secret store as ${CLAUDE_TOKEN_ENTRY}`,
+    }];
   }
-  return {
-    level: 'miss',
-    text: `log in to claude-code: \`claude auth login\`; on a machine with no browser, run \`claude setup-token\` and keep the token in the system's secret store as ${CLAUDE_TOKEN_ENTRY}`,
-  };
+  const findings: Finding[] = [{
+    level: 'ok',
+    text: `claude-code: no session login; ${eligible.map((seat) => seat.name).join(', ')} sign in with the secret store's ${CLAUDE_TOKEN_ENTRY}`,
+  }];
+  const others = seats.filter((seat) => !eligible.includes(seat) && anthropicClaudeSeat(seat));
+  if (others.length > 0) {
+    findings.push({ level: 'miss', text: `log in to claude-code: \`${hint}\` (${others.map((seat) => seat.name).join(', ')} take no stored token)` });
+  }
+  return findings;
 }
 
 function cliFindings(cli: string, seats: Seat[], sources: DoctorSources, team?: TeamFile, root?: string): Finding[] {
@@ -391,8 +403,8 @@ function cliFindings(cli: string, seats: Seat[], sources: DoctorSources, team?: 
   }
   const findings = [versionFinding(profile.binary, printed, profile.tested, true)];
   const loggedIn = sources.loggedIn(profile);
-  const noLogin = loggedIn === false && cli === 'claude-code' && team !== undefined ? claudeNoLoginFinding(team, root, seats, sources) : null;
-  if (noLogin !== null) findings.push(noLogin);
+  const noLogin = loggedIn === false && cli === 'claude-code' && team !== undefined ? claudeNoLoginFindings(team, root, seats, sources, profile.loginHint) : null;
+  if (noLogin !== null) findings.push(...noLogin);
   else if (loggedIn === false) findings.push({ level: 'miss', text: `log in to ${cli}: \`${profile.loginHint}\`` });
   else if (loggedIn === null)
     findings.push({ level: 'note', text: `${cli}: the login is not checked in this version` });
@@ -1152,10 +1164,10 @@ export function doctorLoginFindings(team: TeamFile, sources: DoctorSources, root
     }
     const loggedIn = sources.loggedIn(profile);
     const noLogin = loggedIn === false && cli === 'claude-code'
-      ? claudeNoLoginFinding(team, root, team.seats.filter((seat) => seat.cli === cli), sources)
+      ? claudeNoLoginFindings(team, root, team.seats.filter((seat) => seat.cli === cli), sources, profile.loginHint)
       : null;
     if (noLogin !== null) {
-      findings.push({ ...noLogin, text: plainLine(noLogin.text) });
+      findings.push(...noLogin.map((finding) => ({ ...finding, text: plainLine(finding.text) })));
     } else if (loggedIn === false) {
       findings.push({ level: 'miss', text: plainLine(`log in to ${cli}: \`${profile.loginHint}\``) });
     } else if (loggedIn === null) {
