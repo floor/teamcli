@@ -814,6 +814,7 @@
     "test/permissions/who.test.ts": 2,
     "test/ping.test.ts": 1,
     "test/pingpong-legs.test.ts": 5,
+    "test/pinned-general-grant.test.ts": 0,
     "test/pinned-terminal.test.ts": 0,
     "test/plan.test.ts": 4,
     "test/policy-address-registry.test.ts": 0,
