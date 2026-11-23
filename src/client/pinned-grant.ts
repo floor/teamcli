@@ -7,13 +7,13 @@
 // Every read checks the answer against the system pin, for this machine and account, and honours
 // a revocation in a folder only the administrator writes.
 
-import { lstatSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { mkdirSync, writeFileSync } from '../host/guarded-fs.ts';
 import { join } from 'node:path';
 import type { GeneralGrant } from './general-grant.ts';
 import { ownerStateOf, systemOwnerUid, type OwnerStatePlace } from './owner-pin-path.ts';
 import { readOwnerPinIn, verifyPinnedOwnerAnswer } from './owner-pin-verify.ts';
-import { carriedAnswerTimeProblem, carriedBindingProblem, carriedRequestTimeProblem, OWNER_ACTION_ID_PATTERN, ownerActionRecordOf, type OwnerActionRecord } from './owner-request-record.ts';
+import { carriedAnswerTimeProblem, carriedBindingProblem, carriedRequestTimeProblem, OWNER_ACTION_ID_PATTERN, OWNER_CLOCK_SKEW_MS, ownerActionRecordOf, type OwnerActionRecord } from './owner-request-record.ts';
 import type { SignedOwnerAnswer } from './owner-signature.ts';
 import { parsePinnedGrantWords, type PinnedGrantTerms } from './pinned-grant-words.ts';
 
@@ -61,6 +61,29 @@ const sameList = (a: readonly string[], b: readonly string[]): boolean => {
   return left.length === right.length && left.every((value, at) => value === right[at]);
 };
 
+/**
+ * Whether the helper's protected ledger entry records the spend of exactly this signed request:
+ * its id, action, account, signer and parameter hash, at a time inside its signed window. An
+ * entry an interrupted write left empty or partial records nothing.
+ */
+function spendRecorded(place: SharedPlace, record: OwnerActionRecord, signer: string, answeredAt: string, now: Date): boolean {
+  try {
+    const path = join(place.ledger, `${record.request_id}.${ACTION}`);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.uid !== place.shared.helper.uid || (stat.mode & 0o022) !== 0 || stat.size > 4096) return false;
+    const entry = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    if (entry.request_id !== record.request_id || entry.action !== ACTION || entry.account !== place.shared.account || entry.signer !== signer || entry.params_sha256 !== record.params_sha256) return false;
+    const spent = typeof entry.at === 'string' && entry.at.length <= 40 ? Date.parse(entry.at) : NaN;
+    const window = record.params.window!;
+    return Number.isFinite(spent)
+      && spent >= Math.max(Date.parse(window.created), Date.parse(answeredAt)) - OWNER_CLOCK_SKEW_MS
+      && spent < Date.parse(window.expires_at!)
+      && spent <= now.getTime() + OWNER_CLOCK_SKEW_MS;
+  } catch {
+    return false;
+  }
+}
+
 /** Why this root grant is not the owner's signed answer for this machine and account, or null. */
 export function ownerAnswerRootProblem(home: string, g: GeneralGrant, proof: unknown, now: Date): string | null {
   const at = sharedPlace(home);
@@ -89,12 +112,7 @@ export function ownerAnswerRootProblem(home: string, g: GeneralGrant, proof: unk
   if ((p.requesters ?? [p.requested_by]).includes(verified.signer.name)) return `signer "${verified.signer.name}" asked for general grant ${g.grant_id}`;
   const given = carriedAnswerTimeProblem(record, a.at, now);
   if (given !== null) return given;
-  try {
-    const entry = lstatSync(join(at.place.ledger, `${id}.${ACTION}`));
-    if (!entry.isFile() || entry.uid !== at.place.shared.helper.uid || (entry.mode & 0o022) !== 0) throw new Error('entry');
-  } catch {
-    return `general grant ${g.grant_id} was never spent through the owner helper`;
-  }
+  if (!spendRecorded(at.place, record, verified.signer.name, a.at, now)) return `general grant ${g.grant_id} was never spent through the owner helper`;
   const signed = pinnedRootOf(record, terms);
   if (g.grant_id !== signed.grant_id || g.client_id !== signed.client_id || g.public_key !== signed.public_key || g.may_issue !== signed.may_issue || g.parent !== null || g.issued !== signed.issued || g.expires !== signed.expires || !sameList(g.entities, signed.entities) || !sameList(g.ops, signed.ops)) {
     return `general grant ${g.grant_id} is not what the owner signed`;

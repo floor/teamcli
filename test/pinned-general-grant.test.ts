@@ -3,13 +3,13 @@
 // in-process, with this test's own uid standing for the administrator and the helper's user.
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import { chmodSync, cpSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { ownerActionCard } from '../src/client/approval-card.ts';
 import { generalDoor, PINNED_GENERAL_REFUSAL } from '../src/client/general-door.ts';
-import { generalGrantPath, issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
+import { GENERAL_GRANT_DOMAIN, generalGrantPath, issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { actionArgsHash, approveOwnerAction, ownerActionHash, readOwnerActionRecord } from '../src/client/owner-action.ts';
 import { acceptCarriedAnswer, ownerRequestFile, signCarriedRequest } from '../src/client/owner-carry.ts';
 import type { OwnerStateRoots } from '../src/client/owner-pin-path.ts';
@@ -17,10 +17,10 @@ import { exportOwnerSeat, localOwnerSeatFingerprint, pinOwnerSeat, type SignedOw
 import { registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { runOwnerSpend, verdictLine } from '../src/client/owner-spend.ts';
 import { revokePinnedGrant } from '../src/client/pinned-grant.ts';
-import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
+import { newClientKeyPair, readClientPrivateKey, writeClientKeyFiles } from '../src/client/records.ts';
 import { runClient } from '../src/commands/client.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
-import { keyOf, keyState } from '../src/store/keys.ts';
+import { keyOf, keyState, signDomain, type Json } from '../src/store/keys.ts';
 import { fixtureBase, testIo } from './helpers.ts';
 import { setOwnerHelperForTests } from './helpers/owner-helper-exec.ts';
 import { setOwnerStateRootsForTests } from './helpers/owner-state-roots.ts';
@@ -137,11 +137,11 @@ function client(home: string, cwd: string, argv: string[], store: OwnerSeatKeySt
 }
 
 /** The whole route: key on the server, request, carried, one signature, answer, issue. */
-function issued(m: Machine, mac: Mac, extra: string[] = ['--days', '7']) {
+function issued(m: Machine, mac: Mac, extra: string[] = ['--days', '7'], heldKey?: ReturnType<typeof holderKey>) {
   m.use('floor');
   const home = m.homes.floor!;
   const root = repo(home);
-  const key = holderKey(home);
+  const key = heldKey ?? holderKey(home);
   const store = fakeStore();
   const line = ['general-grant', '--to', 'ops', '--public-key', key.pubPath, ...extra];
   const asked = client(home, root, [...line, '--request'], store);
@@ -311,5 +311,66 @@ describe('a general grant signed by the pinned signer', () => {
     rmSync(join(m.ledger, 'floor', `${g.id}.team-general-grant`));
     const unspent = door(g);
     expect(unspent.kind === 'refused' && unspent.why).toContain('never spent');
+  });
+
+  test('a valid grant of the same holder cannot stand in for a child\'s revoked parent', () => {
+    const mac = signerMachine();
+    const m = sharedMachine(mac.exported);
+    const first = issued(m, mac, ['--may-issue', '--days', '7']);
+    const second = issued(m, mac, ['--may-issue', '--days', '7'], first.key);
+    const childKey = holderKey(first.home, 'child');
+    const made = client(first.home, first.root, ['general-grant', '--to', 'child', '--public-key', childKey.pubPath, '--ops', 'down', '--days', '1', '--via', first.path, '--key', first.key.keyPath], first.store, { kind: 'unplaced', reason: 'a client shell', pinned: true });
+    expect(made.code, made.err).toBe(0);
+    const child = { ...first, path: /grant file: (.+)/.exec(made.out)![1]!, key: childKey };
+    expect(door(child).kind).toBe('admitted');
+    expect(revokePinnedGrant(first.home, first.grantId, new Date(), UID).ok).toBe(true);
+    writeFileSync(first.path, readFileSync(second.path));
+    const refused = door(child);
+    expect(refused.kind === 'refused' && refused.why).toContain('is not the parent it names');
+  });
+
+  test('a holder whose grant may not issue cannot sign a child that verifies', () => {
+    const mac = signerMachine();
+    const m = sharedMachine(mac.exported);
+    const g = issued(m, mac);
+    const held = readClientPrivateKey(g.home, g.key.keyPath);
+    if (!held.ok) throw new Error(held.why);
+    const childKey = holderKey(g.home, 'child');
+    const pub = (JSON.parse(readFileSync(childKey.pubPath, 'utf8')) as { public_key: string }).public_key;
+    const child = { grant_id: 'gg_0123456789abcdef01234567', client_id: 'child', public_key: pub, entities: ['*'], ops: ['down'], may_issue: false, parent: g.grantId, issued: new Date().toISOString(), expires: new Date(Date.now() + DAY).toISOString() };
+    const signature = signDomain(GENERAL_GRANT_DOMAIN, { general_grant: child } as unknown as Json, createPrivateKey(held.privatePem));
+    const path = generalGrantPath(g.home, child.grant_id);
+    writeFileSync(path, JSON.stringify({ general_grant: child, signature }), { mode: 0o600 });
+    const refused = door({ ...g, path, key: childKey });
+    expect(refused.kind === 'refused' && refused.why).toContain('may not issue');
+  });
+
+  test('the ledger entry must record this exact spend: an incomplete or different one admits nothing', () => {
+    const mac = signerMachine();
+    const m = sharedMachine(mac.exported);
+    const g = issued(m, mac);
+    expect(door(g).kind).toBe('admitted');
+    const path = join(m.ledger, 'floor', `${g.id}.team-general-grant`);
+    const whole = readFileSync(path, 'utf8');
+    const entry = JSON.parse(whole) as Record<string, unknown>;
+    const without = (name: string) => JSON.stringify(Object.fromEntries(Object.entries(entry).filter(([key]) => key !== name)));
+    const cases = [
+      '', whole.slice(0, 20),
+      ...['request_id', 'action', 'params_sha256', 'account', 'signer', 'at'].map(without),
+      JSON.stringify({ ...entry, request_id: 'oa_000000000000000000000000' }),
+      JSON.stringify({ ...entry, action: 'team-up' }),
+      JSON.stringify({ ...entry, params_sha256: '0'.repeat(64) }),
+      JSON.stringify({ ...entry, account: 'studio' }),
+      JSON.stringify({ ...entry, signer: 'other' }),
+      JSON.stringify({ ...entry, at: new Date(Date.now() + 16 * 60_000).toISOString() }),
+      JSON.stringify({ ...entry, at: new Date(Date.now() - 60 * 60_000).toISOString() }),
+    ];
+    for (const text of cases) {
+      writeFileSync(path, text);
+      const refused = door(g);
+      expect(refused.kind === 'refused' && refused.why, text).toContain('never spent');
+    }
+    writeFileSync(path, whole);
+    expect(door(g).kind).toBe('admitted');
   });
 });

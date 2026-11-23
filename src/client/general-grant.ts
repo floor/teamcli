@@ -278,6 +278,10 @@ export function readGeneralGrant(home: string, path: string, now: Date = new Dat
   if (!GENERAL_GRANT_ID.test(g.parent)) return { ok: false, why: 'the parent grant id is malformed' };
   const parent = readGeneralGrant(home, generalGrantPath(home, g.parent), now, depth + 1);
   if (!parent.ok) return { ok: false, why: `parent ${g.parent}: ${parent.why}` };
+  // The file at that path is the account's: what it holds must be the very grant the child names,
+  // and that grant must allow issuing, whether or not the child may issue in turn.
+  if (parent.grant.grant_id !== g.parent) return { ok: false, why: `the grant read for parent ${g.parent} is not the parent it names` };
+  if (!parent.grant.may_issue) return { ok: false, why: `grant ${g.parent} may not issue grants` };
   const pk = publicKeyObject(parent.grant.public_key);
   if (pk === null || !verifyDomain(GENERAL_GRANT_DOMAIN, payload(g), disk.signature, pk)) return { ok: false, why: `general grant ${g.grant_id} does not verify under its parent holder's key` };
   if (g.client_id === parent.grant.client_id || g.public_key === parent.grant.public_key) return { ok: false, why: 'the grant was issued to its own holder' };
