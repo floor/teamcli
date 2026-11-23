@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.24] - 2026-11-23
+
+### Added
+
+- A general grant now works on a machine whose owner seat is pinned, when the owner's pinned signer signs it on the owner's machine. `team client general-grant --request` records it, the owner signs the carried answer once, and each use verifies that answer against the pinned seat, this machine and account, the helper's ledger, expiry and revocation. A grant signed with the account's own key stays refused there. `team owner-seat revoke-grant <grant-id>` revokes one.
+
+### Fixed
+
+- A child general grant must name the exact parent it was issued under, and that parent must allow issuing.
+
 ## [0.5.23] - 2026-11-22
 
 ### Added
@@ -3064,7 +3074,8 @@ The first release: set up, change and watch a project's team of AI agents from o
   footer, or a Yes/No choice below the last rule. An idle seat that only quotes "Do you want to proceed?"
   stays idle.
 
-[Unreleased]: https://github.com/floor/teamcli/compare/v0.5.23...HEAD
+[Unreleased]: https://github.com/floor/teamcli/compare/v0.5.24...HEAD
+[0.5.24]: https://github.com/floor/teamcli/releases/tag/v0.5.24
 [0.5.23]: https://github.com/floor/teamcli/releases/tag/v0.5.23
 [0.5.22]: https://github.com/floor/teamcli/releases/tag/v0.5.22
 [0.5.19]: https://github.com/floor/teamcli/releases/tag/v0.5.19
