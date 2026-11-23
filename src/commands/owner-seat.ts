@@ -25,6 +25,7 @@ import { readCarriedFile, writeCarriedFile } from '../client/owner-carry.ts';
 import { exportOwnerSeat, fingerprintText, pinOwnerSeat, readOwnerPin } from '../client/owner-pin.ts';
 import { installOwnerState, realInstallSystem, type InstallSystem } from '../client/owner-state-install.ts';
 import { ownerPinCommand } from '../client/owner-pin-path.ts';
+import { revokePinnedGrant } from '../client/pinned-grant.ts';
 import { ownerSeatFile, ownerSeatPublicKey, readOwnerSeat, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { writePolicySet } from '../policy/sources.ts';
@@ -39,6 +40,7 @@ export const USAGE = `Usage: team owner-seat [--json]
        team owner-seat export --out <file> [--signer <name>] [--json]
        team owner-seat pin --from <file> [--name <machine>] [--json]
        team owner-seat install --account <a,b> [--dry-run] [--json]
+       team owner-seat revoke-grant <grant-id> [--json]
 
 export writes the seat's public signer records (no private key) for a machine that holds no owner
 signer, signed with one confirmation on the owner's device, and prints their fingerprint. pin, on that machine, trusts the
@@ -49,7 +51,7 @@ that machine is not the owner: owner-only actions there need the owner's signed 
 install, on a Linux machine whose accounts share one owner, sets up the owner state every
 account reads and none can change: run it once with sudo from the owner's own account, naming
 the entity accounts; --dry-run prints every step and changes nothing. The pin there is then
-made with sudo too.
+made with sudo too. revoke-grant, with sudo there, ends a general grant and every grant under it.
 
 Exits 0 when done, 1 when refused, 2 when the invocation is invalid.
 `;
@@ -99,6 +101,16 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
     io.stdout(dryRun
       ? 'nothing was changed (--dry-run)\n'
       : `owner state set up for ${accounts.join(', ')}; next, pin the owner seat as the administrator: ${ownerPinCommand()}\n`);
+    return 'done';
+  }
+
+  if (sub === 'revoke-grant') {
+    const id = args.rest[1];
+    if (id === undefined || args.rest.length !== 2) return refuse(`revoke-grant names one grant id\n${USAGE}`, 'invocation');
+    const revoked = revokePinnedGrant(home, id, now());
+    if (!revoked.ok) return refuse(revoked.why);
+    if (args.flags.has('json')) io.stdout(`${JSON.stringify({ format: 1, status: 'revoked', grant_id: id, already: revoked.already })}\n`);
+    else io.stdout(`general grant ${id} ${revoked.already ? 'was already revoked' : 'revoked'}; every later use is refused\n`);
     return 'done';
   }
 

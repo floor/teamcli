@@ -5257,6 +5257,57 @@
             },
             {
               "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "revoke-grant",
+          "positionals": [
+            {
+              "name": "grant-id",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team owner-seat revoke-grant <grant-id> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "it only ends a general grant, and refuses unless it runs as the system's administrator, which on a shared Linux machine is the owner's own account alone"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--key",
               "repeatable": false,
               "takesValue": true
@@ -5415,7 +5466,8 @@
         "team owner-seat serve [--port <port>]",
         "team owner-seat export --out <file> [--signer <name>] [--json]",
         "team owner-seat pin --from <file> [--name <machine>] [--json]",
-        "team owner-seat install --account <a,b> [--dry-run] [--json]"
+        "team owner-seat install --account <a,b> [--dry-run] [--json]",
+        "team owner-seat revoke-grant <grant-id> [--json]"
       ],
       "who": {
         "gate": "any-caller",

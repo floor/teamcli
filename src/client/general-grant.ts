@@ -10,6 +10,10 @@ import { basename, join } from 'node:path';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
 import { ownerMachinePinned } from './owner-pin-path.ts';
+import type { OwnerActionRecord } from './owner-request-record.ts';
+import type { SignedOwnerAnswer } from './owner-signature.ts';
+import { ownerAnswerRootProblem, pinnedRevocationProblem, pinnedRootOf, type OwnerAnswerProof } from './pinned-grant.ts';
+import type { PinnedGrantTerms } from './pinned-grant-words.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 /** Dispatcher commands explicitly refused by the general door, outside its op vocabulary. */
@@ -86,7 +90,8 @@ export type GeneralGrant = {
   issued: string;
   expires: string;
 };
-type Disk = { general_grant: GeneralGrant; signature: string };
+/** `owner_answer`: on a pinned machine, the root's signature is the owner's carried answer. */
+type Disk = { general_grant: GeneralGrant; signature: string; owner_answer?: OwnerAnswerProof };
 type R<T> = ({ ok: true } & T) | { ok: false; why: string };
 
 export function generalGrantsFolder(home: string = homedir()): string {
@@ -130,12 +135,12 @@ export function withinScope(child: Pick<GeneralGrant, 'entities' | 'ops' | 'expi
   return null;
 }
 
-function publish(home: string, g: GeneralGrant, signature: string): R<{ path: string }> {
+function publish(home: string, g: GeneralGrant, signature: string, ownerAnswer?: OwnerAnswerProof): R<{ path: string }> {
   const folder = generalGrantsFolder(home);
   try {
     mkdirSync(folder, { recursive: true, mode: 0o700 });
     const path = generalGrantPath(home, g.grant_id);
-    writeFileSync(path, `${JSON.stringify({ general_grant: g, signature } satisfies Disk, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    writeFileSync(path, `${JSON.stringify({ general_grant: g, signature, ...(ownerAnswer === undefined ? {} : { owner_answer: ownerAnswer }) } satisfies Disk, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
     return { ok: true, path };
   } catch (error) {
     return { ok: false, why: `the general grant could not be written in "${folder}": ${error instanceof Error ? error.message : String(error)}` };
@@ -173,6 +178,19 @@ export function issueOwnerGeneralGrant(home: string, input: IssueInput, now: Dat
   const signature = signDomain(GENERAL_GRANT_DOMAIN, payload(g), key ?? keyOf(home));
   const out = publish(home, g, signature);
   return out.ok ? { ok: true, grant: g, path: out.path } : out;
+}
+
+/** The owner's issue on a pinned machine: the root is her signed answer, spent by the helper. */
+export function issuePinnedGeneralGrant(home: string, terms: PinnedGrantTerms, record: OwnerActionRecord, answer: SignedOwnerAnswer, now: Date = new Date()): R<{ grant: GeneralGrant; path: string }> {
+  const g = pinnedRootOf(record, terms);
+  const checked = fresh({ clientId: g.client_id, publicKey: g.public_key, entities: g.entities, ops: g.ops, mayIssue: g.may_issue, expires: new Date(g.expires) }, null, now);
+  if (typeof checked === 'string') return { ok: false, why: checked };
+  // The reason is the asker's own words, outside the signature: it is not kept.
+  const { reason: _reason, ...params } = record.params;
+  const out = publish(home, g, 'owner-answer', { record: { ...record, params }, answer });
+  if (!out.ok) return out;
+  const read = readGeneralGrant(home, out.path, now);
+  return read.ok ? { ok: true, grant: read.grant, path: out.path } : read;
 }
 
 /** How many ancestors `grant` names. A root names none. A chain that cannot be read, or that
@@ -229,17 +247,29 @@ function load(path: string): Disk | string {
   }
 }
 
+/** A root no owner's answer signs, on a machine whose owner seat is pinned. */
+export const PINNED_ROOT_REFUSAL = "this machine's owner signs on another machine; a general grant does not stand in for the owner here";
+
 /** One verified general grant, its whole chain checked back to the owner's signature. */
 export function readGeneralGrant(home: string, path: string, now: Date = new Date(), depth = 0): R<{ grant: GeneralGrant }> {
-  // A grant's root is signed with this account's own key, which any process of the account can
-  // read: on a machine whose owner seat is pinned from another machine, no grant verifies.
-  if (ownerMachinePinned(home)) return { ok: false, why: "this machine's owner signs on another machine; a general grant does not stand in for the owner here" };
+  // A root signed with this account's own key, which any process of the account can read, never
+  // verifies on a machine whose owner seat is pinned: only the owner's carried answer does.
+  const pinned = ownerMachinePinned(home);
   if (depth > MAX_CHAIN) return { ok: false, why: 'the grant chain is too long' };
   const disk = load(path);
-  if (typeof disk === 'string') return { ok: false, why: disk };
+  if (typeof disk === 'string') return { ok: false, why: pinned ? PINNED_ROOT_REFUSAL : disk };
   const g = disk.general_grant;
+  if (pinned && g.parent === null && disk.owner_answer === undefined) return { ok: false, why: PINNED_ROOT_REFUSAL };
   if (!(Date.parse(g.expires) > now.getTime())) return { ok: false, why: `general grant ${g.grant_id} has expired` };
+  if (pinned) {
+    const revoked = pinnedRevocationProblem(home, g.grant_id);
+    if (revoked !== null) return { ok: false, why: revoked };
+  }
   if (g.parent === null) {
+    if (pinned) {
+      const problem = ownerAnswerRootProblem(home, g, disk.owner_answer, now);
+      return problem === null ? { ok: true, grant: g } : { ok: false, why: problem };
+    }
     const state = keyState(home);
     if (state.kind !== 'key') return { ok: false, why: 'the owner signing key is absent or unreadable: no general grant can verify' };
     if (!verifyDomain(GENERAL_GRANT_DOMAIN, payload(g), disk.signature, keyOf(home))) return { ok: false, why: `general grant ${g.grant_id} does not verify under the owner key` };
