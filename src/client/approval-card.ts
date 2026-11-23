@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto';
 import { msg, type MessageId } from './grant-messages.ts';
 import type { OwnerActionParams } from './owner-action.ts';
+import { namesPinnedGrant, parsePinnedGrantWords } from './pinned-grant-words.ts';
 import type { TeamCreateParams } from './team-create.ts';
 
 /** The longest signing prompt: the grant prompt's budget (`GRANT_PROMPT_MAX` in
@@ -110,6 +111,17 @@ function boundValue(words: readonly string[], key: string): string | undefined {
  */
 export function ownerActionChange(action: string, words: readonly string[] | undefined): { change: string; changeShort: string } | null {
   if (words === undefined || words.length === 0) return null;
+  if (action === 'team-general-grant' && namesPinnedGrant(words)) {
+    const terms = parsePinnedGrantWords(words);
+    if (typeof terms === 'string') return { change: `a general grant that cannot be read (${terms}); it admits nothing`, changeShort: 'an unreadable general grant; it admits nothing' };
+    // The short form names a short list and counts a long one; the digest binds it, and `*` always shows.
+    const few = (list: readonly string[], noun: string): string => (list.length <= 3 ? `${noun} ${list.join(',')}` : `${list.length} ${noun}`);
+    const reach = `entities ${terms.entities.join(', ')}; ops ${terms.ops.join(', ')}${terms.mayIssue ? '; may issue' : ''}; ${terms.days} days`;
+    return {
+      change: `general grant to ${quoted(terms.to)} (public key ${terms.publicKey}): ${reach}; this machine and account only`,
+      changeShort: `to ${terms.to}: ${few(terms.entities, 'entities')}; ${few(terms.ops, 'ops')}${terms.mayIssue ? '; may issue' : ''}; ${terms.days}d; digest ${shortDigest(JSON.stringify(words))}`,
+    };
+  }
   if (action === 'team-entity-config') {
     const [verb, path] = words;
     const file = boundValue(words, 'file');

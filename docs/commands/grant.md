@@ -197,6 +197,12 @@ policy's days when it writes them, and by the `client-grant-max-duration` policy
 (ninety days by default; `--expires never` only when that cap is `none`); and [`team revoke`](revoke.md) `<grant-id>` ends the
 whole bundle. The per-command grants above are unchanged: this complements them.
 
+## A general grant on a pinned machine
+
+On a machine whose owner seat is pinned, a general grant signed with the account's own key is
+refused. One signed by the owner's pinned signer keeps the same meaning and is bound to that
+machine and account: see [A general grant on a shared server](owner-seat.md#a-general-grant-on-a-shared-server).
+
 ## Who may run it
 
 Only the owner, from a terminal outside the terminal host, in every form — or, with dev mode on,

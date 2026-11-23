@@ -2410,6 +2410,7 @@ Usage:
     team owner-seat export --out <file> [--signer <name>] [--json]
     team owner-seat pin --from <file> [--name <machine>] [--json]
     team owner-seat install --account <a,b> [--dry-run] [--json]
+    team owner-seat revoke-grant <grant-id> [--json]
 
 ### Who may run it
 
@@ -2542,6 +2543,34 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `strict\|relaxed\|dev` | no | no |
+
+### `revoke-grant`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat revoke-grant <grant-id> [--json]
+
+#### Who may run it
+
+`any-caller` — it only ends a general grant, and refuses unless it runs as the system's administrator, which on a shared Linux machine is the owner's own account alone
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `grant-id` | no | no |
 
 ### `serve`
 

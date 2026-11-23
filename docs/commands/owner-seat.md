@@ -17,6 +17,7 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
     team owner-seat export --out <file> [--signer <name>] [--json]
     team owner-seat pin --from <file> [--name <machine>] [--json]
     team owner-seat install --account <a,b> [--dry-run] [--json]
+    team owner-seat revoke-grant <grant-id> [--json]
 
 - `status` (the default): the seat, its signers and the security-profile line. A relaxed profile
   prints `SECURITY PROFILE: RELAXED: …` in capitals. On a machine whose owner seat is pinned it
@@ -56,6 +57,8 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
 - `install`: on a shared Linux server, sets up once the owner state every account reads and none
   can change (see [A shared Linux server](#a-shared-linux-server)). `--account` names the entity
   accounts; `--dry-run` prints every step and changes nothing.
+- `revoke-grant`: on a shared Linux server, as the administrator, ends a general grant and every
+  grant issued under it, by writing `/etc/teamcli/revoked-grants/<grant-id>`.
 
 ## A machine whose owner seat is pinned
 
@@ -64,7 +67,8 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   this. Seats in their own panes are placed as before.
 - **Nothing else stands in for the owner there.** Dev mode lifts no gate on a pinned machine, for
   any caller — a terminal, an agent outside the terminal host, an unattended run, a placed lead. A
-  general grant is refused (`--general`), since it is signed with this account's own key, and the
+  general grant signed with this account's own key is refused (`--general`); one signed by the
+  owner's pinned signer is admitted on a shared server ([below](#a-general-grant-on-a-shared-server)). The
   owner-authorization fingerprint (`TEAM_OWNER_APPROVAL`) admits nothing, since a fingerprint is
   public.
 - **Owner-only actions run on the owner's signed answer.** The command records its request
@@ -177,6 +181,27 @@ pinned owner seat counts for every entity account, and none of them can change i
   the install again.
 - **macOS is unchanged.** The Mac keeps its own owner signer, and a pinned Mac reads the system
   folder when present, else the account's own folder, as before.
+
+## A general grant on a shared server
+
+A general grant means the same here as anywhere ([`team grant`](grant.md), [`team client`](client.md)):
+the same ops, wildcard, explicit `forget` and child-grant rules. Only who signs it changes: the
+owner's pinned signer, with one confirmation, instead of this account's key.
+
+```console
+server$ team client keygen --out ~/.config/team-client/ops
+server$ team client general-grant --to ops --public-key ~/.config/team-client/ops/client.pub --days 7 --request
+server$ team approvals export <request-id> --out request.json
+owner$  team approvals sign --from request.json --out answer.json
+server$ team approvals answer --from answer.json
+server$ team client general-grant --to ops --public-key ~/.config/team-client/ops/client.pub --days 7 --approval <request-id>
+server$ team down --general ~/.config/team/general-grants/<grant-id>.json --key ~/.config/team-client/ops/client.key
+```
+
+Every use checks the owner's answer against the pinned seat, this machine and account, that the
+owner helper spent it, the grant's expiry and its revocation. To end one, from the administrator's
+account: `sudo team owner-seat revoke-grant <grant-id>`. Any process of the account that can read
+the holder's key can act within the grant until it expires or is revoked.
 
 ## Flags
 

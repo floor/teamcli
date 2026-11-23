@@ -1,10 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { KEY_ISOLATION_LINE, clientKeyPlacementProblem, newClientKeyPair, writeClientKeyFiles } from '../client/records.ts';
-import { issueHeldGeneralGrant, issueOwnerGeneralGrant, parseEntities, parseOps } from '../client/general-grant.ts';
-import { ownerSeatStep } from '../client/owner-action-step.ts';
+import { issueHeldGeneralGrant, issueOwnerGeneralGrant, issuePinnedGeneralGrant, parseEntities, parseOps } from '../client/general-grant.ts';
+import { readOwnerActionRecord } from '../client/owner-action.ts';
+import { ownerRequestDoor, ownerSeatStep } from '../client/owner-action-step.ts';
+import { ownerMachinePinned } from '../client/owner-pin-path.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import type { SignedOwnerAnswer } from '../client/owner-signature.ts';
+import { PINNED_GRANT_TEAM, pinnedGrantProblem } from '../client/pinned-grant.ts';
+import { parsePinnedGrantWords, pinnedGrantWords, type PinnedGrantTerms } from '../client/pinned-grant-words.ts';
+import { actionRequestsFolder } from '../client/team-create.ts';
 import { clientPaneGuard } from '../client/pane-guard.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -27,13 +34,16 @@ The owner issues one through the owner seat. --request records the card and issu
 that run (--reason <text> is the short reason the card shows); --approval issues it once the
 owner has answered. A charter never admits this grant. A holder whose grant may issue
 gives another principal a grant within its own (--via, --key): never to itself, never wider.
+On a machine whose owner seat is pinned, the same --request and --approval make a grant signed by
+the owner's pinned signer, bound to that machine and account; the request is carried with team
+approvals export, sign and answer.
 
 Exits 0 when the key is written, 1 when refused, 2 when the invocation is invalid.
 `;
 export const client: Command = async (argv, io) => runClient(argv, io);
 export default client;
 
-export function runClient(argv: string[], rawIo: Io, home: string = homedir()): number {
+export function runClient(argv: string[], rawIo: Io, home: string = homedir(), ownerSeatStore?: OwnerSeatKeyStore): number {
   const io = cleanedIo(rawIo);
   const args = readArgs(argv, ['out', 'to', 'public-key', 'entities', 'ops', 'days', 'approval', 'via', 'key', 'reason'], ['json', 'request', 'may-issue']);
   const sub = args.rest[0];
@@ -42,7 +52,7 @@ export function runClient(argv: string[], rawIo: Io, home: string = homedir()): 
     return 2; // exit: client.usage
   }
   if (sub === 'keygen') return runKeygen(args, rawIo, io, home);
-  if (sub === 'general-grant') return runGeneralGrant(argv, args, io, home);
+  if (sub === 'general-grant') return runGeneralGrant(argv, args, io, home, ownerSeatStore);
   io.stderr(`team client: unknown subcommand "${sub}"\n${USAGE}`);
   return 2; // exit: client.unknown
 }
@@ -93,7 +103,7 @@ function runKeygen(args: Args, rawIo: Io, io: Io, home: string): number {
   return 0; // exit: client.keygen.done
 }
 
-function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): number {
+function runGeneralGrant(argv: string[], args: Args, io: Io, home: string, ownerSeatStore?: OwnerSeatKeyStore): number {
   const json = args.flags.has('json');
   const bad = (why: string): number => {
     io.stderr(`team client general-grant: ${why}\n`);
@@ -131,6 +141,7 @@ function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): numb
       : { ok: false, why: pane.why };
   } else {
     if (!args.flags.has('request') && args.values.approval === undefined) return bad('the owner issues through the owner seat (--request), or a holder issues with --via and --key');
+    if (ownerMachinePinned(home)) return issueOnPinnedMachine(argv, args, io, home, { to, publicKey, entities, ops, mayIssue: input.mayIssue, days }, now, ownerSeatStore);
     const step = ownerSeatStep('client', 'team-general-grant', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, reason: args.values.reason }, io, { home }, []);
     if (step.kind === 'requested') return 0; // exit: client.general-grant.requested
     if (step.kind !== 'admitted') {
@@ -142,6 +153,38 @@ function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): numb
     io.stderr(`team client general-grant: ${out.why}\n`);
     return 1; // exit: client.general-grant.failed
   }
+  const g = out.grant;
+  if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'issued', grant_id: g.grant_id, path: out.path, client_id: g.client_id, entities: g.entities, ops: g.ops, may_issue: g.may_issue, parent: g.parent, expires: g.expires })}\n`);
+  else io.stdout(`general grant ${g.grant_id} issued to ${g.client_id}: entities ${g.entities.join(',')}; ops ${g.ops.join(',')}${g.may_issue ? '; may issue' : ''}; expires ${g.expires}\ngrant file: ${out.path}\n`);
+  return 0; // exit: client.general-grant.issued
+}
+
+/** The owner's issue where her signer is on another machine: the grant's fields are the words she signs. */
+function issueOnPinnedMachine(argv: string[], args: Args, io: Io, home: string, terms: PinnedGrantTerms, now: Date, ownerSeatStore?: OwnerSeatKeyStore): number {
+  const json = args.flags.has('json');
+  const refused = (why: string): number => {
+    io.stderr(`team client general-grant: ${why}\n`);
+    return 1; // exit: client.general-grant.refused
+  };
+  const problem = pinnedGrantProblem(home);
+  if (problem !== null) return refused(problem);
+  const words = pinnedGrantWords(terms);
+  const read = parsePinnedGrantWords(words);
+  if (typeof read === 'string') return refused(read);
+  const step = ownerRequestDoor('client', 'team-general-grant', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json, ...(args.values.reason === undefined ? {} : { reason: args.values.reason }) }, io, { home, now: () => now, ...(ownerSeatStore === undefined ? {} : { ownerSeatStore }) }, { root: home, team: PINNED_GRANT_TEAM, head: null, words });
+  if (step.kind === 'requested') return 0; // exit: client.general-grant.requested
+  if (step.kind !== 'admitted') return 1; // exit: client.general-grant.refused
+  const id = args.values.approval!;
+  const record = readOwnerActionRecord(home, id);
+  if (typeof record === 'string') return refused(record);
+  let answer: SignedOwnerAnswer;
+  try {
+    answer = JSON.parse(readFileSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`), 'utf8')) as SignedOwnerAnswer;
+  } catch {
+    return refused(`the owner's answer to ${id} cannot be read`);
+  }
+  const out = issuePinnedGeneralGrant(home, read, record, answer, now);
+  if (!out.ok) return refused(out.why);
   const g = out.grant;
   if (json) io.stdout(`${JSON.stringify({ format: 1, status: 'issued', grant_id: g.grant_id, path: out.path, client_id: g.client_id, entities: g.entities, ops: g.ops, may_issue: g.may_issue, parent: g.parent, expires: g.expires })}\n`);
   else io.stdout(`general grant ${g.grant_id} issued to ${g.client_id}: entities ${g.entities.join(',')}; ops ${g.ops.join(',')}${g.may_issue ? '; may issue' : ''}; expires ${g.expires}\ngrant file: ${out.path}\n`);
